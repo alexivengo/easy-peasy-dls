@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dls://schemas/state/v1",
+  "title": "DLS state",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "state_revision",
+    "change_id",
+    "work_kind",
+    "control_level",
+    "phase",
+    "lifecycle",
+    "artifacts",
+    "approvals",
+    "tickets",
+    "reviews",
+    "finding_dispositions",
+    "evidence",
+    "operations"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "state_revision": { "type": "integer", "minimum": 1 },
+    "change_id": { "type": "string", "minLength": 1 },
+    "work_kind": {
+      "enum": ["feature", "bug", "chore", "spike", "hotfix"]
+    },
+    "control_level": {
+      "enum": ["routine", "standard", "critical"]
+    },
+    "impact_tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "adopted": { "type": "boolean" },
+    "requirement_prefixes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9]{0,15}$"
+      },
+      "uniqueItems": true
+    },
+    "phase": { "type": "string" },
+    "lifecycle": { "type": "string" },
+    "artifacts": { "type": "object" },
+    "approvals": { "type": "array" },
+    "tickets": { "type": "object" },
+    "reviews": { "type": "array" },
+    "finding_dispositions": { "type": "array" },
+    "evidence": { "type": "array" },
+    "operations": { "type": "array" }
+  },
+  "additionalProperties": true
+}

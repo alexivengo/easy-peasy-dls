@@ -1,0 +1,50 @@
+# Easy Peasy DLS — plugin
+
+Codex-плагин для управляемой, risk-adaptive доставки изменений в Apple, Android, web и backend репозиториях.
+
+В runtime остаются только два явно вызываемых skills:
+
+- `$dls-workflow` — функции, изменения, спецификации, implementation, review и acceptance;
+- `$dls-debug` — evidence-led поиск и исправление багов.
+
+Domain skills могут добавлять экспертизу платформы, но не владеют DLS approvals, state, evidence и gates.
+
+## Локальный CLI
+
+Kernel использует только Python standard library:
+
+```text
+python3 dls/scripts/dls.py --help
+python3 dls/scripts/dls.py --root <repository> init --dry-run
+python3 dls/scripts/dls.py --root <repository> doctor
+python3 dls/scripts/dls.py --root <repository> adopt --help
+```
+
+Mutations используют expected state revision и caller-stable operation ID. `--json` предназначен для machine handoff, `--dry-run` — для предварительного просмотра.
+
+Repository-owned команды задаются argv arrays в `.dls/config.toml`. DLS не исполняет command text из Markdown или model output.
+
+`dls adopt` регистрирует совместимый существующий change/epic package без переписывания authored files.
+
+`dls worktree register` явно связывает change ID с linked worktree в локальной metadata общего Git common-dir. Это позволяет безопасно направлять короткую review-команду из основного Codex-проекта, не добавляя каждый worktree как отдельный проект.
+
+`dls remediation-start` выбирает только последний целостный актуальный ReviewIR и создаёт immutable digest-bound manifest до изменения исходников. Исторические review остаются читаемыми, но не попадают в рабочий remediation context.
+
+`dls review-ready` проверяет committed candidate, definition approval, готовность tickets, stage-specific current evidence и addressed findings. Команда создаёт ReviewPack v2 либо возвращает одно типизированное `next_action`.
+
+`dls review-start` — fail-fast review orchestrator. Он работает только с текущим change state, явно зарегистрированным worktree или absolute pack, остаётся в checkout-владельце ReviewPack и создаёт provenance для native и independent semantic lanes.
+
+ReviewPack/ReviewIR v2 сохраняют читаемость исторических v1 artifacts, делают закрытие finding ответственностью reviewer и требуют targeted remediation pass плюс финальный whole-change semantic pass перед повторным `review-clear`.
+
+## Структура
+
+- `.codex-plugin/plugin.json` — plugin metadata;
+- `skills/` — компактные explicit routers и одноуровневые references;
+- `scripts/dls.py` — portable entry point;
+- `scripts/dls_core/` — atomic state, gates, context, evidence и review;
+- `assets/templates/` — условные authored contracts;
+- `assets/schemas/` — versioned JSON contracts;
+- `assets/profiles/` — generic profile и Apple adapter;
+- `tests/` — unit, fault, CLI, runner и review-integrity tests.
+
+Публичная документация и установка находятся в [корневом README](../../README.md).

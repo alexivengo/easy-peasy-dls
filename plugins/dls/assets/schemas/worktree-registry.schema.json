@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dls://schemas/worktree-registry/v1",
+  "title": "DLS local worktree registry",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "git_common_dir",
+    "worktrees"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "git_common_dir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "worktrees": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "owner_root",
+          "git_common_dir",
+          "branch",
+          "registered_at"
+        ],
+        "properties": {
+          "owner_root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "git_common_dir": {
+            "type": "string",
+            "minLength": 1
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "registered_at": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

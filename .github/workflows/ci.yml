@@ -1,0 +1,42 @@
+name: Проверка
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.13"
+    steps:
+      - name: Получить исходники
+        uses: actions/checkout@v4
+
+      - name: Настроить Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Запустить DLS suite
+        run: python3 plugins/dls/scripts/run_tests.py
+
+      - name: Проверить публичный пакет
+        run: python3 scripts/validate_public_repo.py
+
+      - name: Проверить компиляцию Python
+        run: python3 -m compileall -q plugins/dls/scripts plugins/dls/tests

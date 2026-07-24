@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dls://schemas/evidence/v1",
+  "title": "DLS evidence",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "change_id",
+    "command_id",
+    "recorded_at",
+    "exit_code",
+    "summary"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string" },
+    "change_id": { "type": "string" },
+    "command_id": { "type": "string" },
+    "recorded_at": { "type": "string" },
+    "exit_code": { "type": "integer" },
+    "summary": { "type": "string" },
+    "source_digest": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "additionalProperties": true
+}

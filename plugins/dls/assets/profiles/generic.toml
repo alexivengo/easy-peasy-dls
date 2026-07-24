@@ -1,0 +1,24 @@
+schema_version = 1
+name = "generic"
+
+[discovery]
+hints = [
+  "Read applicable AGENTS.md files.",
+  "Inspect repository manifests and CI configuration.",
+  "Prefer repository-owned commands over profile guesses.",
+  "Map affected modules, interfaces, tests, and operational boundaries."
+]
+
+[evidence]
+common_types = [
+  "focused-test",
+  "integration-test",
+  "build",
+  "lint",
+  "runtime-smoke",
+  "design-capture"
+]
+
+[routing]
+domain_skills_are_advisory = true
+process_owner = "dls"

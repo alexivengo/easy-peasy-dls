@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dls://schemas/reviewpack/v2",
+  "title": "DLS ReviewPack v2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "review_id",
+    "change_id",
+    "mode",
+    "review_mode",
+    "control_level",
+    "created_at",
+    "base_sha",
+    "epic_base_sha",
+    "comparison_base_sha",
+    "head_sha",
+    "merge_base",
+    "epic_merge_base",
+    "definition_digest",
+    "source_snapshot_digest",
+    "pack_digest",
+    "required_lanes",
+    "previous_pack",
+    "prior_review",
+    "remediation_manifest",
+    "risk_lenses",
+    "required_prior_findings",
+    "prior_native_coverage",
+    "state_revision",
+    "artifacts",
+    "tickets",
+    "evidence",
+    "changed_files",
+    "full_changed_files",
+    "source_dirty_paths"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "review_id": { "type": "string", "minLength": 1 },
+    "change_id": { "type": "string", "minLength": 1 },
+    "mode": { "enum": ["acceptance-grade", "advisory-dirty"] },
+    "review_mode": { "enum": ["full", "remediation"] },
+    "control_level": { "enum": ["routine", "standard", "critical"] },
+    "created_at": { "type": "string", "minLength": 1 },
+    "base_sha": { "type": "string", "minLength": 1 },
+    "epic_base_sha": { "type": "string", "minLength": 1 },
+    "comparison_base_sha": { "type": "string", "minLength": 1 },
+    "head_sha": { "type": "string", "minLength": 1 },
+    "merge_base": { "type": "string", "minLength": 1 },
+    "epic_merge_base": { "type": "string", "minLength": 1 },
+    "definition_digest": { "type": "string", "minLength": 1 },
+    "source_snapshot_digest": { "type": "string", "minLength": 1 },
+    "pack_digest": { "type": "string", "minLength": 1 },
+    "required_lanes": {
+      "type": "array",
+      "items": { "enum": ["native-diff", "semantic-dls"] },
+      "uniqueItems": true
+    },
+    "previous_pack": { "type": ["object", "null"] },
+    "prior_review": { "type": ["object", "null"] },
+    "remediation_manifest": { "type": ["object", "null"] },
+    "risk_lenses": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["id", "impact_tags", "focus"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "impact_tags": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "focus": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "required_prior_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["finding_id", "severity", "kind", "ticket_ids", "requirement_ids"],
+        "properties": {
+          "finding_id": { "type": "string", "minLength": 1 },
+          "severity": { "enum": ["blocker", "should-fix"] },
+          "kind": {
+            "enum": ["defect", "validation-gap", "governance", "external", "design"]
+          },
+          "ticket_ids": { "type": "array", "items": { "type": "string" } },
+          "requirement_ids": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": true
+      }
+    },
+    "prior_native_coverage": { "type": "array" },
+    "state_revision": { "type": "integer", "minimum": 1 },
+    "artifacts": { "type": "object" },
+    "tickets": { "type": "object" },
+    "evidence": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "changed_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "full_changed_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "source_dirty_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": true
+}

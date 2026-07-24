@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dls://schemas/reviewir/v2",
+  "title": "DLS ReviewIR v2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "review_id",
+    "change_id",
+    "base_sha",
+    "comparison_base_sha",
+    "head_sha",
+    "pack_digest",
+    "definition_digest",
+    "review_mode",
+    "verdict",
+    "lanes",
+    "ticket_verdicts",
+    "prior_finding_verdicts",
+    "findings"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "review_id": { "type": "string", "minLength": 1 },
+    "change_id": { "type": "string", "minLength": 1 },
+    "base_sha": { "type": "string", "minLength": 1 },
+    "comparison_base_sha": { "type": "string", "minLength": 1 },
+    "head_sha": { "type": "string", "minLength": 1 },
+    "pack_digest": { "type": "string", "minLength": 1 },
+    "definition_digest": { "type": "string", "minLength": 1 },
+    "review_mode": { "enum": ["full", "remediation"] },
+    "verdict": { "enum": ["review-clear", "not-clear", "blocked"] },
+    "lanes": {
+      "type": "object",
+      "required": ["semantic"],
+      "properties": {
+        "native": {
+          "type": "object",
+          "required": [
+            "status",
+            "attempt_id",
+            "model",
+            "reasoning_effort",
+            "output_path",
+            "output_digest",
+            "source_snapshot_digest",
+            "coverage_chain"
+          ],
+          "properties": {
+            "status": { "const": "completed" },
+            "attempt_id": { "type": "string", "minLength": 1 },
+            "model": { "const": "gpt-5.6-terra" },
+            "reasoning_effort": { "const": "high" },
+            "output_path": { "type": "string", "minLength": 1 },
+            "output_digest": { "type": "string", "minLength": 1 },
+            "source_snapshot_digest": { "type": "string", "minLength": 1 },
+            "coverage_chain": { "type": "array", "minItems": 1 }
+          },
+          "additionalProperties": true
+        },
+        "semantic": {
+          "type": "object",
+          "required": [
+            "status",
+            "model",
+            "reasoning_effort",
+            "context_manifest_path",
+            "context_manifest_digest",
+            "independent_draft_path",
+            "independent_draft_digest",
+            "passes"
+          ],
+          "properties": {
+            "status": { "const": "completed" },
+            "model": { "const": "gpt-5.6-sol" },
+            "reasoning_effort": { "enum": ["high", "xhigh"] },
+            "context_manifest_path": { "type": "string", "minLength": 1 },
+            "context_manifest_digest": { "type": "string", "minLength": 1 },
+            "independent_draft_path": { "type": "string", "minLength": 1 },
+            "independent_draft_digest": { "type": "string", "minLength": 1 },
+            "passes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 2,
+              "items": {
+                "type": "object",
+                "required": ["kind", "status", "draft_path", "draft_digest"],
+                "properties": {
+                  "kind": { "enum": ["full", "targeted", "final-full"] },
+                  "status": { "const": "completed" },
+                  "draft_path": { "type": "string", "minLength": 1 },
+                  "draft_digest": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": true
+        },
+        "specialists": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "required": ["lens_id", "status", "draft_path", "draft_digest"],
+            "properties": {
+              "lens_id": { "type": "string", "minLength": 1 },
+              "status": { "const": "completed" },
+              "draft_path": { "type": "string", "minLength": 1 },
+              "draft_digest": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ticket_verdicts": { "type": "array" },
+    "prior_finding_verdicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["finding_id", "verdict", "evidence"],
+        "properties": {
+          "finding_id": { "type": "string", "minLength": 1 },
+          "verdict": {
+            "enum": ["verified", "still-open", "regressed", "waived"]
+          },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "replacement_finding_id": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "findings": { "type": "array" }
+  },
+  "additionalProperties": true
+}

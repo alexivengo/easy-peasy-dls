@@ -1,0 +1,6 @@
+interface:
+  display_name: "Easy Peasy DLS: отладка"
+  short_description: "Найти причину бага и доказать исправление"
+  default_prompt: "Используй $dls-debug, воспроизведи этот баг и докажи исправление его причины."
+policy:
+  allow_implicit_invocation: false

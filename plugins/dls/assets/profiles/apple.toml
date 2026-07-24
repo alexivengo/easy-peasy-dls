@@ -1,0 +1,29 @@
+schema_version = 1
+name = "apple"
+extends = "generic"
+
+[discovery]
+hints = [
+  "Inspect the Xcode project or Swift package manifest, schemes, deployment targets, and applicable platform entitlements.",
+  "Map SwiftUI, UIKit, AppKit, persistence, concurrency, and service boundaries only when affected.",
+  "Use repository-owned xcodebuild or Swift commands before profile defaults."
+]
+
+[routing]
+domain_skills = [
+  "swift-architecture-skill",
+  "swift-concurrency",
+  "swift-testing",
+  "swiftui-design-principles",
+  "ios-accessibility"
+]
+process_owner = "dls"
+
+[evidence]
+platform_types = [
+  "xcodebuild",
+  "swift-test",
+  "simulator-smoke",
+  "accessibility-check",
+  "design-capture"
+]

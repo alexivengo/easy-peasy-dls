@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dls://schemas/context/v1",
+  "title": "DLS context manifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "dls_version",
+    "profile",
+    "change_id",
+    "phase",
+    "generated_at",
+    "manifest_digest",
+    "state_revision",
+    "inputs",
+    "exclusions",
+    "totals"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "dls_version": { "type": "string" },
+    "profile": { "type": "string" },
+    "change_id": { "type": "string" },
+    "phase": { "enum": ["implementation", "review", "remediation"] },
+    "generated_at": { "type": "string" },
+    "manifest_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "state_revision": { "type": "integer", "minimum": 1 },
+    "inputs": { "type": "array" },
+    "exclusions": { "type": "array" }
+  },
+  "additionalProperties": true
+}
