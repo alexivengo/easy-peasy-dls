@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/easy-peasy-dls-logo.png" alt="Логотип Easy Peasy DLS: бегущий лимон" width="420">
+</p>
+
 # Easy Peasy DLS
 
 *Simple AI delivery. Proof included.*
