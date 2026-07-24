@@ -31,6 +31,7 @@ from .operations import (
     validate_command,
 )
 from .repo import find_repo_root
+from .review_runner import review_run, review_status
 from .worktrees import (
     worktree_list,
     worktree_register,
@@ -259,7 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     review_start_parser = subparsers.add_parser(
         "review-start",
-        help="Start the native and semantic lanes for one unfinished ReviewPack.",
+        help="Start or resume the single-flight native lane for one ReviewPack.",
     )
     review_start_parser.add_argument("change_id")
     review_start_parser.add_argument(
@@ -271,6 +272,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _operation_id(review_start_parser)
     _dry_run(review_start_parser)
+
+    review_run_parser = subparsers.add_parser(
+        "review-run",
+        help="Run native, specialist, semantic, reconciliation, and import end to end.",
+    )
+    review_run_parser.add_argument("change_id")
+    review_run_parser.add_argument(
+        "--pack",
+        help=(
+            "Repository-relative ReviewPack, or an absolute ReviewPack path "
+            "to select its owner checkout explicitly."
+        ),
+    )
+    _operation_id(review_run_parser)
+    _dry_run(review_run_parser)
+
+    review_status_parser = subparsers.add_parser(
+        "review-status",
+        help="Read one review pipeline state without launching a model.",
+    )
+    review_status_parser.add_argument("change_id")
+    review_status_parser.add_argument("--review-id")
 
     review_import_parser = subparsers.add_parser(
         "review-import",
@@ -509,6 +532,20 @@ def dispatch(root: Path, args: argparse.Namespace) -> dict[str, Any]:
             operation_id=args.operation_id,
             dry_run=args.dry_run,
         )
+    if command == "review-run":
+        return review_run(
+            root,
+            change_id=args.change_id,
+            pack_path=args.pack,
+            operation_id=args.operation_id,
+            dry_run=args.dry_run,
+        )
+    if command == "review-status":
+        return review_status(
+            root,
+            change_id=args.change_id,
+            review_id=args.review_id,
+        )
     if command == "review-import":
         return review_import(
             root,
@@ -670,6 +707,26 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             f"native={native_status}; "
             f"semantic={result['semantic_model']}/{result['semantic_reasoning_effort']}; "
             f"context={result.get('review_context_path') or 'not written'}"
+        )
+    if command == "review-run":
+        if not result["ok"]:
+            next_action = result.get("next_action", {})
+            return prefix + (
+                f"review-run {result.get('status', 'blocked')}; "
+                f"next={next_action.get('id', 'inspect')}; "
+                f"{next_action.get('detail', '')}"
+            )
+        return prefix + (
+            f"review-run {result.get('status')}; "
+            f"verdict={result.get('verdict') or 'pending'}; "
+            f"result={result.get('review_result_path') or 'pending'}"
+        )
+    if command == "review-status":
+        return (
+            f"review {result.get('review_id') or 'none'} "
+            f"{result['status']}; "
+            f"verdict={result.get('verdict') or 'pending'}; "
+            f"result={result.get('review_result_path') or 'none'}"
         )
     if command == "review-import":
         return prefix + (

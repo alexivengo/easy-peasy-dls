@@ -66,11 +66,22 @@ ReviewPack фиксирует:
 - режим полного или remediation-review;
 - непрерывную цепочку предыдущих review.
 
-Первый acceptance-grade review объединяет native diff-review и независимый semantic review. Для critical-изменений DLS может выбрать до трёх specialist lenses по фактическим risk tags.
+Первый acceptance-grade review объединяет native diff-review и независимый
+semantic review. Для critical-изменений DLS может выбрать до трёх specialist
+lenses по фактическим risk tags. Эти проходы запускает DLS, а не текущая задача
+и не обязательные subagents.
 
 Повторный review сначала проверяет delta и каждый предыдущий finding. Дорогой финальный whole-change pass запускается только если delta больше не содержит blocker. Каноническим становится один импортированный ReviewIR, а не любой сырой отчёт модели.
 
-Короткая review-команда выбирает только pack текущего HEAD. Для повторного review DLS может сам создать remediation-pack из последнего ReviewIR; старый незавершённый pack не может перехватить новую проверку.
+Короткая review-команда вызывает один end-to-end runner. До каждого model-run он
+атомарно записывает `running`, поэтому повторный запуск не создаёт вторую
+проверку. При подтверждённом timeout, orphan или некорректном structured output
+допускается только одна автоматическая попытка восстановления.
+
+Runner выбирает только pack текущего HEAD. Для повторного review DLS может сам
+создать remediation-pack из последнего ReviewIR; старый незавершённый pack не
+может перехватить новую проверку. Итогом всегда служит импортированный
+`review_result_path`, а не сырой transcript модели.
 
 ## Что остаётся за человеком
 

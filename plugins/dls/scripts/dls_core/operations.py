@@ -6,10 +6,13 @@ import json
 import os
 import re
 import selectors
+import shutil
 import signal
 import subprocess
+import tempfile
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -118,7 +121,16 @@ NATIVE_REVIEW_MODEL = "gpt-5.6-terra"
 NATIVE_REVIEW_REASONING_EFFORT = "high"
 NATIVE_REVIEW_TIMEOUT_SECONDS = 1800
 NATIVE_REVIEW_MAX_OUTPUT_BYTES = 262144
-NATIVE_REVIEW_TRANSCRIPT_MAX_BYTES = 262144
+NATIVE_REVIEW_TRANSCRIPT_MAX_BYTES = 1048576
+REVIEW_RUNNER_CONTRACT = "dls-review-runner/v1"
+REVIEW_LANE_MAX_ATTEMPTS = 2
+RETRYABLE_REVIEW_LANE_STATUSES = {
+    "abandoned",
+    "timeout",
+    "output-cap",
+    "missing-output",
+    "invalid-output",
+}
 
 RISK_LENS_DEFINITIONS = (
     {
@@ -2129,6 +2141,7 @@ def review_pack(
     )
     pack = {
         "schema_version": REVIEW_PACK_SCHEMA_VERSION,
+        "runner_contract": REVIEW_RUNNER_CONTRACT,
         "review_id": review_id,
         "change_id": change_id,
         "mode": mode,
@@ -2638,17 +2651,21 @@ def _native_review_argv(
     return [
         "codex",
         "exec",
-        "review",
         "--strict-config",
-        "-c",
-        f'model="{NATIVE_REVIEW_MODEL}"',
+        "--model",
+        NATIVE_REVIEW_MODEL,
         "-c",
         f'model_reasoning_effort="{NATIVE_REVIEW_REASONING_EFFORT}"',
-        "-c",
-        'sandbox_mode="read-only"',
+        "--sandbox",
+        "read-only",
         "--ephemeral",
+        "--ignore-user-config",
+        "--json",
+        "--color",
+        "never",
         "--output-last-message",
         final_output_path,
+        "review",
         "--base",
         pack.get("comparison_base_sha", pack["merge_base"]),
     ]
@@ -2701,6 +2718,156 @@ def _semantic_review_effort(state: dict[str, Any]) -> str:
     ):
         return "xhigh"
     return "high"
+
+
+def _review_lane_entries(
+    state: dict[str, Any],
+    *,
+    review_id: str,
+    lane_key: str,
+) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in state["reviews"]
+        if isinstance(item, dict)
+        and item.get("review_id") == review_id
+        and item.get("lane_key") == lane_key
+    ]
+
+
+def _process_is_alive(pid: object) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _attempt_lease_expired(attempt: dict[str, Any]) -> bool:
+    started_at = attempt.get("started_at")
+    if not isinstance(started_at, str):
+        return True
+    try:
+        started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    return elapsed > NATIVE_REVIEW_TIMEOUT_SECONDS + 60
+
+
+def _lane_wait_response(
+    *,
+    change_id: str,
+    state: dict[str, Any],
+    operation_id: str,
+    owner: Path,
+    owner_selection: str,
+    pack: dict[str, Any],
+    relative_pack_path: str | None,
+    pack_created: bool,
+    attempt: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "dry_run": False,
+        "changed": False,
+        "status": "running",
+        "change_id": change_id,
+        "state_revision": state["state_revision"],
+        "operation_id": operation_id,
+        "owner_root": str(owner),
+        "owner_selection": owner_selection,
+        "review_id": pack["review_id"],
+        "review_pack_path": relative_pack_path,
+        "pack_created": pack_created,
+        "review_mode": pack.get("review_mode", "full"),
+        "risk_lenses": pack.get("risk_lenses", []),
+        "required_prior_findings": pack.get("required_prior_findings", []),
+        "native_required": True,
+        "native_reused": False,
+        "native_argv": attempt.get("argv"),
+        "native": attempt,
+        "native_coverage": list(pack.get("prior_native_coverage", [])),
+        "review_context_path": None,
+        "review_context_digest": None,
+        "semantic_model": "gpt-5.6-sol",
+        "semantic_reasoning_effort": _semantic_review_effort(state),
+        "next_action": {
+            "id": "wait-review",
+            "detail": (
+                f"native lane {attempt.get('attempt_id')} is already running"
+            ),
+        },
+    }
+
+
+def _review_start_ready_response(
+    *,
+    owner: Path,
+    state: dict[str, Any],
+    change_id: str,
+    operation_id: str,
+    owner_selection: str,
+    pack: dict[str, Any],
+    relative_pack_path: str | None,
+    pack_created: bool,
+    native_required: bool,
+    native_reused: bool,
+    native_entry: dict[str, Any] | None,
+    changed: bool,
+) -> dict[str, Any]:
+    context = build_context(
+        owner,
+        change_id=change_id,
+        phase="review",
+        include=[],
+        exclude=[],
+        dry_run=False,
+    )
+    native_coverage = list(pack.get("prior_native_coverage", []))
+    if native_entry:
+        native_coverage.append(
+            {
+                "review_id": pack["review_id"],
+                "base_sha": pack.get("comparison_base_sha", pack["base_sha"]),
+                "head_sha": pack["head_sha"],
+                "output_digest": native_entry["output_digest"],
+            }
+        )
+    return {
+        "ok": True,
+        "dry_run": False,
+        "changed": changed,
+        "status": "completed",
+        "change_id": change_id,
+        "state_revision": state["state_revision"],
+        "operation_id": operation_id,
+        "owner_root": str(owner),
+        "owner_selection": owner_selection,
+        "review_id": pack["review_id"],
+        "review_pack_path": relative_pack_path,
+        "pack_created": pack_created,
+        "review_mode": pack.get("review_mode", "full"),
+        "risk_lenses": pack.get("risk_lenses", []),
+        "required_prior_findings": pack.get("required_prior_findings", []),
+        "native_required": native_required,
+        "native_reused": native_required and native_reused,
+        "native_argv": native_entry.get("argv") if native_entry else None,
+        "native": native_entry,
+        "native_coverage": native_coverage,
+        "review_context_path": context["manifest_path"],
+        "review_context_digest": context["manifest"]["manifest_digest"],
+        "semantic_model": "gpt-5.6-sol",
+        "semantic_reasoning_effort": _semantic_review_effort(state),
+        "next_action": {
+            "id": "run-semantic-review",
+            "detail": context["manifest_path"],
+        },
+    }
 
 
 def review_start(
@@ -2780,20 +2947,6 @@ def review_start(
     if pack is None:
         raise IntegrityError("ReviewPack preparation did not return a pack")
     _validate_review_pack_current(owner, state=state, pack=pack)
-    attempt_id = str(
-        uuid.uuid5(
-            uuid.NAMESPACE_URL,
-            f"dls:{change_id}:native-review:{effective_operation_id}",
-        )
-    )
-    relative_output_path = (
-        f".dls/cache/reviews/{change_id}/{pack['review_id']}/"
-        f"native-final-{attempt_id}.txt"
-    )
-    relative_transcript_path = (
-        f".dls/cache/reviews/{change_id}/{pack['review_id']}/"
-        f"native-transcript-{attempt_id}.txt"
-    )
     native_required = "native-diff" in pack["required_lanes"]
     native_entry = _successful_native_entry(
         owner,
@@ -2801,28 +2954,17 @@ def review_start(
         review_id=pack["review_id"],
     )
     native_was_reused = native_entry is not None
-    existing_operation = _operation(state, effective_operation_id)
-    if existing_operation and native_entry is None:
-        _require_operation_kind(existing_operation, "review-start")
-        prior_attempt = next(
-            (
-                item
-                for item in reversed(state["reviews"])
-                if item.get("kind") == "native"
-                and item.get("review_id") == pack["review_id"]
-                and item.get("operation_id") == effective_operation_id
-            ),
-            None,
+    predicted_attempt_id = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"dls:{change_id}:{pack['review_id']}:native:1:{effective_operation_id}",
         )
-        if prior_attempt:
-            raise IntegrityError(
-                "Native review operation already finished without success: "
-                f"status={prior_attempt.get('status')}"
-            )
-        raise IntegrityError(
-            f"review-start operation has no matching native attempt: {effective_operation_id}"
-        )
-    argv = _native_review_argv(pack, relative_output_path)
+    )
+    predicted_output_path = (
+        f".dls/cache/reviews/{change_id}/{pack['review_id']}/"
+        f"native-final-{predicted_attempt_id}.txt"
+    )
+    argv = _native_review_argv(pack, predicted_output_path)
     if native_entry and isinstance(native_entry.get("argv"), list):
         argv = native_entry["argv"]
     if dry_run:
@@ -2864,6 +3006,177 @@ def review_start(
         }
     changed = pack_created
     if native_required and native_entry is None:
+        state_store = StateStore(owner)
+        while native_entry is None:
+            state = state_store.load(change_id)
+            attempts = _review_lane_entries(
+                state,
+                review_id=pack["review_id"],
+                lane_key="native",
+            )
+            running = next(
+                (
+                    item
+                    for item in reversed(attempts)
+                    if item.get("status") == "running"
+                ),
+                None,
+            )
+            if running is not None:
+                if _process_is_alive(running.get("runner_pid")) and not _attempt_lease_expired(
+                    running
+                ):
+                    return _lane_wait_response(
+                        change_id=change_id,
+                        state=state,
+                        operation_id=effective_operation_id,
+                        owner=owner,
+                        owner_selection=owner_selection,
+                        pack=pack,
+                        relative_pack_path=relative_pack_path,
+                        pack_created=pack_created,
+                        attempt=running,
+                    )
+                state, _, abandoned = state_store.finish_review_lane(
+                    change_id,
+                    attempt_id=running["attempt_id"],
+                    expected_status="running",
+                    updates={
+                        "status": "abandoned",
+                        "completed_at": utc_now(),
+                        "failure_reason": "runner process disappeared or lease expired",
+                    },
+                )
+                changed = changed or abandoned
+                continue
+            completed = next(
+                (
+                    item
+                    for item in reversed(attempts)
+                    if item.get("status") == "completed"
+                ),
+                None,
+            )
+            if completed is not None:
+                native_entry = _successful_native_entry(
+                    owner,
+                    state=state,
+                    review_id=pack["review_id"],
+                )
+                native_was_reused = True
+                return _review_start_ready_response(
+                    owner=owner,
+                    state=state,
+                    change_id=change_id,
+                    operation_id=effective_operation_id,
+                    owner_selection=owner_selection,
+                    pack=pack,
+                    relative_pack_path=relative_pack_path,
+                    pack_created=pack_created,
+                    native_required=native_required,
+                    native_reused=native_was_reused,
+                    native_entry=native_entry,
+                    changed=changed,
+                )
+            terminal = attempts[-1] if attempts else None
+            if terminal is not None and terminal.get("status") not in (
+                RETRYABLE_REVIEW_LANE_STATUSES
+            ):
+                raise IntegrityError(
+                    "Native review already finished without success: "
+                    f"status={terminal.get('status')}"
+                )
+            if len(attempts) >= REVIEW_LANE_MAX_ATTEMPTS:
+                raise IntegrityError(
+                    "Native review exhausted automatic attempts: "
+                    f"status={terminal.get('status') if terminal else 'unknown'}"
+                )
+            ordinal = len(attempts) + 1
+            lane_operation_id = (
+                effective_operation_id
+                if ordinal == 1
+                else f"{effective_operation_id}:retry-{ordinal}"
+            )
+            attempt_id = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    (
+                        f"dls:{change_id}:{pack['review_id']}:native:"
+                        f"{ordinal}:{lane_operation_id}"
+                    ),
+                )
+            )
+            relative_output_path = (
+                f".dls/cache/reviews/{change_id}/{pack['review_id']}/"
+                f"native-final-{attempt_id}.txt"
+            )
+            relative_transcript_path = (
+                f".dls/cache/reviews/{change_id}/{pack['review_id']}/"
+                f"native-transcript-{attempt_id}.txt"
+            )
+            argv = _native_review_argv(
+                pack,
+                str(safe_resolve(owner, relative_output_path)),
+            )
+            snapshot_before = git_source_snapshot_digest(owner)
+            proposed_attempt = {
+                "review_id": pack["review_id"],
+                "kind": "native",
+                "lane_key": "native",
+                "attempt_id": attempt_id,
+                "attempt_ordinal": ordinal,
+                "operation_id": lane_operation_id,
+                "runner_pid": os.getpid(),
+                "runner_contract": REVIEW_RUNNER_CONTRACT,
+                "base_sha": pack.get("comparison_base_sha", pack["base_sha"]),
+                "head_sha": pack["head_sha"],
+                "pack_digest": pack["pack_digest"],
+                "model": NATIVE_REVIEW_MODEL,
+                "reasoning_effort": NATIVE_REVIEW_REASONING_EFFORT,
+                "argv": argv,
+                "prompt_path": "builtin:codex-exec-review",
+                "prompt_digest": sha256_bytes(
+                    (
+                        "codex-exec-review/builtin-v1\n"
+                        f"base={pack.get('comparison_base_sha', pack['base_sha'])}\n"
+                    ).encode("utf-8")
+                ),
+                "schema_path": "builtin:codex-review-bounded-text",
+                "schema_digest": sha256_bytes(
+                    b"codex-exec-review/bounded-text-v1\n"
+                ),
+                "context_manifest_path": relative_pack_path,
+                "context_digest": sha256_file(
+                    safe_resolve(owner, relative_pack_path, must_exist=True)
+                ),
+                "output_path": relative_output_path,
+                "transcript_path": relative_transcript_path,
+                "source_snapshot_before": snapshot_before,
+                "started_at": utc_now(),
+            }
+            state, claimed_attempt, claimed = state_store.claim_review_lane(
+                change_id,
+                attempt=proposed_attempt,
+                operation_kind="review-start",
+                max_attempts=REVIEW_LANE_MAX_ATTEMPTS,
+            )
+            changed = changed or claimed
+            if not claimed:
+                if claimed_attempt.get("status") == "running":
+                    return _lane_wait_response(
+                        change_id=change_id,
+                        state=state,
+                        operation_id=effective_operation_id,
+                        owner=owner,
+                        owner_selection=owner_selection,
+                        pack=pack,
+                        relative_pack_path=relative_pack_path,
+                        pack_created=pack_created,
+                        attempt=claimed_attempt,
+                    )
+                continue
+            break
+
         output_path = safe_resolve(owner, relative_output_path)
         transcript_path = safe_resolve(owner, relative_transcript_path)
         if output_path.exists() or transcript_path.exists():
@@ -2872,15 +3185,54 @@ def review_start(
                 "retry with a new operation ID"
             )
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        snapshot_before = git_source_snapshot_digest(owner)
-        execution = _run_bounded_command(
-            argv,
-            cwd=owner,
-            environment=allowed_environment([]),
-            timeout_seconds=NATIVE_REVIEW_TIMEOUT_SECONDS,
-            max_output_bytes=NATIVE_REVIEW_TRANSCRIPT_MAX_BYTES,
-            terminate_on_overflow=False,
-        )
+        native_parent = Path(tempfile.mkdtemp(prefix="dls-native-review-"))
+        native_workspace = native_parent / "checkout"
+        workspace_snapshot_before = snapshot_before
+        workspace_snapshot_after = snapshot_before
+        native_failure_reason: str | None = None
+        try:
+            run_git(
+                owner,
+                "worktree",
+                "add",
+                "--detach",
+                str(native_workspace),
+                pack["head_sha"],
+            )
+            workspace_snapshot_before = git_source_snapshot_digest(native_workspace)
+            execution = _run_bounded_command(
+                argv,
+                cwd=native_workspace,
+                environment=allowed_environment(["HOME", "CODEX_HOME"]),
+                timeout_seconds=NATIVE_REVIEW_TIMEOUT_SECONDS,
+                max_output_bytes=NATIVE_REVIEW_TRANSCRIPT_MAX_BYTES,
+                terminate_on_overflow=False,
+            )
+            workspace_snapshot_after = git_source_snapshot_digest(native_workspace)
+        except Exception as exc:
+            native_failure_reason = str(exc)
+            failure_bytes = (
+                f"{type(exc).__name__}: {exc}\n"
+            ).encode("utf-8", errors="replace")
+            execution = {
+                "exit_code": 127,
+                "timed_out": False,
+                "overflow": False,
+                "output": failure_bytes,
+                "output_bytes": len(failure_bytes),
+                "duration_seconds": 0.0,
+            }
+        finally:
+            run_git(
+                owner,
+                "worktree",
+                "remove",
+                "--force",
+                str(native_workspace),
+                check=False,
+            )
+            shutil.rmtree(native_parent, ignore_errors=True)
+            run_git(owner, "worktree", "prune", check=False)
         transcript_text = execution["output"].decode("utf-8", errors="replace")
         atomic_write_text(transcript_path, transcript_text, backup=False)
         output_exists = output_path.is_file()
@@ -2897,7 +3249,10 @@ def review_start(
         output_digest = sha256_file(output_path) if output_exists else None
         snapshot_after = git_source_snapshot_digest(owner)
         status_value = "completed"
-        if execution["timed_out"]:
+        failure_reason: str | None = native_failure_reason
+        if native_failure_reason is not None:
+            status_value = "failed"
+        elif execution["timed_out"]:
             status_value = "timeout"
         elif execution["exit_code"] != 0:
             status_value = "failed"
@@ -2905,20 +3260,13 @@ def review_start(
             status_value = "missing-output"
         elif output_overflow:
             status_value = "output-cap"
-        elif snapshot_after != snapshot_before:
+        elif (
+            snapshot_after != snapshot_before
+            or workspace_snapshot_after != workspace_snapshot_before
+        ):
             status_value = "source-changed"
-        native_entry = {
-            "review_id": pack["review_id"],
-            "kind": "native",
-            "attempt_id": attempt_id,
-            "operation_id": effective_operation_id,
+        final_updates = {
             "status": status_value,
-            "base_sha": pack.get("comparison_base_sha", pack["base_sha"]),
-            "head_sha": pack["head_sha"],
-            "pack_digest": pack["pack_digest"],
-            "model": NATIVE_REVIEW_MODEL,
-            "reasoning_effort": NATIVE_REVIEW_REASONING_EFFORT,
-            "argv": argv,
             "output_path": relative_output_path if output_exists else None,
             "output_digest": output_digest,
             "output_bytes": output_bytes,
@@ -2932,78 +3280,225 @@ def review_start(
             "transcript_truncated": execution["overflow"],
             "duration_seconds": execution["duration_seconds"],
             "source_snapshot_digest": snapshot_after,
+            "failure_reason": failure_reason,
             "completed_at": utc_now(),
         }
-
-        def mutate(value: dict[str, Any]) -> None:
-            value["reviews"].append(native_entry)
-
         try:
-            updated, changed = StateStore(owner).mutate(
+            updated, native_entry, finalized = state_store.finish_review_lane(
                 change_id,
-                expected_revision=state["state_revision"],
-                operation_id=effective_operation_id,
-                operation_kind="review-start",
-                mutator=mutate,
+                attempt_id=attempt_id,
+                expected_status="running",
+                updates=final_updates,
             )
+            changed = changed or finalized
         except Exception:
             output_path.unlink(missing_ok=True)
             transcript_path.unlink(missing_ok=True)
             raise
         state = updated
+        if status_value in RETRYABLE_REVIEW_LANE_STATUSES:
+            retried = review_start(
+                owner,
+                change_id=change_id,
+                pack_path=str(safe_resolve(owner, relative_pack_path, must_exist=True)),
+                operation_id=effective_operation_id,
+                dry_run=False,
+            )
+            retried["pack_created"] = pack_created or retried.get(
+                "pack_created",
+                False,
+            )
+            retried["changed"] = changed or retried.get("changed", False)
+            return retried
         if status_value != "completed":
             raise IntegrityError(
                 f"Native review did not complete: status={status_value}; "
                 f"transcript={relative_transcript_path}"
             )
         _validate_review_pack_current(owner, state=state, pack=pack)
-    context = build_context(
-        owner,
+    return _review_start_ready_response(
+        owner=owner,
+        state=state,
         change_id=change_id,
-        phase="review",
-        include=[],
-        exclude=[],
-        dry_run=False,
+        operation_id=effective_operation_id,
+        owner_selection=owner_selection,
+        pack=pack,
+        relative_pack_path=relative_pack_path,
+        pack_created=pack_created,
+        native_required=native_required,
+        native_reused=native_was_reused,
+        native_entry=native_entry,
+        changed=changed,
     )
-    native_coverage = list(pack.get("prior_native_coverage", []))
-    if native_entry:
-        native_coverage.append(
-            {
-                "review_id": pack["review_id"],
-                "base_sha": pack.get("comparison_base_sha", pack["base_sha"]),
-                "head_sha": pack["head_sha"],
-                "output_digest": native_entry["output_digest"],
-            }
+
+
+def _state_lane_attempt(
+    state: dict[str, Any],
+    *,
+    review_id: str,
+    attempt_id: object,
+) -> dict[str, Any]:
+    if not isinstance(attempt_id, str) or not attempt_id:
+        raise IntegrityError("ReviewIR lane is missing attempt_id")
+    attempt = next(
+        (
+            item
+            for item in state["reviews"]
+            if isinstance(item, dict)
+            and item.get("review_id") == review_id
+            and item.get("attempt_id") == attempt_id
+        ),
+        None,
+    )
+    if not attempt or attempt.get("status") != "completed":
+        raise IntegrityError(
+            f"ReviewIR lane has no completed state attempt: {attempt_id}"
         )
-    return {
-        "ok": True,
-        "dry_run": False,
-        "changed": changed,
-        "change_id": change_id,
-        "state_revision": state["state_revision"],
-        "operation_id": effective_operation_id,
-        "owner_root": str(owner),
-        "owner_selection": owner_selection,
-        "review_id": pack["review_id"],
-        "review_pack_path": relative_pack_path,
-        "pack_created": pack_created,
-        "review_mode": pack.get("review_mode", "full"),
-        "risk_lenses": pack.get("risk_lenses", []),
-        "required_prior_findings": pack.get("required_prior_findings", []),
-        "native_required": native_required,
-        "native_reused": native_required and native_was_reused,
-        "native_argv": argv if native_required else None,
-        "native": native_entry,
-        "native_coverage": native_coverage,
-        "review_context_path": context["manifest_path"],
-        "review_context_digest": context["manifest"]["manifest_digest"],
-        "semantic_model": "gpt-5.6-sol",
-        "semantic_reasoning_effort": _semantic_review_effort(state),
-        "next_action": {
-            "id": "run-semantic-review",
-            "detail": context["manifest_path"],
-        },
-    }
+    if attempt.get("runner_contract") not in {
+        None,
+        REVIEW_RUNNER_CONTRACT,
+    }:
+        raise IntegrityError("Review lane runner contract mismatch")
+    return attempt
+
+
+def _assert_lane_matches_state(
+    lane: dict[str, Any],
+    attempt: dict[str, Any],
+    *,
+    fields: tuple[str, ...],
+) -> None:
+    for field in fields:
+        if lane.get(field) != attempt.get(field):
+            raise IntegrityError(
+                f"ReviewIR state-owned provenance mismatch: {field}"
+            )
+
+
+def _validate_state_owned_review_provenance(
+    root: Path,
+    *,
+    state: dict[str, Any],
+    pack: dict[str, Any],
+    report: dict[str, Any],
+) -> None:
+    review_id = pack["review_id"]
+    lanes = report["lanes"]
+    semantic = lanes["semantic"]
+    semantic_attempt = _state_lane_attempt(
+        state,
+        review_id=review_id,
+        attempt_id=semantic.get("attempt_id"),
+    )
+    _assert_lane_matches_state(
+        semantic,
+        semantic_attempt,
+        fields=(
+            "operation_id",
+            "model",
+            "reasoning_effort",
+            "transcript_path",
+            "transcript_digest",
+        ),
+    )
+    context_path = safe_resolve(
+        root,
+        semantic["context_manifest_path"],
+        must_exist=True,
+    )
+    if (
+        semantic_attempt.get("context_manifest_path")
+        != semantic.get("context_manifest_path")
+        or semantic_attempt.get("context_digest") != sha256_file(context_path)
+    ):
+        raise IntegrityError("Semantic context provenance is not state-owned")
+    if semantic_attempt.get("output_path") != semantic.get(
+        "independent_draft_path"
+    ) or semantic_attempt.get("output_digest") != semantic.get(
+        "independent_draft_digest"
+    ):
+        raise IntegrityError("Semantic independent draft is not state-owned")
+    for semantic_pass in semantic.get("passes", []):
+        pass_attempt = _state_lane_attempt(
+            state,
+            review_id=review_id,
+            attempt_id=semantic_pass.get("attempt_id"),
+        )
+        if (
+            semantic_pass.get("operation_id") != pass_attempt.get("operation_id")
+            or semantic_pass.get("draft_path") != pass_attempt.get("output_path")
+            or semantic_pass.get("draft_digest") != pass_attempt.get("output_digest")
+            or semantic_pass.get("transcript_path")
+            != pass_attempt.get("transcript_path")
+            or semantic_pass.get("transcript_digest")
+            != pass_attempt.get("transcript_digest")
+        ):
+            raise IntegrityError("Semantic pass provenance is not state-owned")
+    reconciliation = lanes.get("reconciliation")
+    if not isinstance(reconciliation, dict):
+        raise IntegrityError("ReviewIR is missing reconciliation provenance")
+    reconciliation_attempt = _state_lane_attempt(
+        state,
+        review_id=review_id,
+        attempt_id=reconciliation.get("attempt_id"),
+    )
+    _assert_lane_matches_state(
+        reconciliation,
+        reconciliation_attempt,
+        fields=(
+            "operation_id",
+            "model",
+            "reasoning_effort",
+            "prompt_path",
+            "prompt_digest",
+            "schema_path",
+            "schema_digest",
+            "output_path",
+            "output_digest",
+            "transcript_path",
+            "transcript_digest",
+            "source_snapshot_digest",
+        ),
+    )
+    expected_lenses = [item["id"] for item in pack.get("risk_lenses", [])]
+    specialists = lanes.get("specialists", [])
+    if [item.get("lens_id") for item in specialists] != expected_lenses:
+        raise IntegrityError("State-owned specialist lanes do not match ReviewPack")
+    for specialist in specialists:
+        attempt = _state_lane_attempt(
+            state,
+            review_id=review_id,
+            attempt_id=specialist.get("attempt_id"),
+        )
+        if attempt.get("lane_key") != f"specialist:{specialist['lens_id']}":
+            raise IntegrityError("Specialist state lane key mismatch")
+        if (
+            specialist.get("draft_path") != attempt.get("output_path")
+            or specialist.get("draft_digest") != attempt.get("output_digest")
+        ):
+            raise IntegrityError("Specialist draft is not state-owned")
+    for lane in (
+        semantic,
+        reconciliation,
+        *specialists,
+    ):
+        for path_key, digest_key in (
+            ("transcript_path", "transcript_digest"),
+            ("output_path", "output_digest"),
+            ("draft_path", "draft_digest"),
+        ):
+            relative = lane.get(path_key)
+            digest = lane.get(digest_key)
+            if relative is None and digest is None:
+                continue
+            if not isinstance(relative, str) or not isinstance(digest, str):
+                raise IntegrityError(
+                    f"ReviewIR lane has incomplete {path_key} provenance"
+                )
+            if sha256_file(safe_resolve(root, relative, must_exist=True)) != digest:
+                raise IntegrityError(
+                    f"ReviewIR lane cache digest mismatch: {path_key}"
+                )
 
 
 def review_import(
@@ -3053,6 +3548,16 @@ def review_import(
         raise IntegrityError("Review report pack digest mismatch")
     if report["definition_digest"] != pack["definition_digest"]:
         raise IntegrityError("Review report definition digest mismatch")
+    runner_contract = pack.get("runner_contract")
+    if runner_contract is not None:
+        if runner_contract != REVIEW_RUNNER_CONTRACT:
+            raise IntegrityError(
+                f"Unsupported ReviewPack runner contract: {runner_contract}"
+            )
+        if report.get("runner_contract") != runner_contract:
+            raise IntegrityError(
+                "ReviewIR is missing the state-owned runner contract"
+            )
     native_entry = _successful_native_entry(
         root,
         state=state,
@@ -3079,6 +3584,22 @@ def review_import(
                 raise IntegrityError(
                     f"ReviewIR native provenance mismatch: {report_key}"
                 )
+        if runner_contract == REVIEW_RUNNER_CONTRACT:
+            for field in (
+                "operation_id",
+                "prompt_path",
+                "prompt_digest",
+                "schema_path",
+                "schema_digest",
+                "context_manifest_path",
+                "context_digest",
+                "transcript_path",
+                "transcript_digest",
+            ):
+                if native_lane.get(field) != native_entry.get(field):
+                    raise IntegrityError(
+                        f"ReviewIR native provenance mismatch: {field}"
+                    )
         if report.get("schema_version") == REVIEW_IR_SCHEMA_VERSION:
             expected_coverage = list(pack["prior_native_coverage"])
             expected_coverage.append(
@@ -3113,6 +3634,13 @@ def review_import(
     semantic_lane = report["lanes"]["semantic"]
     if semantic_lane["reasoning_effort"] != _semantic_review_effort(state):
         raise IntegrityError("ReviewIR semantic reasoning effort does not match change risk")
+    if runner_contract == REVIEW_RUNNER_CONTRACT:
+        _validate_state_owned_review_provenance(
+            root,
+            state=state,
+            pack=pack,
+            report=report,
+        )
     context_relative = Path(semantic_lane["context_manifest_path"])
     expected_context_parent = Path(".dls") / "cache" / "context" / change_id
     if context_relative.parent != expected_context_parent:

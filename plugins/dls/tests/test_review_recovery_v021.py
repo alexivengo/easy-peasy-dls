@@ -105,7 +105,7 @@ class ReviewRecoveryV021Tests(unittest.TestCase):
             root,
             change_id="C001",
             report_path=".dls/cache/review-one.json",
-            expected_revision=5,
+            expected_revision=StateStore(root).load("C001")["state_revision"],
             operation_id="import-1",
         )
         return base_sha, pack, finding
@@ -127,7 +127,7 @@ class ReviewRecoveryV021Tests(unittest.TestCase):
             command_id="test",
             exit_code=0,
             summary="PASS candidate two",
-            expected_revision=6,
+            expected_revision=StateStore(root).load("C001")["state_revision"],
             git_sha=head_sha,
             artifacts=[],
             environment="fixture",
@@ -140,7 +140,7 @@ class ReviewRecoveryV021Tests(unittest.TestCase):
             finding_id="R001",
             disposition_status=disposition_status,
             rationale="Send the current candidate to independent adjudication.",
-            expected_revision=7,
+            expected_revision=StateStore(root).load("C001")["state_revision"],
             git_sha=head_sha,
             evidence=[evidence["evidence_path"]]
             if disposition_status == "addressed"
@@ -319,7 +319,7 @@ class ReviewRecoveryV021Tests(unittest.TestCase):
                 root,
                 change_id="C001",
                 base_ref=None,
-                expected_revision=8,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="ready-note",
             )
             self.assertTrue(ready["ok"])
@@ -368,7 +368,7 @@ class ReviewRecoveryV021Tests(unittest.TestCase):
                 root,
                 change_id="C001",
                 report_path=".dls/cache/reclassified.json",
-                expected_revision=10,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="import-reclassified",
             )
 
@@ -392,7 +392,7 @@ class ReviewRecoveryV021Tests(unittest.TestCase):
                 root,
                 change_id="C001",
                 base_ref=None,
-                expected_revision=8,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="ready-reopened",
                 dry_run=True,
             )

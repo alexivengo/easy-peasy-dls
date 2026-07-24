@@ -104,7 +104,7 @@ class ReviewLoopV13Tests(unittest.TestCase):
             root,
             change_id="C001",
             report_path=".dls/cache/review-one.json",
-            expected_revision=5,
+            expected_revision=StateStore(root).load("C001")["state_revision"],
             operation_id="import-1",
         )
         self.assertEqual(imported["verdict"], "not-clear")
@@ -135,7 +135,7 @@ class ReviewLoopV13Tests(unittest.TestCase):
             command_id="test",
             exit_code=0,
             summary="PASS candidate two",
-            expected_revision=6,
+            expected_revision=StateStore(root).load("C001")["state_revision"],
             git_sha=head_sha,
             artifacts=[],
             environment="fixture",
@@ -148,7 +148,7 @@ class ReviewLoopV13Tests(unittest.TestCase):
             finding_id="R001",
             disposition_status="addressed",
             rationale="Implemented the boundary and added current evidence.",
-            expected_revision=7,
+            expected_revision=StateStore(root).load("C001")["state_revision"],
             git_sha=head_sha,
             evidence=[evidence["evidence_path"]],
             actor="codex",
@@ -161,7 +161,7 @@ class ReviewLoopV13Tests(unittest.TestCase):
             root,
             change_id="C001",
             base_ref=base_sha,
-            expected_revision=8,
+            expected_revision=StateStore(root).load("C001")["state_revision"],
             operation_id="ready-2",
         )
         self.assertTrue(ready["ok"])
@@ -210,7 +210,7 @@ class ReviewLoopV13Tests(unittest.TestCase):
                 root,
                 change_id="C001",
                 base_ref=base_sha,
-                expected_revision=6,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="ready-blocked",
             )
             self.assertFalse(blocked["ok"])
@@ -230,7 +230,7 @@ class ReviewLoopV13Tests(unittest.TestCase):
                 root,
                 change_id="C001",
                 base_ref=base_sha,
-                expected_revision=6,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="ready-without-manifest",
                 dry_run=True,
             )
@@ -280,7 +280,9 @@ class ReviewLoopV13Tests(unittest.TestCase):
                     root,
                     change_id="C001",
                     report_path=".dls/cache/incomplete-prior.json",
-                    expected_revision=10,
+                    expected_revision=StateStore(root).load("C001")[
+                        "state_revision"
+                    ],
                     operation_id="import-incomplete-prior",
                 )
             no_final = json.loads(json.dumps(clear_report))
@@ -294,7 +296,9 @@ class ReviewLoopV13Tests(unittest.TestCase):
                     root,
                     change_id="C001",
                     report_path=".dls/cache/no-final-full.json",
-                    expected_revision=10,
+                    expected_revision=StateStore(root).load("C001")[
+                        "state_revision"
+                    ],
                     operation_id="import-no-final",
                 )
             report_path = root / ".dls/cache/review-two.json"
@@ -303,7 +307,7 @@ class ReviewLoopV13Tests(unittest.TestCase):
                 root,
                 change_id="C001",
                 report_path=".dls/cache/review-two.json",
-                expected_revision=10,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="import-2",
             )
             self.assertTrue(imported["ok"])
@@ -370,7 +374,7 @@ class ReviewLoopV13Tests(unittest.TestCase):
                 root,
                 change_id="C001",
                 report_path=".dls/cache/review-two-not-clear.json",
-                expected_revision=10,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="import-2-not-clear",
             )
             manifest = remediation_start(root, change_id="C001")
@@ -492,7 +496,7 @@ class ReviewLoopV13Tests(unittest.TestCase):
                 root,
                 change_id="C001",
                 base_ref=base_sha,
-                expected_revision=6,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="ready",
             )
             self.assertTrue(ready["ok"])
@@ -520,7 +524,7 @@ class ReviewLoopV13Tests(unittest.TestCase):
                 finding_id="R001",
                 disposition_status="resolved",
                 rationale="Legacy caller claims the fix.",
-                expected_revision=6,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 git_sha=git(root, "rev-parse", "HEAD"),
                 evidence=[evidence_path],
                 actor="codex",
@@ -536,7 +540,9 @@ class ReviewLoopV13Tests(unittest.TestCase):
                     finding_id="R001",
                     disposition_status="verified",
                     rationale="Self verification is forbidden.",
-                    expected_revision=7,
+                    expected_revision=StateStore(root).load("C001")[
+                        "state_revision"
+                    ],
                     git_sha=git(root, "rev-parse", "HEAD"),
                     evidence=[evidence_path],
                     actor="codex",

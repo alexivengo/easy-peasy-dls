@@ -114,19 +114,24 @@ class ReviewPipelineTests(unittest.TestCase):
         executable = fake_bin / "codex"
         executable.write_text(
             "#!/bin/sh\n"
-            "if [ \"$1\" != \"exec\" ] || [ \"$2\" != \"review\" ]; then exit 64; fi\n"
-            "shift 2\n"
+            "if [ \"$1\" != \"exec\" ]; then exit 64; fi\n"
+            "shift\n"
             "final_output_path=''\n"
+            "review_seen='false'\n"
             "while [ \"$#\" -gt 0 ]; do\n"
-            "  if [ \"$1\" = \"-o\" ] || [ \"$1\" = \"--output-last-message\" ]; then\n"
+            "  if [ \"$1\" = \"review\" ]; then\n"
+            "    review_seen='true'\n"
+            "    shift\n"
+            "  elif [ \"$1\" = \"-o\" ] || [ \"$1\" = \"--output-last-message\" ]; then\n"
             "    final_output_path=\"$2\"\n"
             "    shift 2\n"
             "  else\n"
             "    shift\n"
             "  fi\n"
             "done\n"
-            "if [ -z \"$final_output_path\" ]; then exit 65; fi\n"
-            "printf 'No findings.\\n' > \"$final_output_path\"\n"
+            "if [ \"$review_seen\" != \"true\" ] || [ -z \"$final_output_path\" ]; then exit 65; fi\n"
+            "printf '{\"summary\":\"No findings.\",\"findings\":[]}\\n' "
+            "> \"$final_output_path\"\n"
             + script,
             encoding="utf-8",
         )
@@ -382,7 +387,20 @@ class ReviewPipelineTests(unittest.TestCase):
                     "dls_core.operations.NATIVE_REVIEW_TIMEOUT_SECONDS",
                     1,
                 ):
-                    with self.assertRaisesRegex(IntegrityError, "status=timeout"):
+                    with self.assertRaisesRegex(
+                        IntegrityError,
+                        "exhausted automatic attempts",
+                    ):
+                        review_start(
+                            timeout_root,
+                            change_id="C001",
+                            pack_path=None,
+                            operation_id="native-timeout",
+                        )
+                    with self.assertRaisesRegex(
+                        IntegrityError,
+                        "exhausted automatic attempts",
+                    ):
                         review_start(
                             timeout_root,
                             change_id="C001",
@@ -393,13 +411,16 @@ class ReviewPipelineTests(unittest.TestCase):
                 self._restore_path(original)
             timeout_state = StateStore(timeout_root).load("C001")
             self.assertEqual(timeout_state["reviews"][-1]["status"], "timeout")
-            with self.assertRaisesRegex(IntegrityError, "already finished"):
-                review_start(
-                    timeout_root,
-                    change_id="C001",
-                    pack_path=None,
-                    operation_id="native-timeout",
-                )
+            self.assertEqual(
+                len(
+                    [
+                        item
+                        for item in timeout_state["reviews"]
+                        if item.get("lane_key") == "native"
+                    ]
+                ),
+                2,
+            )
 
             transcript_root = sandbox / "transcript"
             transcript_root.mkdir()
@@ -431,7 +452,7 @@ class ReviewPipelineTests(unittest.TestCase):
             )
             self.assertEqual(
                 (transcript_root / transcript_entry["output_path"]).read_text(),
-                "No findings.\n",
+                '{"summary":"No findings.","findings":[]}\n',
             )
 
             final_cap_root = sandbox / "final-cap"
@@ -446,7 +467,10 @@ class ReviewPipelineTests(unittest.TestCase):
                     "dls_core.operations.NATIVE_REVIEW_MAX_OUTPUT_BYTES",
                     1024,
                 ):
-                    with self.assertRaisesRegex(IntegrityError, "status=output-cap"):
+                    with self.assertRaisesRegex(
+                        IntegrityError,
+                        "exhausted automatic attempts",
+                    ):
                         review_start(
                             final_cap_root,
                             change_id="C001",
@@ -469,7 +493,7 @@ class ReviewPipelineTests(unittest.TestCase):
             try:
                 with self.assertRaisesRegex(
                     IntegrityError,
-                    "status=missing-output",
+                    "exhausted automatic attempts",
                 ):
                     review_start(
                         missing_final_root,
@@ -504,6 +528,16 @@ class ReviewPipelineTests(unittest.TestCase):
                 self._restore_path(original)
             changed_state = StateStore(changed_root).load("C001")
             self.assertEqual(changed_state["reviews"][-1]["status"], "source-changed")
+            self.assertEqual(
+                len(
+                    [
+                        item
+                        for item in changed_state["reviews"]
+                        if item.get("lane_key") == "native"
+                    ]
+                ),
+                1,
+            )
 
     def test_successful_native_is_reused_and_missing_cache_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -527,13 +561,16 @@ class ReviewPipelineTests(unittest.TestCase):
                 started["native"]["attempt_id"],
             )
             self.assertIn(
-                'sandbox_mode="read-only"',
+                "read-only",
                 replayed["native"]["argv"],
             )
             self.assertEqual(
-                replayed["native"]["argv"][:3],
-                ["codex", "exec", "review"],
+                replayed["native"]["argv"][:2],
+                ["codex", "exec"],
             )
+            self.assertIn("review", replayed["native"]["argv"])
+            self.assertIn("--ignore-user-config", replayed["native"]["argv"])
+            self.assertIn("--json", replayed["native"]["argv"])
             self.assertIn("--ephemeral", replayed["native"]["argv"])
             self.assertIn(
                 "--output-last-message",
@@ -625,7 +662,9 @@ class ReviewPipelineTests(unittest.TestCase):
                     drifted,
                     change_id="C001",
                     report_path=".dls/cache/drifted.json",
-                    expected_revision=5,
+                    expected_revision=StateStore(drifted).load("C001")[
+                        "state_revision"
+                    ],
                     operation_id="import-drifted",
                 )
 
@@ -672,33 +711,23 @@ class ReviewPipelineTests(unittest.TestCase):
                     root,
                     change_id="C001",
                     report_path=".dls/cache/legacy-blocking.json",
-                    expected_revision=7,
+                    expected_revision=StateStore(root).load("C001")[
+                        "state_revision"
+                    ],
                     operation_id="legacy-blocking",
                 )
 
             release_finding = dict(base_finding)
             release_finding["blocks"] = ["release", "production"]
-            release_report = build_review_report(
-                root,
-                pack_result=pack,
-                start_result=started,
-                verdict="review-clear",
-                findings=[release_finding],
-                ticket_verdicts=[
-                    {
-                        "ticket_id": "T01",
-                        "verdict": "clear",
-                        "finding_ids": ["R001"],
-                    }
-                ],
-            )
+            release_report = json.loads(json.dumps(legacy_blocking))
+            release_report["findings"] = [release_finding]
             release_path = root / ".dls/cache/release-only.json"
             release_path.write_text(json.dumps(release_report), encoding="utf-8")
             imported = review_import(
                 root,
                 change_id="C001",
                 report_path=".dls/cache/release-only.json",
-                expected_revision=7,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="release-only",
             )
             self.assertTrue(imported["ok"])

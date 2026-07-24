@@ -32,7 +32,12 @@ Repository-owned команды задаются argv arrays в `.dls/config.tom
 
 `dls review-ready` проверяет committed candidate, definition approval, готовность tickets, stage-specific current evidence и dispositions findings. Команда создаёт ReviewPack v2 либо возвращает одно типизированное `next_action`. Для remediation epic base выводится из последнего ReviewIR; первый review требует явный `--base`.
 
-`dls review-start` — fail-fast review orchestrator. Он работает только с текущим change state, явно зарегистрированным worktree или absolute pack, выбирает pack только текущего HEAD и создаёт repeat pack через `review-ready`, если его ещё нет. Устаревшие unfinished packs остаются историческими и не перехватывают review.
+`dls review-run` — публичный end-to-end review orchestrator. Он работает только с
+текущим change state, явно зарегистрированным worktree или absolute pack,
+выбирает pack текущего HEAD, выполняет state-owned model lanes и атомарно
+импортирует ReviewIR. Повторный процесс видит `running` и ждёт вместо запуска
+дубликата. `review-start` остаётся native-only diagnostic primitive, а
+`review-status` никогда не запускает модель.
 
 ReviewPack/ReviewIR v2 сохраняют читаемость исторических v1 artifacts, считают последний импортированный ReviewIR текущим canonical snapshot, делают закрытие finding ответственностью reviewer и требуют targeted remediation pass плюс финальный whole-change semantic pass перед повторным `review-clear`. Implementer `note` разрешает только независимое adjudication и сам finding не закрывает.
 

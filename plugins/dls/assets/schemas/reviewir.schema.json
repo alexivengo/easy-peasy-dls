@@ -21,15 +21,18 @@
   ],
   "properties": {
     "schema_version": { "const": 2 },
+    "runner_contract": { "const": "dls-review-runner/v1" },
     "review_id": { "type": "string", "minLength": 1 },
     "change_id": { "type": "string", "minLength": 1 },
     "base_sha": { "type": "string", "minLength": 1 },
+    "epic_base_sha": { "type": "string", "minLength": 1 },
     "comparison_base_sha": { "type": "string", "minLength": 1 },
     "head_sha": { "type": "string", "minLength": 1 },
     "pack_digest": { "type": "string", "minLength": 1 },
     "definition_digest": { "type": "string", "minLength": 1 },
     "review_mode": { "enum": ["full", "remediation"] },
     "verdict": { "enum": ["review-clear", "not-clear", "blocked"] },
+    "summary": { "type": "string" },
     "lanes": {
       "type": "object",
       "required": ["semantic"],
@@ -49,10 +52,19 @@
           "properties": {
             "status": { "const": "completed" },
             "attempt_id": { "type": "string", "minLength": 1 },
+            "operation_id": { "type": "string", "minLength": 1 },
             "model": { "const": "gpt-5.6-terra" },
             "reasoning_effort": { "const": "high" },
+            "prompt_path": { "type": "string", "minLength": 1 },
+            "prompt_digest": { "type": "string", "minLength": 1 },
+            "schema_path": { "type": "string", "minLength": 1 },
+            "schema_digest": { "type": "string", "minLength": 1 },
+            "context_manifest_path": { "type": "string", "minLength": 1 },
+            "context_digest": { "type": "string", "minLength": 1 },
             "output_path": { "type": "string", "minLength": 1 },
             "output_digest": { "type": "string", "minLength": 1 },
+            "transcript_path": { "type": "string", "minLength": 1 },
+            "transcript_digest": { "type": "string", "minLength": 1 },
             "source_snapshot_digest": { "type": "string", "minLength": 1 },
             "coverage_chain": { "type": "array", "minItems": 1 }
           },
@@ -88,12 +100,52 @@
                 "properties": {
                   "kind": { "enum": ["full", "targeted", "final-full"] },
                   "status": { "const": "completed" },
+                  "attempt_id": { "type": "string", "minLength": 1 },
+                  "operation_id": { "type": "string", "minLength": 1 },
                   "draft_path": { "type": "string", "minLength": 1 },
-                  "draft_digest": { "type": "string", "minLength": 1 }
+                  "draft_digest": { "type": "string", "minLength": 1 },
+                  "transcript_path": { "type": "string", "minLength": 1 },
+                  "transcript_digest": { "type": "string", "minLength": 1 }
                 },
-                "additionalProperties": false
+                "additionalProperties": true
               }
             }
+          },
+          "additionalProperties": true
+        },
+        "reconciliation": {
+          "type": "object",
+          "required": [
+            "status",
+            "attempt_id",
+            "operation_id",
+            "model",
+            "reasoning_effort",
+            "prompt_path",
+            "prompt_digest",
+            "schema_path",
+            "schema_digest",
+            "output_path",
+            "output_digest",
+            "transcript_path",
+            "transcript_digest",
+            "source_snapshot_digest"
+          ],
+          "properties": {
+            "status": { "const": "completed" },
+            "attempt_id": { "type": "string", "minLength": 1 },
+            "operation_id": { "type": "string", "minLength": 1 },
+            "model": { "const": "gpt-5.6-sol" },
+            "reasoning_effort": { "enum": ["high", "xhigh"] },
+            "prompt_path": { "type": "string", "minLength": 1 },
+            "prompt_digest": { "type": "string", "minLength": 1 },
+            "schema_path": { "type": "string", "minLength": 1 },
+            "schema_digest": { "type": "string", "minLength": 1 },
+            "output_path": { "type": "string", "minLength": 1 },
+            "output_digest": { "type": "string", "minLength": 1 },
+            "transcript_path": { "type": "string", "minLength": 1 },
+            "transcript_digest": { "type": "string", "minLength": 1 },
+            "source_snapshot_digest": { "type": "string", "minLength": 1 }
           },
           "additionalProperties": true
         },
@@ -106,10 +158,23 @@
             "properties": {
               "lens_id": { "type": "string", "minLength": 1 },
               "status": { "const": "completed" },
+              "attempt_id": { "type": "string", "minLength": 1 },
+              "operation_id": { "type": "string", "minLength": 1 },
+              "model": { "const": "gpt-5.6-terra" },
+              "reasoning_effort": { "const": "high" },
+              "prompt_path": { "type": "string", "minLength": 1 },
+              "prompt_digest": { "type": "string", "minLength": 1 },
+              "schema_path": { "type": "string", "minLength": 1 },
+              "schema_digest": { "type": "string", "minLength": 1 },
+              "output_path": { "type": "string", "minLength": 1 },
+              "output_digest": { "type": "string", "minLength": 1 },
+              "transcript_path": { "type": "string", "minLength": 1 },
+              "transcript_digest": { "type": "string", "minLength": 1 },
+              "source_snapshot_digest": { "type": "string", "minLength": 1 },
               "draft_path": { "type": "string", "minLength": 1 },
               "draft_digest": { "type": "string", "minLength": 1 }
             },
-            "additionalProperties": false
+            "additionalProperties": true
           }
         }
       },
@@ -137,5 +202,22 @@
     },
     "findings": { "type": "array" }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "runner_contract": { "const": "dls-review-runner/v1" }
+        },
+        "required": ["runner_contract"]
+      },
+      "then": {
+        "properties": {
+          "lanes": {
+            "required": ["semantic", "reconciliation"]
+          }
+        }
+      }
+    }
+  ],
   "additionalProperties": true
 }

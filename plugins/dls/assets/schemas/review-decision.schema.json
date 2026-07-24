@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dls://schemas/review-decision/v1",
+  "title": "DLS review decision",
+  "type": "object",
+  "required": [
+    "verdict",
+    "summary",
+    "findings",
+    "ticket_verdicts",
+    "prior_finding_verdicts"
+  ],
+  "properties": {
+    "verdict": {
+      "enum": [
+        "review-clear",
+        "not-clear",
+        "blocked"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "ticket_verdicts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ticketVerdict"
+      }
+    },
+    "prior_finding_verdicts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/priorFindingVerdict"
+      }
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": [
+        "id",
+        "severity",
+        "kind",
+        "location",
+        "issue",
+        "impact",
+        "required_fix",
+        "ticket_ids",
+        "requirement_ids",
+        "blocks",
+        "provenance"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "blocker",
+            "should-fix",
+            "note"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "defect",
+            "validation-gap",
+            "governance",
+            "external",
+            "design"
+          ]
+        },
+        "location": {
+          "type": "string"
+        },
+        "issue": {
+          "type": "string"
+        },
+        "impact": {
+          "type": "string"
+        },
+        "required_fix": {
+          "type": "string"
+        },
+        "ticket_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requirement_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "review",
+              "acceptance",
+              "release",
+              "production"
+            ]
+          }
+        },
+        "provenance": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ticketVerdict": {
+      "type": "object",
+      "required": [
+        "ticket_id",
+        "verdict",
+        "finding_ids"
+      ],
+      "properties": {
+        "ticket_id": {
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "clear",
+            "not-clear",
+            "blocked"
+          ]
+        },
+        "finding_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "priorFindingVerdict": {
+      "type": "object",
+      "required": [
+        "finding_id",
+        "verdict",
+        "replacement_finding_id",
+        "evidence"
+      ],
+      "properties": {
+        "finding_id": {
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "verified",
+            "still-open",
+            "regressed",
+            "waived"
+          ]
+        },
+        "replacement_finding_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -582,7 +582,7 @@ class WorkflowTests(unittest.TestCase):
                 root,
                 change_id="C001",
                 report_path=".dls/cache/review.json",
-                expected_revision=5,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="review-import-1",
             )
             self.assertTrue(imported["ok"])
@@ -664,7 +664,7 @@ class WorkflowTests(unittest.TestCase):
                 root,
                 change_id="C001",
                 report_path=".dls/cache/review-finding.json",
-                expected_revision=5,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="review-import-1",
             )
             resolved = finding_disposition(
@@ -673,7 +673,7 @@ class WorkflowTests(unittest.TestCase):
                 finding_id="F001",
                 disposition_status="resolved",
                 rationale="Boundary proof is attached.",
-                expected_revision=6,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 git_sha=head_sha,
                 evidence=[evidence["evidence_path"]],
                 actor="codex",
@@ -689,7 +689,7 @@ class WorkflowTests(unittest.TestCase):
                 finding_id="F001",
                 disposition_status="reopened",
                 rationale="The attached proof does not exercise the boundary.",
-                expected_revision=7,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 git_sha=head_sha,
                 evidence=[],
                 actor="codex",
@@ -705,7 +705,9 @@ class WorkflowTests(unittest.TestCase):
                     finding_id="F001",
                     disposition_status="waived",
                     rationale="Risk accepted.",
-                    expected_revision=8,
+                    expected_revision=StateStore(root).load("C001")[
+                        "state_revision"
+                    ],
                     git_sha=head_sha,
                     evidence=[evidence["evidence_path"]],
                     actor="codex",
@@ -719,7 +721,7 @@ class WorkflowTests(unittest.TestCase):
                 finding_id="F001",
                 disposition_status="waived",
                 rationale="The user accepts the bounded residual risk.",
-                expected_revision=8,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 git_sha=head_sha,
                 evidence=[evidence["evidence_path"]],
                 actor="codex",
@@ -802,7 +804,7 @@ class WorkflowTests(unittest.TestCase):
                 root,
                 change_id="C001",
                 report_path=".dls/cache/advisory-review.json",
-                expected_revision=4,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="review-import-advisory",
             )
             failed = check(root, change_id="C001", gate="accept")

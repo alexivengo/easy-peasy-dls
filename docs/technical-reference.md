@@ -1,6 +1,8 @@
 # Технический справочник
 
-Этот документ нужен для диагностики и разработки DLS. Для обычной работы достаточно `$dls-workflow` и `$dls-debug`.
+Этот документ нужен для диагностики и разработки DLS. Для обычной работы
+достаточно выбрать в Codex навык **Easy Peasy DLS: процесс** или
+**Easy Peasy DLS: отладка**.
 
 ## Состав плагина
 
@@ -50,7 +52,9 @@ python3 plugins/dls/scripts/dls.py --root /path/to/project doctor
 | `review-pack` | Создать exact-revision review handoff |
 | `remediation-start` | Выбрать последний актуальный ReviewIR и создать manifest |
 | `review-ready` | Проверить candidate и создать full/delta ReviewPack; base повторного review выводится из ReviewIR |
-| `review-start` | Выбрать exact-HEAD pack или автоматически подготовить repeat pack, затем запустить native lane |
+| `review-run` | Выполнить exact-revision review целиком и импортировать ReviewIR |
+| `review-status` | Прочитать состояние review без запуска модели |
+| `review-start` | Native-only primitive для совместимости и диагностики |
 | `review-import` | Атомарно проверить и импортировать ReviewIR |
 | `finding` | Отметить addressed, waived, reopened или note |
 
@@ -85,6 +89,46 @@ ReviewIR v2 обязан содержать ticket verdicts, provenance review l
 
 Повторный `review-clear` требует непрерывной native coverage chain и final whole-change semantic pass.
 
+### End-to-end runner
+
+`review-run` использует фиксированный pipeline:
+
+1. native diff-review — `gpt-5.6-terra/high`;
+2. до трёх deterministic specialist lanes для critical review —
+   `gpt-5.6-terra/high`;
+3. независимый semantic pass — `gpt-5.6-sol`, `high` или `xhigh`;
+4. reconciliation на Sol;
+5. remediation final-full pass, только когда targeted result не содержит
+   review-blocking blocker;
+6. DLS-owned сборка и атомарный импорт ReviewIR.
+
+Model-runs выполняются через `codex exec` в read-only ephemeral режиме с
+игнорированием пользовательской model-конфигурации. Native lane использует
+встроенный prompt официального `codex exec review --base` и сохраняет его
+bounded text result; текущий Codex CLI не применяет structured output schema к
+этому subcommand. Все DLS-owned semantic decisions используют repository-owned
+prompt templates и schemas. Native, semantic и specialist lanes получают
+disposable detached worktree exact HEAD, поэтому локальные DLS metadata не
+попадают в анализ candidate. Independent lanes не видят native output или drafts
+соседних lanes; reconciliation получает их как digest-bound inputs.
+
+До запуска модели `StateStore` атомарно записывает attempt со статусом `running`.
+Для сочетания `review ID + lane + pass` возможна только одна активная попытка.
+Повторный `review-run` возвращает `status: running` и `next_action: wait-review`,
+не запуская вторую модель. `review-status` только читает state.
+
+Подтверждённые `orphan`, `timeout`, `output-cap`, missing или invalid structured
+output получают не более одной автоматической повторной попытки. Drift HEAD,
+source, definition или pack не повторяется автоматически. Timeout одной попытки
+— 30 минут; final output ограничен 256 KiB, JSONL transcript — 1 MiB с явным
+признаком truncation.
+
+Новые packs помечаются `runner_contract: dls-review-runner/v1`. Для них import
+доверяет provenance только completed attempts из DLS state: модель возвращает
+semantic decision, но не может сама объявить lane завершённым. Исторические
+ReviewPack/ReviewIR v1 и v2 без marker остаются читаемыми как
+`legacy-provenance` и не переписываются.
+
 ## Проверка исходников
 
 ```sh
@@ -98,10 +142,13 @@ python3 scripts/validate_public_repo.py
 
 - Python: 3.11 и новее.
 - Git обязателен для exact-revision review.
-- State schema остаётся v1; ReviewPack и ReviewIR v1 читаются исторически.
+- State schema остаётся v1; ReviewPack и ReviewIR v1, а также v2 без runner
+  marker читаются исторически.
 - Generic profile предназначен для разных стеков.
 - Apple profile — первый углублённо проверенный platform adapter.
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.2.0`. Plugin manifest добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые локальные и marketplace bundles без искусственного изменения feature version.
+GitHub releases используют обычные теги, например `v0.3.0`. Plugin manifest
+добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
+локальные и marketplace bundles без искусственного изменения feature version.

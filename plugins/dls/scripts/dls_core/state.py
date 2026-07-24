@@ -263,6 +263,155 @@ class StateStore:
                 raise
             return updated, True
 
+    def claim_review_lane(
+        self,
+        change_id: str,
+        *,
+        attempt: dict[str, Any],
+        operation_kind: str,
+        max_attempts: int = 2,
+    ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+        """Atomically claim one review lane without relying on a stale revision.
+
+        Exactly one running attempt is allowed for a review/lane key. Callers may
+        safely race: the winner records ``running`` and every loser receives that
+        same immutable attempt instead of launching another model process.
+        """
+        path = self.path(change_id)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        review_id = attempt.get("review_id")
+        lane_key = attempt.get("lane_key")
+        attempt_id = attempt.get("attempt_id")
+        operation_id = attempt.get("operation_id")
+        if not all(
+            isinstance(value, str) and value
+            for value in (review_id, lane_key, attempt_id, operation_id)
+        ):
+            raise IntegrityError("Review lane claim requires stable identifiers")
+        with FileLock(lock_path):
+            state = self.load(change_id)
+            existing_operation = next(
+                (
+                    operation
+                    for operation in state["operations"]
+                    if isinstance(operation, dict)
+                    and operation.get("id") == operation_id
+                ),
+                None,
+            )
+            if existing_operation and existing_operation.get("kind") != operation_kind:
+                raise IntegrityError(
+                    f"Operation ID already belongs to {existing_operation.get('kind')}: "
+                    f"{operation_id}"
+                )
+            attempts = [
+                item
+                for item in state["reviews"]
+                if isinstance(item, dict)
+                and item.get("review_id") == review_id
+                and item.get("lane_key") == lane_key
+            ]
+            matching = next(
+                (item for item in attempts if item.get("attempt_id") == attempt_id),
+                None,
+            )
+            if matching:
+                return state, matching, False
+            running = next(
+                (
+                    item
+                    for item in reversed(attempts)
+                    if item.get("status") == "running"
+                ),
+                None,
+            )
+            if running:
+                return state, running, False
+            if len(attempts) >= max_attempts:
+                return state, attempts[-1], False
+            updated = copy.deepcopy(state)
+            recorded_attempt = copy.deepcopy(attempt)
+            recorded_attempt["status"] = "running"
+            recorded_attempt.setdefault("started_at", utc_now())
+            updated["reviews"].append(recorded_attempt)
+            if existing_operation:
+                for operation in updated["operations"]:
+                    if (
+                        isinstance(operation, dict)
+                        and operation.get("id") == operation_id
+                    ):
+                        operation["status"] = "running"
+                        operation["attempt_id"] = attempt_id
+                        break
+            else:
+                updated["operations"].append(
+                    {
+                        "id": operation_id,
+                        "kind": operation_kind,
+                        "status": "running",
+                        "attempt_id": attempt_id,
+                        "recorded_at": utc_now(),
+                    }
+                )
+            updated["operations"] = updated["operations"][-200:]
+            updated["state_revision"] += 1
+            validate_state(updated)
+            atomic_write_json(path, updated)
+            return updated, recorded_attempt, True
+
+    def finish_review_lane(
+        self,
+        change_id: str,
+        *,
+        attempt_id: str,
+        expected_status: str,
+        updates: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+        """CAS-finalize one previously claimed review lane."""
+        path = self.path(change_id)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        with FileLock(lock_path):
+            state = self.load(change_id)
+            index = next(
+                (
+                    index
+                    for index, item in enumerate(state["reviews"])
+                    if isinstance(item, dict)
+                    and item.get("attempt_id") == attempt_id
+                ),
+                None,
+            )
+            if index is None:
+                raise IntegrityError(f"Unknown review lane attempt: {attempt_id}")
+            current = state["reviews"][index]
+            if current.get("status") != expected_status:
+                terminal = copy.deepcopy(current)
+                if all(terminal.get(key) == value for key, value in updates.items()):
+                    return state, terminal, False
+                raise IntegrityError(
+                    f"Review lane attempt status changed: {attempt_id}; "
+                    f"expected={expected_status}, current={current.get('status')}"
+                )
+            updated = copy.deepcopy(state)
+            recorded = updated["reviews"][index]
+            recorded.update(copy.deepcopy(updates))
+            operation_id = recorded.get("operation_id")
+            for operation in updated["operations"]:
+                if (
+                    isinstance(operation, dict)
+                    and operation.get("id") == operation_id
+                ):
+                    operation["status"] = recorded.get("status")
+                    operation["completed_at"] = recorded.get(
+                        "completed_at",
+                        utc_now(),
+                    )
+                    break
+            updated["state_revision"] += 1
+            validate_state(updated)
+            atomic_write_json(path, updated)
+            return updated, copy.deepcopy(recorded), True
+
 
 def current_definition_digest(root: Path, state: dict[str, Any]) -> str:
     return package_digest(root, state["artifacts"])

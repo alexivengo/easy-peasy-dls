@@ -37,6 +37,7 @@
   ],
   "properties": {
     "schema_version": { "const": 2 },
+    "runner_contract": { "const": "dls-review-runner/v1" },
     "review_id": { "type": "string", "minLength": 1 },
     "change_id": { "type": "string", "minLength": 1 },
     "mode": { "enum": ["acceptance-grade", "advisory-dirty"] },
