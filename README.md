@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/easy-peasy-dls-logo.png" alt="Логотип Easy Peasy DLS: бегущий лимон" width="420">
+  <img src="assets/easy-peasy-dls-github-cover.png" alt="Easy Peasy DLS cover: бегущий лимон и логотип Easy Peasy DLS">
 </p>
 
 # Easy Peasy DLS
