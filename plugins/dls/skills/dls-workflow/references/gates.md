@@ -55,6 +55,8 @@ Standard and critical acceptance additionally require:
 
 ReviewIR findings declare which stage they block: `review`, `acceptance`, `release`, or `production`. Release-only and production-only gaps remain visible but do not block code-review clearance or acceptance unless their ticket contract explicitly places them in an earlier stage. Legacy findings without `blocks` are treated as blocking both review and acceptance.
 
+An implementer `note` disputes applicability or stage but grants no waiver. It can make a committed candidate reviewable only so an independent ReviewIR can verify the old finding, keep it open, or replace it with correctly staged evidence.
+
 Keep `implemented`, `validated`, `review-clear`, `accepted`, `release-ready`, `released`, and `production-verified` distinct.
 
 Repository config may name required review and acceptance command IDs. Each required command needs its latest current PASS at that stage. Without a list, compatibility behavior requires at least one current PASS. Release-only commands are never promoted into review gates automatically.

@@ -1244,24 +1244,26 @@ def _all_review_findings(
     return findings
 
 
-def _superseded_prior_finding_ids(
+def _canonical_review_findings(
     root: Path,
     state: dict[str, Any],
-) -> set[str]:
-    output: set[str] = set()
-    for entry in state["reviews"]:
-        if entry.get("kind") != "result":
-            continue
-        _, report = _read_review_result(root, entry)
-        for verdict in report.get("prior_finding_verdicts", []):
-            if (
-                verdict.get("verdict") in {"still-open", "regressed"}
-                and isinstance(verdict.get("replacement_finding_id"), str)
-            ):
-                finding_id = verdict.get("finding_id")
-                if isinstance(finding_id, str):
-                    output.add(finding_id)
-    return output
+) -> dict[str, dict[str, Any]]:
+    """Return the latest imported ReviewIR finding snapshot.
+
+    ReviewIR v2 carries explicit prior-finding verdicts and replacement links.
+    Historical v1 reports were whole-change reviews, so their newest imported
+    result is also the only safe compatibility snapshot for current gates.
+    """
+    entry = _latest_review_result(state)
+    if entry is None:
+        return {}
+    _, report = _read_review_result(root, entry)
+    findings: dict[str, dict[str, Any]] = {}
+    for finding in report.get("findings", []):
+        finding_id = finding.get("id")
+        if isinstance(finding_id, str):
+            findings[finding_id] = finding
+    return findings
 
 
 def _active_prior_findings(
@@ -1271,12 +1273,10 @@ def _active_prior_findings(
     include_waived: bool = False,
 ) -> list[dict[str, Any]]:
     dispositions = _latest_dispositions(state)
-    superseded = _superseded_prior_finding_ids(root, state)
     output: list[dict[str, Any]] = []
-    for finding_id, finding in sorted(_all_review_findings(root, state).items()):
+    for finding_id, finding in sorted(_canonical_review_findings(root, state).items()):
         if (
-            finding_id in superseded
-            or finding.get("severity") not in {"blocker", "should-fix"}
+            finding.get("severity") not in {"blocker", "should-fix"}
             or "review" not in _finding_blocks(finding)
         ):
             continue
@@ -1364,6 +1364,7 @@ def build_context(
     if phase not in {"implementation", "review", "remediation"}:
         raise UsageError(f"Invalid context phase: {phase}")
     state = StateStore(root).load(change_id)
+    current_head = git_head(root)
     profile = load_config(root)["default_profile"]
     selected: dict[str, str] = {}
     required_paths: set[str] = set()
@@ -1393,6 +1394,7 @@ def build_context(
                 for entry in reversed(state["reviews"])
                 if entry.get("kind") == "pack"
                 and entry.get("review_id") not in completed_review_ids
+                and entry.get("head_sha") == current_head
                 and isinstance(entry.get("pack_path"), str)
             ),
             None,
@@ -1442,7 +1444,7 @@ def build_context(
                 },
             }
         )
-    head = git_head(root)
+    head = current_head
     digest_basis = json.dumps(
         {
             "schema_version": SCHEMA_VERSION,
@@ -2246,7 +2248,7 @@ def review_ready(
     root: Path,
     *,
     change_id: str,
-    base_ref: str,
+    base_ref: str | None,
     expected_revision: int,
     operation_id: str | None,
     dry_run: bool = False,
@@ -2284,12 +2286,16 @@ def review_ready(
         )
     prior_review, prior_report = _prior_review_link(root, state)
     review_mode = "full"
-    comparison_ref = base_ref
+    effective_base_ref = base_ref
     remediation_manifest: tuple[str, dict[str, Any]] | None = None
     current_head = git_head(root)
     if prior_review is not None and prior_report is not None:
         review_mode = "remediation"
-        comparison_ref = prior_review["head_sha"]
+        effective_base_ref = (
+            base_ref
+            or prior_report.get("epic_base_sha")
+            or prior_report.get("base_sha")
+        )
         manifest_path = (
             root
             / ".dls"
@@ -2327,6 +2333,19 @@ def review_ready(
                 detail="candidate HEAD still equals the previous reviewed HEAD",
                 dry_run=dry_run,
             )
+    if not isinstance(effective_base_ref, str) or not effective_base_ref:
+        return _review_ready_blocked(
+            change_id=change_id,
+            state_revision=state["state_revision"],
+            next_action="provide-review-base",
+            detail="first review requires --base BASE",
+            dry_run=dry_run,
+        )
+    comparison_ref = (
+        prior_review["head_sha"]
+        if prior_review is not None and prior_report is not None
+        else effective_base_ref
+    )
     incomplete_tickets = sorted(
         ticket_id
         for ticket_id, ticket in state["tickets"].items()
@@ -2367,7 +2386,7 @@ def review_ready(
             status = disposition.get("status")
             if status == "waived":
                 continue
-            if status != "addressed" or not _disposition_applies_to_head(
+            if status not in {"addressed", "note"} or not _disposition_applies_to_head(
                 root,
                 disposition,
                 current_head or "",
@@ -2384,7 +2403,7 @@ def review_ready(
     result = review_pack(
         root,
         change_id=change_id,
-        base_ref=base_ref,
+        base_ref=effective_base_ref,
         head_ref=None,
         expected_revision=expected_revision,
         advisory_dirty=False,
@@ -2418,7 +2437,14 @@ def _resolve_review_pack(
     *,
     change_id: str,
     pack_path: str | None,
-) -> tuple[Path, dict[str, Any], dict[str, Any], str, str]:
+    allow_missing_current: bool = False,
+) -> tuple[
+    Path,
+    dict[str, Any],
+    dict[str, Any] | None,
+    str | None,
+    str,
+]:
     root = root.resolve()
     owner_selection = "current-checkout"
     if pack_path is not None:
@@ -2445,19 +2471,24 @@ def _resolve_review_pack(
             for entry in state["reviews"]
             if entry.get("kind") == "result"
         }
+        current_head = git_head(owner)
         pack_entry = next(
             (
                 entry
                 for entry in reversed(state["reviews"])
                 if entry.get("kind") == "pack"
                 and entry.get("review_id") not in completed_review_ids
+                and entry.get("head_sha") == current_head
                 and isinstance(entry.get("pack_path"), str)
             ),
             None,
         )
         if not pack_entry:
+            if allow_missing_current:
+                return owner, state, None, None, owner_selection
             raise IntegrityError(
-                f"No unfinished ReviewPack for {change_id} in {owner}; "
+                f"No unfinished ReviewPack for current HEAD {current_head} "
+                f"and {change_id} in {owner}; "
                 "DLS will not infer a branch or scan neighboring worktrees"
             )
         candidate = safe_resolve(owner, pack_entry["pack_path"], must_exist=True)
@@ -2680,13 +2711,75 @@ def review_start(
     operation_id: str | None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    effective_operation_id = operation_id or str(uuid.uuid4())
     owner, state, pack, relative_pack_path, owner_selection = _resolve_review_pack(
         root,
         change_id=change_id,
         pack_path=pack_path,
+        allow_missing_current=pack_path is None,
     )
+    pack_created = False
+    if pack is None:
+        latest_result = _latest_review_result(state)
+        if latest_result is None:
+            return {
+                "ok": False,
+                "dry_run": dry_run,
+                "changed": False,
+                "change_id": change_id,
+                "state_revision": state["state_revision"],
+                "operation_id": effective_operation_id,
+                "owner_root": str(owner),
+                "owner_selection": owner_selection,
+                "review_id": None,
+                "review_pack_path": None,
+                "pack_created": False,
+                "next_action": {
+                    "id": "provide-review-base",
+                    "detail": (
+                        "first review has no prepared ReviewPack; "
+                        "run review-ready with --base BASE"
+                    ),
+                },
+            }
+        _, prior_report = _read_review_result(owner, latest_result)
+        inferred_base = (
+            prior_report.get("epic_base_sha")
+            or prior_report.get("base_sha")
+        )
+        if not isinstance(inferred_base, str) or not inferred_base:
+            raise IntegrityError("Latest ReviewIR cannot provide an epic base SHA")
+        prepared = review_ready(
+            owner,
+            change_id=change_id,
+            base_ref=inferred_base,
+            expected_revision=state["state_revision"],
+            operation_id=f"{effective_operation_id}:prepare",
+            dry_run=dry_run,
+        )
+        if not prepared["ok"]:
+            return {
+                "ok": False,
+                "dry_run": dry_run,
+                "changed": False,
+                "change_id": change_id,
+                "state_revision": prepared["state_revision"],
+                "operation_id": effective_operation_id,
+                "owner_root": str(owner),
+                "owner_selection": owner_selection,
+                "review_id": None,
+                "review_pack_path": None,
+                "pack_created": False,
+                "next_action": prepared["next_action"],
+            }
+        pack = prepared["review_pack"]
+        relative_pack_path = prepared["review_pack_path"]
+        pack_created = True
+        if not dry_run:
+            state = StateStore(owner).load(change_id)
+    if pack is None:
+        raise IntegrityError("ReviewPack preparation did not return a pack")
     _validate_review_pack_current(owner, state=state, pack=pack)
-    effective_operation_id = operation_id or str(uuid.uuid4())
     attempt_id = str(
         uuid.uuid5(
             uuid.NAMESPACE_URL,
@@ -2707,6 +2800,7 @@ def review_start(
         state=state,
         review_id=pack["review_id"],
     )
+    native_was_reused = native_entry is not None
     existing_operation = _operation(state, effective_operation_id)
     if existing_operation and native_entry is None:
         _require_operation_kind(existing_operation, "review-start")
@@ -2751,6 +2845,7 @@ def review_start(
             "owner_selection": owner_selection,
             "review_id": pack["review_id"],
             "review_pack_path": relative_pack_path,
+            "pack_created": pack_created,
             "review_mode": pack.get("review_mode", "full"),
             "risk_lenses": pack.get("risk_lenses", []),
             "required_prior_findings": pack.get("required_prior_findings", []),
@@ -2762,8 +2857,12 @@ def review_start(
             "review_context_digest": context["manifest"]["manifest_digest"],
             "semantic_model": "gpt-5.6-sol",
             "semantic_reasoning_effort": _semantic_review_effort(state),
+            "next_action": {
+                "id": "start-review",
+                "detail": "dry-run review preflight is ready",
+            },
         }
-    changed = False
+    changed = pack_created
     if native_required and native_entry is None:
         output_path = safe_resolve(owner, relative_output_path)
         transcript_path = safe_resolve(owner, relative_transcript_path)
@@ -2887,11 +2986,12 @@ def review_start(
         "owner_selection": owner_selection,
         "review_id": pack["review_id"],
         "review_pack_path": relative_pack_path,
+        "pack_created": pack_created,
         "review_mode": pack.get("review_mode", "full"),
         "risk_lenses": pack.get("risk_lenses", []),
         "required_prior_findings": pack.get("required_prior_findings", []),
         "native_required": native_required,
-        "native_reused": native_required and not changed,
+        "native_reused": native_required and native_was_reused,
         "native_argv": argv if native_required else None,
         "native": native_entry,
         "native_coverage": native_coverage,
@@ -2899,6 +2999,10 @@ def review_start(
         "review_context_digest": context["manifest"]["manifest_digest"],
         "semantic_model": "gpt-5.6-sol",
         "semantic_reasoning_effort": _semantic_review_effort(state),
+        "next_action": {
+            "id": "run-semantic-review",
+            "detail": context["manifest_path"],
+        },
     }
 
 
@@ -3860,7 +3964,7 @@ def _latest_review_result(state: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _open_finding_counts(root: Path, state: dict[str, Any]) -> dict[str, int]:
-    findings = _all_review_findings(root, state)
+    findings = _canonical_review_findings(root, state)
     if not findings:
         return {"blocker": 0, "should-fix": 0, "note": 0}
     latest_dispositions = _latest_dispositions(state)
@@ -3869,7 +3973,6 @@ def _open_finding_counts(root: Path, state: dict[str, Any]) -> dict[str, int]:
         for finding_id, disposition in latest_dispositions.items()
         if disposition["status"] in {"verified", "waived"}
     }
-    closed.update(_superseded_prior_finding_ids(root, state))
     open_findings = [
         item
         for finding_id, item in findings.items()

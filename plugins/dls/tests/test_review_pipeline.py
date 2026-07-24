@@ -346,13 +346,17 @@ class ReviewPipelineTests(unittest.TestCase):
             (wrong_head / "HEAD-CHANGE.md").write_text("next\n", encoding="utf-8")
             git(wrong_head, "add", "HEAD-CHANGE.md")
             git(wrong_head, "commit", "-m", "advance head")
-            with self.assertRaisesRegex(IntegrityError, "HEAD is not current"):
-                review_start(
-                    wrong_head,
-                    change_id="C001",
-                    pack_path=None,
-                    operation_id="wrong-head",
-                )
+            wrong_head_result = review_start(
+                wrong_head,
+                change_id="C001",
+                pack_path=None,
+                operation_id="wrong-head",
+            )
+            self.assertFalse(wrong_head_result["ok"])
+            self.assertEqual(
+                wrong_head_result["next_action"]["id"],
+                "provide-review-base",
+            )
 
             dirty = sandbox / "dirty"
             dirty.mkdir()

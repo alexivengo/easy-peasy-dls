@@ -43,15 +43,17 @@ Implement one coherent slice at a time. Keep ticket definitions in Markdown and 
 
 When implementation runs in a linked Git worktree, register its change ID and absolute root with `dls worktree register` after DLS state exists. This is local routing metadata, not a new Codex project or repository artifact.
 
+Before the first standard or critical review handoff, run `review-ready` with the explicit epic base. Handoff only the short review request; never make the user copy a pack path or generated command.
+
 If accepted behavior, architecture, or acceptance criteria change, pause affected work, edit the canonical contract and tickets, regenerate context, and request a new definition approval. Do not create a separate change-request document.
 
 ## Review and remediation
 
 For any code-review request, read and follow [review.md](references/review.md). A short request such as `$dls-workflow Проведи code review EPIC-01.` is sufficient in a separate review task opened anywhere in the same Git repository when the epic worktree is registered.
 
-For a remediation request, read and follow [remediation.md](references/remediation.md). Start by generating the latest-only remediation manifest on the reviewed HEAD, then work only from that bound context. Implementers mark findings `addressed`; they never create `verified`.
+For a remediation request, read and follow [remediation.md](references/remediation.md). Start by generating the latest-only remediation manifest on the reviewed HEAD, then work only from that bound context. Implementers mark fixes `addressed`; use `note` only to request independent adjudication of a disputed or incorrectly staged finding. Neither status creates `verified`.
 
-Never finish a review without a non-null `review_result_path` returned by `dls review-import`. After remediation, use `review-ready` to create the next exact-revision delta pack or receive one typed next action. A `review-clear` verdict is not final acceptance.
+Never finish a review without a non-null `review_result_path` returned by `dls review-import`. After remediation, `review-start` may prepare the exact-revision delta pack automatically; an explicit implementation-side `review-ready` remains available to surface one typed next action before handoff. A `review-clear` verdict is not final acceptance.
 
 ## Finish
 

@@ -25,20 +25,20 @@ After source changes:
 3. record current evidence for that HEAD;
 4. set each fixed finding to `addressed` with candidate SHA and evidence.
 
-Never set `verified`. Only the next independent ReviewIR import can verify a finding. `resolved` is a deprecated alias for `addressed`.
+For a disputed or incorrectly staged finding, use `note` with a current-SHA rationale instead of pretending to fix or waive it. This only permits independent adjudication in the next review; it does not close the finding. Never set `verified`. Only the next independent ReviewIR import can verify a finding. `resolved` is a deprecated alias for `addressed`.
 
 ## 3. Create the next candidate
 
 Read current state revision and run:
 
 ```text
-dls --root OWNER_ROOT --json review-ready CHANGE_ID --base BASE \
+dls --root OWNER_ROOT --json review-ready CHANGE_ID \
   --expect-revision REVISION --operation-id <stable-id> --dry-run
 
-dls --root OWNER_ROOT --json review-ready CHANGE_ID --base BASE \
+dls --root OWNER_ROOT --json review-ready CHANGE_ID \
   --expect-revision REVISION --operation-id <stable-id>
 ```
 
-When blocked, perform exactly the returned typed `next_action`, refresh the state revision, and retry. Do not fall back to raw `review-pack` for repeat review.
+For repeat review, DLS infers the epic base from the latest ReviewIR. The first review still requires explicit `--base BASE`. When blocked, perform exactly the returned typed `next_action`, refresh the state revision, and retry. Do not fall back to raw `review-pack` for repeat review.
 
-Handoff only the short review request. The reviewer resolves the registered worktree and newest unfinished pack.
+Handoff only the short review request. The reviewer resolves the registered worktree, ignores stale unfinished packs, and may create the current remediation pack automatically.

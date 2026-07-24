@@ -10,7 +10,9 @@ Run:
 dls --json review-start CHANGE_ID --operation-id <stable-id>
 ```
 
-Do not run generic `doctor`, `init`, or `adopt`; search siblings; infer branches; or switch worktrees. DLS may resolve only current state, an explicit valid worktree registration, or a user-confirmed absolute pack.
+Do not run generic `doctor`, `init`, or `adopt`; search siblings; infer branches; or switch worktrees. DLS may resolve only current state, an explicit valid worktree registration, or a user-confirmed absolute pack. Without `--pack`, it selects only an unfinished pack for the current HEAD. If none exists after an imported review, it runs repeat `review-ready` and prepares the remediation pack itself. An explicit `--pack` never enables auto-preparation.
+
+If `review-start` returns `ok: false`, stop and report its single `next_action`. `provide-review-base` means the implementation task did not prepare the first review handoff. Never use a stale pack or infer a branch to bypass that boundary.
 
 Stop on any preflight or native-lane failure. Never substitute an improvised diff review.
 
@@ -54,6 +56,8 @@ First run a `targeted` pass over:
 - affected paths and blast-radius triggers;
 - new/current validation evidence.
 
+Treat ReviewPack `required_prior_findings` as the canonical current finding set. A legacy remediation manifest remains immutable implementation-time evidence and may contain older compatibility history; use it for provenance and blast radius, not to resurrect findings absent from the pack.
+
 For every prior actionable finding, record exactly one verdict:
 
 - `verified`;
@@ -79,6 +83,8 @@ Write ReviewIR under owner-local ignored cache. Bind:
 - canonical findings and an aggregate verdict consistent with them.
 
 Every finding includes affected `ticket_ids`, `requirement_ids`, exact base/head, and one or more blocked stages: `review`, `acceptance`, `release`, `production`. Omitted `blocks` is legacy-only and means review plus acceptance. Release/production-only gaps do not prevent `review-clear` unless the ticket contract places them earlier.
+
+Treat a prior `note` disposition as an implementer challenge, not closure. Independently verify it and record a required prior-finding verdict. If an external gap remains but belongs only to release or production, verify the old review-stage finding and emit a new release/production-only finding. Any external finding that blocks review or acceptance must cite the exact definition or ticket clause that places the evidence at that stage.
 
 ## 5. Import atomically
 

@@ -53,7 +53,7 @@ DLS сначала определяет масштаб и риск:
 - умеет зарегистрировать отдельный worktree без добавления каждого worktree как проекта Codex;
 - возвращает одно типизированное `next_action`, когда следующий шаг пока невозможен.
 
-Implementer может отметить finding как `addressed`, но не как `verified`. Проверка исправления принадлежит независимому reviewer.
+Implementer может отметить finding как `addressed`, но не как `verified`. Если finding спорный или попал не в тот gate, `note` передаёт его на независимое adjudication и ничего не закрывает. Проверка исправления и reclassification принадлежат reviewer.
 
 ## 3. Независимо проверили
 
@@ -69,6 +69,8 @@ ReviewPack фиксирует:
 Первый acceptance-grade review объединяет native diff-review и независимый semantic review. Для critical-изменений DLS может выбрать до трёх specialist lenses по фактическим risk tags.
 
 Повторный review сначала проверяет delta и каждый предыдущий finding. Дорогой финальный whole-change pass запускается только если delta больше не содержит blocker. Каноническим становится один импортированный ReviewIR, а не любой сырой отчёт модели.
+
+Короткая review-команда выбирает только pack текущего HEAD. Для повторного review DLS может сам создать remediation-pack из последнего ReviewIR; старый незавершённый pack не может перехватить новую проверку.
 
 ## Что остаётся за человеком
 

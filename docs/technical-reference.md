@@ -49,8 +49,8 @@ python3 plugins/dls/scripts/dls.py --root /path/to/project doctor
 | `evidence` | Импортировать immutable validation evidence |
 | `review-pack` | Создать exact-revision review handoff |
 | `remediation-start` | Выбрать последний актуальный ReviewIR и создать manifest |
-| `review-ready` | Проверить candidate и создать full/delta ReviewPack |
-| `review-start` | Запустить native lane и подготовить semantic review |
+| `review-ready` | Проверить candidate и создать full/delta ReviewPack; base повторного review выводится из ReviewIR |
+| `review-start` | Выбрать exact-HEAD pack или автоматически подготовить repeat pack, затем запустить native lane |
 | `review-import` | Атомарно проверить и импортировать ReviewIR |
 | `finding` | Отметить addressed, waived, reopened или note |
 
@@ -80,6 +80,8 @@ ReviewPack v2 связывает:
 - deterministic risk lenses.
 
 ReviewIR v2 обязан содержать ticket verdicts, provenance review lanes и verdict для каждого прежнего actionable finding. Implementer записывает только `addressed`; `verified` появляется исключительно при независимом импорте нового ReviewIR.
+
+Последний импортированный ReviewIR является canonical finding snapshot для remediation и gates; более ранние результаты остаются audit history. `note` означает запрос на независимое adjudication, а не закрытие или waiver.
 
 Повторный `review-clear` требует непрерывной native coverage chain и final whole-change semantic pass.
 

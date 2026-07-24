@@ -249,7 +249,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check a candidate and create the next full or remediation ReviewPack.",
     )
     review_ready_parser.add_argument("change_id")
-    review_ready_parser.add_argument("--base", required=True)
+    review_ready_parser.add_argument(
+        "--base",
+        help="Required for the first review; inferred from the latest ReviewIR for remediation.",
+    )
     _revision(review_ready_parser)
     _operation_id(review_ready_parser)
     _dry_run(review_ready_parser)
@@ -653,10 +656,18 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             f"path={result.get('review_pack_path') or 'not written'}"
         )
     if command == "review-start":
+        if not result["ok"]:
+            next_action = result["next_action"]
+            return prefix + (
+                f"review not started; next={next_action['id']}; "
+                f"{next_action['detail']}"
+            )
         native = result.get("native")
         native_status = native.get("status") if isinstance(native, dict) else "not-required"
+        pack_status = "created" if result.get("pack_created") else "reused"
         return prefix + (
-            f"review-start {result['review_id']}; native={native_status}; "
+            f"review-start {result['review_id']}; pack={pack_status}; "
+            f"native={native_status}; "
             f"semantic={result['semantic_model']}/{result['semantic_reasoning_effort']}; "
             f"context={result.get('review_context_path') or 'not written'}"
         )
