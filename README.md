@@ -6,7 +6,10 @@
 [![Релиз](https://img.shields.io/github/v/release/alexivengo/easy-peasy-dls?display_name=tag)](https://github.com/alexivengo/easy-peasy-dls/releases)
 [![Лицензия: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **Public Preview.** DLS уже прошёл реальные циклы definition, implementation, review и remediation, но интерфейсы до версии 1.0 ещё могут меняться.
+> [!WARNING]
+> **Альфа-версия**
+>
+> Easy Peasy DLS находится на ранней стадии разработки. Возможны сбои, несовместимые изменения и некорректная работа отдельных workflow. Не используйте DLS как единственный механизм контроля критичных изменений и релизов: сохраняйте работу в Git и независимо проверяйте важные результаты.
 
 ## AI-разработка становилась умнее. Мой процесс становился тяжелее.
 
