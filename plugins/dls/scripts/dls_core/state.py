@@ -202,11 +202,35 @@ class StateStore:
         artifact_value: dict[str, Any],
         mutator: Callable[[dict[str, Any]], None],
     ) -> tuple[dict[str, Any], bool]:
+        return self.mutate_with_immutable_artifacts(
+            change_id,
+            expected_revision=expected_revision,
+            operation_id=operation_id,
+            operation_kind=operation_kind,
+            artifacts=[(artifact_path, artifact_value)],
+            mutator=mutator,
+        )
+
+    def mutate_with_immutable_artifacts(
+        self,
+        change_id: str,
+        *,
+        expected_revision: int,
+        operation_id: str | None,
+        operation_kind: str,
+        artifacts: list[tuple[Path, dict[str, Any]]],
+        mutator: Callable[[dict[str, Any]], None],
+    ) -> tuple[dict[str, Any], bool]:
         """Commit an immutable artifact and its state reference under one state lock.
 
-        A retry may finish a transaction interrupted after the artifact write. If
-        the state write fails in-process, a newly-created artifact is removed.
+        A retry may finish a transaction interrupted after artifact writes. If
+        the state write fails in-process, every newly-created artifact is removed.
         """
+        if not artifacts:
+            raise IntegrityError("Immutable state mutation requires at least one artifact")
+        artifact_paths = [artifact_path.resolve() for artifact_path, _ in artifacts]
+        if len(artifact_paths) != len(set(artifact_paths)):
+            raise IntegrityError("Immutable state mutation contains duplicate artifact paths")
         path = self.path(change_id)
         lock_path = path.with_suffix(path.suffix + ".lock")
         effective_operation_id = operation_id or str(uuid.uuid4())
@@ -227,23 +251,30 @@ class StateStore:
                         f"Operation ID already belongs to {existing_operation.get('kind')}: "
                         f"{effective_operation_id}"
                     )
+                for artifact_path, artifact_value in artifacts:
+                    if not artifact_path.is_file() or read_json(artifact_path) != artifact_value:
+                        raise IntegrityError(
+                            "Completed immutable operation has a missing or changed artifact: "
+                            f"{artifact_path}"
+                        )
                 return state, False
             if state["state_revision"] != expected_revision:
                 raise IntegrityError(
                     f"Stale state revision: expected {expected_revision}, "
                     f"current {state['state_revision']}"
                 )
-            created_artifact = False
-            if artifact_path.exists():
-                if read_json(artifact_path) != artifact_value:
-                    raise IntegrityError(
-                        "Immutable artifact already exists with different content: "
-                        f"{artifact_path}"
-                    )
-            else:
-                atomic_write_json(artifact_path, artifact_value, backup=False)
-                created_artifact = True
+            created_artifacts: list[Path] = []
             try:
+                for artifact_path, artifact_value in artifacts:
+                    if artifact_path.exists():
+                        if read_json(artifact_path) != artifact_value:
+                            raise IntegrityError(
+                                "Immutable artifact already exists with different content: "
+                                f"{artifact_path}"
+                            )
+                    else:
+                        atomic_write_json(artifact_path, artifact_value, backup=False)
+                        created_artifacts.append(artifact_path)
                 updated = copy.deepcopy(state)
                 mutator(updated)
                 updated["state_revision"] += 1
@@ -258,8 +289,8 @@ class StateStore:
                 validate_state(updated)
                 atomic_write_json(path, updated)
             except Exception:
-                if created_artifact:
-                    artifact_path.unlink(missing_ok=True)
+                for created_artifact in reversed(created_artifacts):
+                    created_artifact.unlink(missing_ok=True)
                 raise
             return updated, True
 

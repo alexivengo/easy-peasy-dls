@@ -22,6 +22,7 @@ from .io import (
     atomic_write_json,
     atomic_write_text,
     canonical_file_digest,
+    canonical_text,
     read_json,
     redact_text,
     safe_resolve,
@@ -1517,88 +1518,211 @@ def build_context(
     }
 
 
-def remediation_start(
+def _change_owner_root(root: Path, change_id: str) -> tuple[Path, str]:
+    candidate = root.resolve()
+    if (
+        (candidate / ".dls" / "config.toml").is_file()
+        and StateStore(candidate).path(change_id).is_file()
+    ):
+        return candidate, "current-checkout"
+    return resolve_registered_worktree(candidate, change_id), "registered-worktree"
+
+
+def _canonical_remediation_manifest_path(change_id: str, review_id: str) -> str:
+    return f".dls/reviews/{change_id}/remediations/{review_id}.json"
+
+
+def _legacy_remediation_manifest_path(change_id: str, review_id: str) -> str:
+    return f".dls/cache/context/{change_id}/remediation-{review_id}.json"
+
+
+def _existing_remediation_manifest_path(
     root: Path,
     *,
     change_id: str,
-    dry_run: bool = False,
-) -> dict[str, Any]:
-    state = StateStore(root).load(change_id)
-    latest = _latest_review_result(state)
-    if not latest:
-        raise IntegrityError("Remediation requires an imported ReviewIR")
-    result_path, report = _read_review_result(root, latest)
-    current_head = git_head(root)
-    if report.get("head_sha") != current_head:
-        raise IntegrityError(
-            "Latest ReviewIR is stale for remediation: "
-            f"{report.get('head_sha')} != {current_head}"
-        )
-    current_definition = current_definition_digest(root, state)
-    if report.get("definition_digest") != current_definition:
-        raise IntegrityError("Latest ReviewIR definition digest is stale")
-    current_approval = next(
-        (
-            item
-            for item in reversed(derived_approval_statuses(root, state))
-            if item.get("decision") == "definition"
-            and item.get("status") == "current"
-            and item.get("object_digest") == current_definition
-        ),
-        None,
+    review_entry: dict[str, Any],
+    review_id: str,
+) -> str | None:
+    candidates: list[str] = []
+    linked = review_entry.get("remediation_manifest_path")
+    if isinstance(linked, str) and linked:
+        candidates.append(linked)
+    candidates.extend(
+        [
+            _canonical_remediation_manifest_path(change_id, review_id),
+            _legacy_remediation_manifest_path(change_id, review_id),
+        ]
     )
-    if state["control_level"] in {"standard", "critical"} and not current_approval:
-        raise IntegrityError("Remediation requires a current definition approval")
-    if git_source_dirty_paths(root):
-        raise IntegrityError("Remediation must start from a clean product source")
-    open_findings = _active_prior_findings(root, state)
-    if not open_findings:
-        raise IntegrityError("Latest ReviewIR has no open review findings to remediate")
-    inputs: list[dict[str, Any]] = []
-    input_paths = [
-        metadata["path"]
-        for _, metadata in sorted(state["artifacts"].items())
-    ]
-    input_paths.append(result_path)
-    input_paths.extend(_current_successful_evidence_paths(root, state))
-    for relative in dict.fromkeys(input_paths):
-        path = safe_resolve(root, relative, must_exist=True)
-        inputs.append(
+    for relative in dict.fromkeys(candidates):
+        if safe_resolve(root, relative).is_file():
+            return relative
+    return None
+
+
+def _review_result_digest(report: dict[str, Any]) -> str:
+    return sha256_bytes(
+        json.dumps(
+            report,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+
+
+def _review_actionable_findings(report: dict[str, Any]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for finding in report.get("findings", []):
+        if (
+            not isinstance(finding, dict)
+            or finding.get("severity") not in {"blocker", "should-fix"}
+            or not ({"review", "acceptance"} & _finding_blocks(finding))
+        ):
+            continue
+        finding_id = finding.get("id")
+        if not isinstance(finding_id, str) or not finding_id:
+            raise IntegrityError("Actionable review finding has no ID")
+        output.append(
             {
-                "path": relative,
-                "sha256": sha256_file(path),
-                "canonical_sha256": canonical_file_digest(path),
-                "bytes": path.stat().st_size,
+                "finding_id": finding_id,
+                "severity": finding["severity"],
+                "kind": finding["kind"],
+                "ticket_ids": finding.get("ticket_ids", []),
+                "requirement_ids": finding.get("requirement_ids", []),
+                "blocks": sorted(_finding_blocks(finding)),
+                "location": finding.get("location"),
+                "issue": finding.get("issue"),
+                "required_fix": finding.get("required_fix"),
+                "disposition": None,
             }
+        )
+    return sorted(output, key=lambda item: item["finding_id"])
+
+
+def _json_file_bytes(value: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    ).encode("utf-8")
+
+
+def _input_record(
+    *,
+    relative: str,
+    payload: bytes,
+    reason: str,
+    git_sha: str | None = None,
+) -> dict[str, Any]:
+    try:
+        canonical_digest = sha256_bytes(
+            canonical_text(payload.decode("utf-8")).encode("utf-8")
+        )
+    except UnicodeDecodeError:
+        canonical_digest = sha256_bytes(payload)
+    record: dict[str, Any] = {
+        "path": relative,
+        "reason": reason,
+        "sha256": sha256_bytes(payload),
+        "canonical_sha256": canonical_digest,
+        "bytes": len(payload),
+    }
+    if git_sha is not None:
+        record["git_sha"] = git_sha
+    return record
+
+
+def _git_blob_bytes(root: Path, git_sha: str, relative: str) -> bytes:
+    safe_resolve(root, relative)
+    result = subprocess.run(
+        ["git", "-C", str(root), "show", f"{git_sha}:{relative}"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise IntegrityError(
+            f"Reviewed Git tree is missing remediation input {relative}: {detail}"
+        )
+    return result.stdout
+
+
+def _build_remediation_manifest(
+    root: Path,
+    *,
+    change_id: str,
+    review_entry: dict[str, Any],
+    report: dict[str, Any],
+    pack_entry: dict[str, Any],
+    pack: dict[str, Any],
+    result_path: str,
+    pack_path: str,
+    origin: str,
+) -> dict[str, Any] | None:
+    open_findings = _review_actionable_findings(report)
+    if not open_findings:
+        return None
+    reviewed_head = report["head_sha"]
+    inputs: list[dict[str, Any]] = [
+        _input_record(
+            relative=result_path,
+            payload=_json_file_bytes(report),
+            reason="canonical-review-result",
+        ),
+        _input_record(
+            relative=pack_path,
+            payload=safe_resolve(root, pack_path, must_exist=True).read_bytes(),
+            reason="exact-revision-review-pack",
+        ),
+    ]
+    for _, metadata in sorted(pack.get("artifacts", {}).items()):
+        relative = metadata.get("path") if isinstance(metadata, dict) else None
+        if not isinstance(relative, str) or not relative:
+            raise IntegrityError("ReviewPack has invalid authored artifact metadata")
+        inputs.append(
+            _input_record(
+                relative=relative,
+                payload=_git_blob_bytes(root, reviewed_head, relative),
+                reason="reviewed-authored-artifact",
+                git_sha=reviewed_head,
+            )
+        )
+    for relative in pack.get("evidence", []):
+        if not isinstance(relative, str) or not relative:
+            raise IntegrityError("ReviewPack has an invalid evidence path")
+        inputs.append(
+            _input_record(
+                relative=relative,
+                payload=safe_resolve(root, relative, must_exist=True).read_bytes(),
+                reason="reviewed-validation-evidence",
+            )
         )
     affected_paths: set[str] = set()
     for finding in open_findings:
         location = finding.get("location")
-        if isinstance(location, str):
-            candidate = location.split(":", 1)[0]
-            try:
-                safe_resolve(root, candidate, must_exist=True)
-            except IntegrityError:
-                continue
-            affected_paths.add(candidate)
+        if not isinstance(location, str) or not location:
+            continue
+        candidate = location.split(":", 1)[0]
+        try:
+            safe_resolve(root, candidate)
+        except IntegrityError:
+            continue
+        affected_paths.add(candidate)
     manifest = {
         "schema_version": 2,
         "dls_version": VERSION,
+        "origin": origin,
         "change_id": change_id,
         "review_id": report["review_id"],
         "review_result_path": result_path,
-        "review_result_digest": latest.get("result_digest")
-        or sha256_bytes(
-            json.dumps(
-                report,
-                sort_keys=True,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ),
-        "reviewed_head_sha": report["head_sha"],
+        "review_result_digest": review_entry.get("result_digest")
+        or _review_result_digest(report),
+        "review_pack_path": pack_path,
+        "review_pack_digest": pack_entry.get("pack_digest")
+        or pack["pack_digest"],
+        "reviewed_head_sha": reviewed_head,
         "definition_digest": report["definition_digest"],
-        "source_snapshot_digest": latest.get("source_snapshot_digest"),
+        "source_snapshot_digest": review_entry.get("source_snapshot_digest")
+        or pack.get("source_snapshot_digest"),
         "open_findings": open_findings,
         "ticket_ids": sorted(
             {
@@ -1618,31 +1742,363 @@ def remediation_start(
         "blast_radius_triggers": _blast_radius_triggers(open_findings),
         "inputs": inputs,
     }
-    manifest["manifest_digest"] = sha256_bytes(
-        json.dumps(
-            manifest,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
+    manifest["manifest_digest"] = _remediation_manifest_digest(manifest)
+    return manifest
+
+
+def remediation_start(
+    root: Path,
+    *,
+    change_id: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    owner, owner_selection = _change_owner_root(root, change_id)
+    state = StateStore(owner).load(change_id)
+    latest = _latest_review_result(state)
+    if not latest:
+        raise IntegrityError("Remediation requires an imported ReviewIR")
+    result_path, report = _read_review_result(owner, latest)
+    current_head = git_head(owner)
+    reviewed_head = report.get("head_sha")
+    if not isinstance(reviewed_head, str) or not reviewed_head:
+        raise IntegrityError("Latest ReviewIR has no reviewed HEAD")
+    if (
+        not current_head
+        or run_git(
+            owner,
+            "merge-base",
+            "--is-ancestor",
+            reviewed_head,
+            current_head,
+            check=False,
+        ).returncode
+        != 0
+    ):
+        raise IntegrityError(
+            "Latest ReviewIR is not an ancestor of the current remediation candidate: "
+            f"{reviewed_head} -> {current_head}"
+        )
+    current_definition = current_definition_digest(owner, state)
+    if report.get("definition_digest") != current_definition:
+        raise IntegrityError("Latest ReviewIR definition digest is stale")
+    current_approval = next(
+        (
+            item
+            for item in reversed(derived_approval_statuses(owner, state))
+            if item.get("decision") == "definition"
+            and item.get("status") == "current"
+            and item.get("object_digest") == current_definition
+        ),
+        None,
     )
-    relative_path = (
-        f".dls/cache/context/{change_id}/"
-        f"remediation-{report['review_id']}.json"
+    if state["control_level"] in {"standard", "critical"} and not current_approval:
+        raise IntegrityError("Remediation requires a current definition approval")
+    if git_source_dirty_paths(owner):
+        raise IntegrityError("Remediation must start from a clean product source")
+    open_findings = _review_actionable_findings(report)
+    if not open_findings:
+        return {
+            "ok": True,
+            "dry_run": dry_run,
+            "changed": False,
+            "change_id": change_id,
+            "state_revision": state["state_revision"],
+            "owner_root": str(owner),
+            "owner_selection": owner_selection,
+            "review_id": report["review_id"],
+            "remediation_manifest_path": None,
+            "remediation_manifest": None,
+            "next_action": {
+                "id": "no-remediation-required",
+                "detail": result_path,
+            },
+        }
+    relative_path = _existing_remediation_manifest_path(
+        owner,
+        change_id=change_id,
+        review_entry=latest,
+        review_id=report["review_id"],
     )
-    output_path = safe_resolve(root, relative_path)
-    existed = output_path.is_file()
-    if not dry_run:
-        write_immutable_json(output_path, manifest)
+    if relative_path is None:
+        projected = _canonical_remediation_manifest_path(
+            change_id,
+            report["review_id"],
+        )
+        return {
+            "ok": False,
+            "dry_run": dry_run,
+            "changed": False,
+            "change_id": change_id,
+            "state_revision": state["state_revision"],
+            "owner_root": str(owner),
+            "owner_selection": owner_selection,
+            "review_id": report["review_id"],
+            "remediation_manifest_path": None,
+            "remediation_manifest": None,
+            "next_action": {
+                "id": "recover-remediation-manifest",
+                "detail": (
+                    f"missing={projected}; reviewed_head={reviewed_head}; "
+                    f"current_head={current_head}"
+                ),
+            },
+        }
+    relative_path, manifest = _load_remediation_manifest(
+        owner,
+        change_id=change_id,
+        prior_review={
+            "review_id": report["review_id"],
+            "result_path": result_path,
+            "result_digest": latest.get("result_digest")
+            or _review_result_digest(report),
+            "head_sha": reviewed_head,
+            "definition_digest": report["definition_digest"],
+            "remediation_manifest_path": latest.get("remediation_manifest_path"),
+            "remediation_manifest_digest": latest.get(
+                "remediation_manifest_digest"
+            ),
+        },
+    )
     return {
         "ok": True,
         "dry_run": dry_run,
-        "changed": not dry_run and not existed,
+        "changed": False,
         "change_id": change_id,
         "state_revision": state["state_revision"],
+        "owner_root": str(owner),
+        "owner_selection": owner_selection,
         "review_id": report["review_id"],
-        "remediation_manifest_path": None if dry_run else relative_path,
+        "remediation_manifest_path": relative_path,
         "remediation_manifest": manifest,
+        "next_action": {
+            "id": "remediate-findings",
+            "detail": relative_path,
+        },
+    }
+
+
+def remediation_recover(
+    root: Path,
+    *,
+    change_id: str,
+    review_id: str | None,
+    operation_id: str | None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    owner, owner_selection = _change_owner_root(root, change_id)
+    state_store = StateStore(owner)
+    state = state_store.load(change_id)
+    latest = _latest_review_result(state)
+    if latest is None:
+        raise IntegrityError("Remediation recovery requires an imported ReviewIR")
+    latest_review_id = latest.get("review_id")
+    if not isinstance(latest_review_id, str) or not latest_review_id:
+        raise IntegrityError("Latest review state entry has no review ID")
+    if review_id is not None and review_id != latest_review_id:
+        raise IntegrityError(
+            "Remediation recovery is latest-only: "
+            f"{review_id} != {latest_review_id}"
+        )
+    result_path, report = _read_review_result(owner, latest)
+    if not _review_actionable_findings(report):
+        return {
+            "ok": True,
+            "dry_run": dry_run,
+            "changed": False,
+            "change_id": change_id,
+            "state_revision": state["state_revision"],
+            "owner_root": str(owner),
+            "owner_selection": owner_selection,
+            "review_id": latest_review_id,
+            "remediation_manifest_path": None,
+            "remediation_manifest": None,
+            "next_action": {
+                "id": "no-remediation-required",
+                "detail": result_path,
+            },
+        }
+    linked_path = latest.get("remediation_manifest_path")
+    if isinstance(linked_path, str) and linked_path:
+        result = remediation_start(
+            owner,
+            change_id=change_id,
+            dry_run=dry_run,
+        )
+        result["operation_id"] = operation_id
+        return result
+    pack_entry = next(
+        (
+            entry
+            for entry in state["reviews"]
+            if entry.get("kind") == "pack"
+            and entry.get("review_id") == latest_review_id
+        ),
+        None,
+    )
+    if not isinstance(pack_entry, dict):
+        raise IntegrityError(
+            f"Remediation recovery cannot find ReviewPack {latest_review_id}"
+        )
+    pack_path = pack_entry.get("pack_path")
+    if not isinstance(pack_path, str) or not pack_path:
+        raise IntegrityError("ReviewPack state entry is missing pack_path")
+    pack = read_json(safe_resolve(owner, pack_path, must_exist=True))
+    _validate_review_pack(pack, change_id)
+    if (
+        pack_entry.get("pack_digest") != pack.get("pack_digest")
+        or _review_pack_digest(pack) != pack.get("pack_digest")
+    ):
+        raise IntegrityError("ReviewPack digest does not match DLS state")
+    _validate_review_report(report, change_id, pack)
+    if (
+        report.get("pack_digest") != pack.get("pack_digest")
+        or report.get("head_sha") != pack.get("head_sha")
+        or report.get("definition_digest") != pack.get("definition_digest")
+    ):
+        raise IntegrityError("ReviewIR is not bound to its canonical ReviewPack")
+    reviewed_head = report["head_sha"]
+    if (
+        run_git(
+            owner,
+            "cat-file",
+            "-e",
+            f"{reviewed_head}^{{commit}}",
+            check=False,
+        ).returncode
+        != 0
+    ):
+        raise IntegrityError(
+            f"Reviewed Git commit is unavailable: {reviewed_head}"
+        )
+    current_head = git_head(owner)
+    if (
+        not current_head
+        or run_git(
+            owner,
+            "merge-base",
+            "--is-ancestor",
+            reviewed_head,
+            current_head,
+            check=False,
+        ).returncode
+        != 0
+    ):
+        raise IntegrityError(
+            "Current HEAD does not descend from the reviewed revision: "
+            f"{reviewed_head} -> {current_head}"
+        )
+    if git_source_dirty_paths(owner):
+        raise IntegrityError("Remediation recovery requires clean product source")
+    current_definition = current_definition_digest(owner, state)
+    if current_definition != report["definition_digest"]:
+        raise IntegrityError("Remediation recovery definition digest is stale")
+    current_approval = next(
+        (
+            item
+            for item in reversed(derived_approval_statuses(owner, state))
+            if item.get("decision") == "definition"
+            and item.get("status") == "current"
+            and item.get("object_digest") == current_definition
+        ),
+        None,
+    )
+    if state["control_level"] in {"standard", "critical"} and not current_approval:
+        raise IntegrityError("Remediation recovery requires current definition approval")
+    manifest_entry = {
+        **latest,
+        "result_digest": latest.get("result_digest")
+        or _review_result_digest(report),
+    }
+    manifest = _build_remediation_manifest(
+        owner,
+        change_id=change_id,
+        review_entry=manifest_entry,
+        report=report,
+        pack_entry=pack_entry,
+        pack=pack,
+        result_path=result_path,
+        pack_path=pack_path,
+        origin="legacy-recovery",
+    )
+    if manifest is None:
+        raise IntegrityError("Remediation recovery produced no actionable findings")
+    relative_path = _canonical_remediation_manifest_path(
+        change_id,
+        latest_review_id,
+    )
+    effective_operation_id = operation_id or str(uuid.uuid4())
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "changed": False,
+            "change_id": change_id,
+            "state_revision": state["state_revision"],
+            "operation_id": effective_operation_id,
+            "owner_root": str(owner),
+            "owner_selection": owner_selection,
+            "review_id": latest_review_id,
+            "reviewed_head": reviewed_head,
+            "current_head": current_head,
+            "remediation_manifest_path": None,
+            "projected_remediation_manifest_path": relative_path,
+            "remediation_manifest": manifest,
+            "next_action": {
+                "id": "write-recovered-remediation-manifest",
+                "detail": relative_path,
+            },
+        }
+
+    def mutate(value: dict[str, Any]) -> None:
+        entry = next(
+            (
+                item
+                for item in reversed(value["reviews"])
+                if item.get("kind") == "result"
+                and item.get("review_id") == latest_review_id
+            ),
+            None,
+        )
+        if entry is None:
+            raise IntegrityError("Canonical ReviewIR disappeared during recovery")
+        existing = entry.get("remediation_manifest_path")
+        if existing not in {None, relative_path}:
+            raise IntegrityError(
+                f"ReviewIR already links another remediation manifest: {existing}"
+            )
+        entry["remediation_manifest_path"] = relative_path
+        entry["remediation_manifest_digest"] = manifest["manifest_digest"]
+
+    updated, changed = state_store.mutate_with_immutable_artifacts(
+        change_id,
+        expected_revision=state["state_revision"],
+        operation_id=effective_operation_id,
+        operation_kind="remediation-recover",
+        artifacts=[(safe_resolve(owner, relative_path), manifest)],
+        mutator=mutate,
+    )
+    return {
+        "ok": True,
+        "dry_run": False,
+        "changed": changed,
+        "change_id": change_id,
+        "state_revision": updated["state_revision"],
+        "operation_id": effective_operation_id,
+        "owner_root": str(owner),
+        "owner_selection": owner_selection,
+        "review_id": latest_review_id,
+        "reviewed_head": reviewed_head,
+        "current_head": current_head,
+        "remediation_manifest_path": relative_path,
+        "remediation_manifest": manifest,
+        "next_action": {
+            "id": (
+                "prepare-review"
+                if current_head != reviewed_head
+                else "remediate-findings"
+            ),
+            "detail": relative_path,
+        },
     }
 
 
@@ -1941,6 +2397,12 @@ def _prior_review_link(
             or sha256_file(safe_resolve(root, relative, must_exist=True)),
             "head_sha": report["head_sha"],
             "definition_digest": report["definition_digest"],
+            "remediation_manifest_path": entry.get(
+                "remediation_manifest_path"
+            ),
+            "remediation_manifest_digest": entry.get(
+                "remediation_manifest_digest"
+            ),
         },
         report,
     )
@@ -1972,16 +2434,29 @@ def _load_remediation_manifest(
     change_id: str,
     prior_review: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
-    relative = (
-        f".dls/cache/context/{change_id}/"
-        f"remediation-{prior_review['review_id']}.json"
+    relative = _existing_remediation_manifest_path(
+        root,
+        change_id=change_id,
+        review_entry=prior_review,
+        review_id=prior_review["review_id"],
     )
+    if relative is None:
+        raise IntegrityError(
+            "Missing canonical remediation manifest: "
+            + _canonical_remediation_manifest_path(
+                change_id,
+                prior_review["review_id"],
+            )
+        )
     manifest = read_json(safe_resolve(root, relative))
     if manifest.get("schema_version") != 2:
         raise IntegrityError("Remediation manifest schema mismatch")
     digest = _remediation_manifest_digest(manifest)
     if manifest.get("manifest_digest") != digest:
         raise IntegrityError("Remediation manifest digest mismatch")
+    recorded_digest = prior_review.get("remediation_manifest_digest")
+    if isinstance(recorded_digest, str) and recorded_digest != digest:
+        raise IntegrityError("Remediation manifest digest does not match DLS state")
     expected = {
         "change_id": change_id,
         "review_id": prior_review["review_id"],
@@ -1993,6 +2468,49 @@ def _load_remediation_manifest(
     for key, value in expected.items():
         if manifest.get(key) != value:
             raise IntegrityError(f"Remediation manifest is stale: {key}")
+    manifest_pack_path = manifest.get("review_pack_path")
+    manifest_pack_digest = manifest.get("review_pack_digest")
+    if manifest_pack_path is not None or manifest_pack_digest is not None:
+        if (
+            not isinstance(manifest_pack_path, str)
+            or not isinstance(manifest_pack_digest, str)
+        ):
+            raise IntegrityError("Remediation manifest has incomplete ReviewPack provenance")
+        pack = read_json(
+            safe_resolve(root, manifest_pack_path, must_exist=True)
+        )
+        if (
+            pack.get("review_id") != prior_review["review_id"]
+            or pack.get("pack_digest") != manifest_pack_digest
+            or _review_pack_digest(pack) != manifest_pack_digest
+        ):
+            raise IntegrityError("Remediation manifest ReviewPack provenance mismatch")
+    for item in manifest.get("inputs", []):
+        if not isinstance(item, dict):
+            raise IntegrityError("Remediation manifest has an invalid input record")
+        input_path = item.get("path")
+        reason = item.get("reason")
+        if not isinstance(input_path, str):
+            raise IntegrityError("Remediation manifest input has no path")
+        if reason == "reviewed-authored-artifact":
+            input_payload = _git_blob_bytes(
+                root,
+                prior_review["head_sha"],
+                input_path,
+            )
+        elif reason is None:
+            # Historical v2 manifests predate reason-tagged inputs.
+            continue
+        else:
+            input_payload = safe_resolve(
+                root,
+                input_path,
+                must_exist=True,
+            ).read_bytes()
+        if sha256_bytes(input_payload) != item.get("sha256"):
+            raise IntegrityError(
+                f"Remediation manifest input digest mismatch: {input_path}"
+            )
     return relative, manifest
 
 
@@ -2266,6 +2784,7 @@ def review_ready(
     operation_id: str | None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    root, owner_selection = _change_owner_root(root, change_id)
     if not is_git_repo(root):
         raise IntegrityError("Review readiness requires Git")
     state = StateStore(root).load(change_id)
@@ -2309,27 +2828,24 @@ def review_ready(
             or prior_report.get("epic_base_sha")
             or prior_report.get("base_sha")
         )
-        manifest_path = (
-            root
-            / ".dls"
-            / "cache"
-            / "context"
-            / change_id
-            / f"remediation-{prior_review['review_id']}.json"
+        manifest_path = _existing_remediation_manifest_path(
+            root,
+            change_id=change_id,
+            review_entry=prior_review,
+            review_id=prior_review["review_id"],
         )
-        if not manifest_path.is_file():
-            action = (
-                "run-remediation-start"
-                if current_head == prior_review["head_sha"]
-                else "restore-reviewed-head-and-run-remediation-start"
+        if manifest_path is None:
+            projected = _canonical_remediation_manifest_path(
+                change_id,
+                prior_review["review_id"],
             )
             return _review_ready_blocked(
                 change_id=change_id,
                 state_revision=state["state_revision"],
-                next_action=action,
+                next_action="recover-remediation-manifest",
                 detail=(
-                    f"missing={manifest_path.relative_to(root)}; "
-                    f"reviewed_head={prior_review['head_sha']}"
+                    f"missing={projected}; reviewed_head={prior_review['head_sha']}; "
+                    f"current_head={current_head}"
                 ),
                 dry_run=dry_run,
             )
@@ -2429,8 +2945,11 @@ def review_ready(
         _remediation_manifest=remediation_manifest,
         _operation_kind="review-ready",
     )
+    result["owner_root"] = str(root)
+    result["owner_selection"] = owner_selection
+    result["handoff_required"] = True
     result["next_action"] = {
-        "id": "start-review",
+        "id": "open-review-task",
         "detail": result.get("review_pack_path") or "dry-run pack is ready",
     }
     return result
@@ -3715,6 +4234,32 @@ def review_import(
         recorded = read_json(safe_resolve(root, relative_path, must_exist=True))
         if recorded != report:
             raise IntegrityError(f"Review result already imported with different content: {review_id}")
+        remediation_path = _existing_remediation_manifest_path(
+            root,
+            change_id=change_id,
+            review_entry=existing_result,
+            review_id=review_id,
+        )
+        needs_remediation = bool(_review_actionable_findings(report))
+        if remediation_path is not None:
+            remediation_path, _ = _load_remediation_manifest(
+                root,
+                change_id=change_id,
+                prior_review={
+                    "review_id": review_id,
+                    "result_path": relative_path,
+                    "result_digest": existing_result.get("result_digest")
+                    or _review_result_digest(report),
+                    "head_sha": report["head_sha"],
+                    "definition_digest": report["definition_digest"],
+                    "remediation_manifest_path": existing_result.get(
+                        "remediation_manifest_path"
+                    ),
+                    "remediation_manifest_digest": existing_result.get(
+                        "remediation_manifest_digest"
+                    ),
+                },
+            )
         return {
             "ok": report["verdict"] == "review-clear",
             "dry_run": False,
@@ -3723,12 +4268,75 @@ def review_import(
             "state_revision": state["state_revision"],
             "operation_id": effective_operation_id,
             "review_result_path": relative_path,
+            "remediation_manifest_path": remediation_path,
             "verdict": report["verdict"],
             "finding_counts": _finding_counts(report["findings"]),
+            "next_action": {
+                "id": (
+                    "accept-review"
+                    if report["verdict"] == "review-clear"
+                    else (
+                        "remediate-findings"
+                        if remediation_path is not None
+                        else (
+                            "recover-remediation-manifest"
+                            if needs_remediation
+                            else "resolve-review-blocker"
+                        )
+                    )
+                ),
+                "detail": remediation_path or relative_path,
+            },
         }
     if existing_operation:
         raise IntegrityError(f"Review import operation has no matching result: {effective_operation_id}")
     _require_revision(state, expected_revision)
+    result_digest = _review_result_digest(report)
+    result_record = {
+        "review_id": review_id,
+        "kind": "result",
+        "result_path": relative_path,
+        "base_sha": report["base_sha"],
+        "comparison_base_sha": report.get(
+            "comparison_base_sha",
+            report["base_sha"],
+        ),
+        "head_sha": report["head_sha"],
+        "mode": pack_entry["mode"],
+        "review_mode": report.get("review_mode", "full"),
+        "verdict": report["verdict"],
+        "pack_digest": pack["pack_digest"],
+        "definition_digest": pack["definition_digest"],
+        "source_snapshot_digest": pack["source_snapshot_digest"],
+        "result_digest": result_digest,
+        "finding_counts": _finding_counts(report["findings"]),
+        "imported_at": utc_now(),
+    }
+    remediation_manifest = (
+        _build_remediation_manifest(
+            root,
+            change_id=change_id,
+            review_entry=result_record,
+            report=report,
+            pack_entry=pack_entry,
+            pack=pack,
+            result_path=relative_path,
+            pack_path=pack_path,
+            origin="review-import",
+        )
+        if report["verdict"] != "review-clear"
+        else None
+    )
+    remediation_path = (
+        _canonical_remediation_manifest_path(change_id, review_id)
+        if remediation_manifest is not None
+        else None
+    )
+    if remediation_manifest is not None and remediation_path is not None:
+        result_record["remediation_manifest_path"] = remediation_path
+        result_record["remediation_manifest_digest"] = remediation_manifest[
+            "manifest_digest"
+        ]
     if dry_run:
         return {
             "ok": report["verdict"] == "review-clear",
@@ -3738,17 +4346,23 @@ def review_import(
             "state_revision": state["state_revision"],
             "operation_id": effective_operation_id,
             "review_result_path": None,
+            "remediation_manifest_path": None,
+            "projected_remediation_manifest_path": remediation_path,
             "verdict": report["verdict"],
             "finding_counts": _finding_counts(report["findings"]),
+            "next_action": {
+                "id": (
+                    "accept-review"
+                    if report["verdict"] == "review-clear"
+                    else (
+                        "remediate-findings"
+                        if remediation_manifest is not None
+                        else "resolve-review-blocker"
+                    )
+                ),
+                "detail": remediation_path or relative_path,
+            },
         }
-    result_digest = sha256_bytes(
-        json.dumps(
-            report,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
 
     def mutate(value: dict[str, Any]) -> None:
         if any(
@@ -3756,28 +4370,7 @@ def review_import(
             for entry in value["reviews"]
         ):
             return
-        value["reviews"].append(
-            {
-                "review_id": review_id,
-                "kind": "result",
-                "result_path": relative_path,
-                "base_sha": report["base_sha"],
-                "comparison_base_sha": report.get(
-                    "comparison_base_sha",
-                    report["base_sha"],
-                ),
-                "head_sha": report["head_sha"],
-                "mode": pack_entry["mode"],
-                "review_mode": report.get("review_mode", "full"),
-                "verdict": report["verdict"],
-                "pack_digest": pack["pack_digest"],
-                "definition_digest": pack["definition_digest"],
-                "source_snapshot_digest": pack["source_snapshot_digest"],
-                "result_digest": result_digest,
-                "finding_counts": _finding_counts(report["findings"]),
-                "imported_at": utc_now(),
-            }
-        )
+        value["reviews"].append(dict(result_record))
         if report.get("schema_version") == REVIEW_IR_SCHEMA_VERSION:
             for prior in report["prior_finding_verdicts"]:
                 if prior["verdict"] != "verified":
@@ -3804,13 +4397,17 @@ def review_import(
                 )
         value["lifecycle"] = report["verdict"]
 
-    updated, changed = state_store.mutate_with_immutable_artifact(
+    artifacts = [(safe_resolve(root, relative_path), report)]
+    if remediation_manifest is not None and remediation_path is not None:
+        artifacts.append(
+            (safe_resolve(root, remediation_path), remediation_manifest)
+        )
+    updated, changed = state_store.mutate_with_immutable_artifacts(
         change_id,
         expected_revision=expected_revision,
         operation_id=effective_operation_id,
         operation_kind=operation_kind,
-        artifact_path=safe_resolve(root, relative_path),
-        artifact_value=report,
+        artifacts=artifacts,
         mutator=mutate,
     )
     return {
@@ -3821,8 +4418,21 @@ def review_import(
         "state_revision": updated["state_revision"],
         "operation_id": effective_operation_id,
         "review_result_path": relative_path,
+        "remediation_manifest_path": remediation_path,
         "verdict": report["verdict"],
         "finding_counts": _finding_counts(report["findings"]),
+        "next_action": {
+            "id": (
+                "accept-review"
+                if report["verdict"] == "review-clear"
+                else (
+                    "remediate-findings"
+                    if remediation_manifest is not None
+                    else "resolve-review-blocker"
+                )
+            ),
+            "detail": remediation_path or relative_path,
+        },
     }
 
 

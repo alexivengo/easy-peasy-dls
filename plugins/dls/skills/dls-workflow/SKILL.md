@@ -51,9 +51,9 @@ If accepted behavior, architecture, or acceptance criteria change, pause affecte
 
 For any code-review request, read and follow [review.md](references/review.md). After the user selects **Easy Peasy DLS: процесс**, a short request such as `Проведи code review EPIC-01.` is sufficient in a separate review task opened anywhere in the same Git repository when the epic worktree is registered.
 
-For a remediation request, read and follow [remediation.md](references/remediation.md). Start by generating the latest-only remediation manifest on the reviewed HEAD, then work only from that bound context. Implementers mark fixes `addressed`; use `note` only to request independent adjudication of a disputed or incorrectly staged finding. Neither status creates `verified`.
+For a remediation request, read and follow [remediation.md](references/remediation.md). Start by verifying the latest-only canonical manifest that was created with the imported review, then work only from that bound context. Implementers mark fixes `addressed`; use `note` only to request independent adjudication of a disputed or incorrectly staged finding. Neither status creates `verified`.
 
-Never finish a review without the non-null `review_result_path` returned by `review-run`. After remediation, `review-run` prepares the exact-revision delta pack automatically; an explicit implementation-side `review-ready` remains available to surface one typed next action before handoff. A `review-clear` verdict is not final acceptance.
+Never finish a review without the non-null `review_result_path` returned by `review-run`. A completed `not-clear` or actionable `blocked` review must also return a non-null canonical `remediation_manifest_path`. After remediation, the implementation task must run `review-ready`, hand off the short request, and stop. Only a separate explicit review task may run `review-run`. A `review-clear` verdict is not final acceptance.
 
 ## Finish
 

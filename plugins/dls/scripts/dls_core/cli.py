@@ -20,6 +20,7 @@ from .operations import (
     finding_disposition,
     init_repository,
     new_change,
+    remediation_recover,
     remediation_start,
     review_import,
     review_pack,
@@ -244,6 +245,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     remediation_start_parser.add_argument("change_id")
     _dry_run(remediation_start_parser)
+
+    remediation_recover_parser = subparsers.add_parser(
+        "remediation-recover",
+        help="Recover a missing canonical remediation manifest from exact Git objects.",
+    )
+    remediation_recover_parser.add_argument("change_id")
+    remediation_recover_parser.add_argument("--review-id")
+    _operation_id(remediation_recover_parser)
+    _dry_run(remediation_recover_parser)
 
     review_ready_parser = subparsers.add_parser(
         "review-ready",
@@ -515,6 +525,14 @@ def dispatch(root: Path, args: argparse.Namespace) -> dict[str, Any]:
             change_id=args.change_id,
             dry_run=args.dry_run,
         )
+    if command == "remediation-recover":
+        return remediation_recover(
+            root,
+            change_id=args.change_id,
+            review_id=args.review_id,
+            operation_id=args.operation_id,
+            dry_run=args.dry_run,
+        )
     if command == "review-ready":
         return review_ready(
             root,
@@ -674,10 +692,29 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             f"path={result.get('review_pack_path') or 'not written'}"
         )
     if command == "remediation-start":
+        if not result["ok"]:
+            next_action = result["next_action"]
+            return prefix + (
+                f"remediation unavailable; next={next_action['id']}; "
+                f"{next_action['detail']}"
+            )
+        if result["remediation_manifest"] is None:
+            return prefix + (
+                f"remediation {result['review_id']}; "
+                f"next={result['next_action']['id']}"
+            )
         return prefix + (
             f"remediation {result['review_id']}; "
             f"findings={len(result['remediation_manifest']['open_findings'])}; "
             f"path={result.get('remediation_manifest_path') or 'not written'}"
+        )
+    if command == "remediation-recover":
+        manifest = result.get("remediation_manifest")
+        return prefix + (
+            f"remediation recovery {result['review_id']}; "
+            f"findings={len(manifest['open_findings']) if manifest else 0}; "
+            f"path={result.get('remediation_manifest_path') or result.get('projected_remediation_manifest_path') or 'none'}; "
+            f"next={result['next_action']['id']}"
         )
     if command == "review-ready":
         next_action = result["next_action"]
@@ -726,12 +763,14 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             f"review {result.get('review_id') or 'none'} "
             f"{result['status']}; "
             f"verdict={result.get('verdict') or 'pending'}; "
-            f"result={result.get('review_result_path') or 'none'}"
+            f"result={result.get('review_result_path') or 'none'}; "
+            f"next={result['next_action']['id']}"
         )
     if command == "review-import":
         return prefix + (
             f"review {result['verdict']}; findings="
             + ",".join(f"{key}:{value}" for key, value in result["finding_counts"].items())
+            + f"; remediation={result.get('remediation_manifest_path') or 'none'}"
         )
     if command == "finding":
         disposition = result["disposition"]

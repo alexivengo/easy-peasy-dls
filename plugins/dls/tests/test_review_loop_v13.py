@@ -195,8 +195,12 @@ class ReviewLoopV13Tests(unittest.TestCase):
             (root / "README.md").write_text("# stale\n", encoding="utf-8")
             git(root, "add", "README.md")
             git(root, "commit", "-m", "advance before remediation")
-            with self.assertRaisesRegex(IntegrityError, "stale"):
-                remediation_start(root, change_id="C001")
+            recovered = remediation_start(root, change_id="C001")
+            self.assertTrue(recovered["ok"])
+            self.assertIn(
+                "/remediations/",
+                recovered["remediation_manifest_path"],
+            )
 
     def test_review_ready_requires_addressed_findings_and_current_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -223,6 +227,20 @@ class ReviewLoopV13Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             base_sha, _, _ = self._first_not_clear(root)
+            state_path = StateStore(root).path("C001")
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            result_entry = next(
+                item
+                for item in reversed(state["reviews"])
+                if item.get("kind") == "result"
+            )
+            manifest_path = root / result_entry.pop("remediation_manifest_path")
+            result_entry.pop("remediation_manifest_digest")
+            manifest_path.unlink()
+            state_path.write_text(
+                json.dumps(state, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
             (root / "README.md").write_text("# changed too early\n", encoding="utf-8")
             git(root, "add", "README.md")
             git(root, "commit", "-m", "advance without remediation manifest")
@@ -238,7 +256,7 @@ class ReviewLoopV13Tests(unittest.TestCase):
             self.assertTrue(blocked["dry_run"])
             self.assertEqual(
                 blocked["next_action"]["id"],
-                "restore-reviewed-head-and-run-remediation-start",
+                "recover-remediation-manifest",
             )
 
     def test_delta_review_requires_prior_verdict_and_final_full_before_clear(self) -> None:

@@ -50,7 +50,8 @@ python3 plugins/dls/scripts/dls.py --root /path/to/project doctor
 | `validate` | Запустить доверенную repository command |
 | `evidence` | Импортировать immutable validation evidence |
 | `review-pack` | Создать exact-revision review handoff |
-| `remediation-start` | Выбрать последний актуальный ReviewIR и создать manifest |
+| `remediation-start` | Проверить canonical manifest последнего actionable ReviewIR |
+| `remediation-recover` | Восстановить отсутствующий legacy manifest из exact Git objects |
 | `review-ready` | Проверить candidate и создать full/delta ReviewPack; base повторного review выводится из ReviewIR |
 | `review-run` | Выполнить exact-revision review целиком и импортировать ReviewIR |
 | `review-status` | Прочитать состояние review без запуска модели |
@@ -88,6 +89,30 @@ ReviewIR v2 обязан содержать ticket verdicts, provenance review l
 Последний импортированный ReviewIR является canonical finding snapshot для remediation и gates; более ранние результаты остаются audit history. `note` означает запрос на независимое adjudication, а не закрытие или waiver.
 
 Повторный `review-clear` требует непрерывной native coverage chain и final whole-change semantic pass.
+
+### Инвариант review → remediation
+
+Импорт actionable `not-clear` или `blocked` review атомарно записывает два
+immutable artifacts — ReviewIR и remediation manifest — и ссылки на оба в одной
+state revision. Успешный runner result поэтому всегда возвращает
+`review_result_path`, а actionable результат дополнительно возвращает
+`remediation_manifest_path`.
+
+Canonical manifest хранится в
+`.dls/reviews/<change>/remediations/<review-id>.json`; очистка локального cache
+его не удаляет. Manifest содержит только findings последнего canonical ReviewIR,
+которые блокируют review или acceptance. Release/production-only gaps не
+становятся code-remediation gate.
+
+Исторические ReviewIR не переписываются. Если старый импорт был выполнен до
+этого инварианта, `remediation-recover` проверяет ReviewIR, ReviewPack, definition
+digest, существование reviewed commit и ancestry текущего HEAD. Authored inputs
+читаются из reviewed Git tree; checkout, branch и product source не меняются.
+Divergent history, dirty source и tampered artifacts блокируют recovery.
+
+Implementation/remediation-задача заканчивается `review-ready` с
+`next_action: open-review-task`. Только отдельная read-only review-задача
+запускает `review-run`.
 
 ### End-to-end runner
 
@@ -149,6 +174,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.3.0`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.3.1`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

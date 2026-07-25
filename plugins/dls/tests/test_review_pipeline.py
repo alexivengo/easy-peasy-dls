@@ -731,6 +731,7 @@ class ReviewPipelineTests(unittest.TestCase):
                 operation_id="release-only",
             )
             self.assertTrue(imported["ok"])
+            self.assertIsNone(imported["remediation_manifest_path"])
             accept = check(root, change_id="C001", gate="accept")
             finding_checks = {
                 item["id"]: item["ok"]

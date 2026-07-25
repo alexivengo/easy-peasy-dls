@@ -116,6 +116,66 @@ class IOAndStateTests(unittest.TestCase):
                     mutator=mutate,
                 )
 
+    def test_multi_artifact_state_transaction_rolls_back_and_retries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize(root)
+            create_change(root)
+            store = StateStore(root)
+            first = root / ".dls/reviews/C001/results/result.json"
+            second = root / ".dls/reviews/C001/remediations/result.json"
+            values = [(first, {"kind": "result"}), (second, {"kind": "manifest"})]
+
+            def mutate(value: dict) -> None:
+                value["lifecycle"] = "not-clear"
+
+            from dls_core import state as state_module
+
+            real_write = state_module.atomic_write_json
+
+            def fail_state_write(path: Path, value: dict, **kwargs: object) -> None:
+                if path == store.path("C001"):
+                    raise OSError("simulated state write failure")
+                real_write(path, value, **kwargs)
+
+            with mock.patch(
+                "dls_core.state.atomic_write_json",
+                side_effect=fail_state_write,
+            ):
+                with self.assertRaisesRegex(OSError, "state write failure"):
+                    store.mutate_with_immutable_artifacts(
+                        "C001",
+                        expected_revision=1,
+                        operation_id="multi-artifact",
+                        operation_kind="review-import",
+                        artifacts=values,
+                        mutator=mutate,
+                    )
+            self.assertFalse(first.exists())
+            self.assertFalse(second.exists())
+            self.assertEqual(store.load("C001")["state_revision"], 1)
+
+            updated, changed = store.mutate_with_immutable_artifacts(
+                "C001",
+                expected_revision=1,
+                operation_id="multi-artifact",
+                operation_kind="review-import",
+                artifacts=values,
+                mutator=mutate,
+            )
+            self.assertTrue(changed)
+            self.assertEqual(updated["state_revision"], 2)
+            replayed, changed = store.mutate_with_immutable_artifacts(
+                "C001",
+                expected_revision=1,
+                operation_id="multi-artifact",
+                operation_kind="review-import",
+                artifacts=values,
+                mutator=mutate,
+            )
+            self.assertFalse(changed)
+            self.assertEqual(replayed["state_revision"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

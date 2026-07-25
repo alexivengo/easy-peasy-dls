@@ -28,9 +28,13 @@ Repository-owned команды задаются argv arrays в `.dls/config.tom
 
 `dls worktree register` явно связывает change ID с linked worktree в локальной metadata общего Git common-dir. Это позволяет безопасно направлять короткую review-команду из основного Codex-проекта, не добавляя каждый worktree как отдельный проект.
 
-`dls remediation-start` выбирает только последний целостный актуальный ReviewIR и создаёт immutable digest-bound manifest до изменения исходников. Исторические review остаются читаемыми, но не попадают в рабочий remediation context.
+Actionable `not-clear` import атомарно сохраняет ReviewIR и canonical
+digest-bound remediation manifest. `dls remediation-start` проверяет этот
+manifest, а `dls remediation-recover` восстанавливает отсутствующий manifest
+старого ReviewIR из reviewed Git objects без переключения checkout. Исторические
+review остаются читаемыми, но не попадают в рабочий remediation context.
 
-`dls review-ready` проверяет committed candidate, definition approval, готовность tickets, stage-specific current evidence и dispositions findings. Команда создаёт ReviewPack v2 либо возвращает одно типизированное `next_action`. Для remediation epic base выводится из последнего ReviewIR; первый review требует явный `--base`.
+`dls review-ready` проверяет committed candidate, definition approval, готовность tickets, stage-specific current evidence и dispositions findings. Команда создаёт ReviewPack v2 и возвращает `open-review-task` либо одно типизированное блокирующее действие. Для remediation epic base выводится из последнего ReviewIR; первый review требует явный `--base`.
 
 `dls review-run` — публичный end-to-end review orchestrator. Он работает только с
 текущим change state, явно зарегистрированным worktree или absolute pack,
@@ -38,6 +42,9 @@ Repository-owned команды задаются argv arrays в `.dls/config.tom
 импортирует ReviewIR. Повторный процесс видит `running` и ждёт вместо запуска
 дубликата. `review-start` остаётся native-only diagnostic primitive, а
 `review-status` никогда не запускает модель.
+
+Implementation/remediation-задача не запускает review runner: после
+`review-ready` она передаёт candidate в отдельную read-only review-задачу.
 
 ReviewPack/ReviewIR v2 сохраняют читаемость исторических v1 artifacts, считают последний импортированный ReviewIR текущим canonical snapshot, делают закрытие finding ответственностью reviewer и требуют targeted remediation pass плюс финальный whole-change semantic pass перед повторным `review-clear`. Implementer `note` разрешает только независимое adjudication и сам finding не закрывает.
 

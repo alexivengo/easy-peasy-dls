@@ -852,12 +852,22 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             / "references"
             / "review.md"
         ).read_text(encoding="utf-8")
+        remediation = (
+            plugin_root
+            / "skills"
+            / "dls-workflow"
+            / "references"
+            / "remediation.md"
+        ).read_text(encoding="utf-8")
         combined = skill + "\n" + review
         self.assertIn("review-run", combined)
         self.assertNotIn("command -v dls", combined)
         self.assertNotIn("which dls", combined)
         self.assertIn("Do not create subagents", review)
         self.assertNotIn("review-import CHANGE_ID", review)
+        self.assertIn("open-review-task", remediation)
+        self.assertIn("Never invoke `review-run`", remediation)
+        self.assertNotIn(" dls review-run ", remediation)
 
 
 if __name__ == "__main__":

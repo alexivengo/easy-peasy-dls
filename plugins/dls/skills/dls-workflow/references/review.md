@@ -54,7 +54,8 @@ at a bounded interval; do not replace the active review.
 - `completed` with `review-clear`: report the imported result and the separate
   acceptance/release boundaries.
 - `completed` with `not-clear` or `blocked`: report findings and hand off to the
-  remediation workflow. This is a successful runner execution, not an
+  remediation workflow. An actionable result must include a non-null canonical
+  `remediation_manifest_path`. This is a successful runner execution, not an
   infrastructure failure.
 - `running`: wait or use only `review-status`.
 - a nonzero exit: report the integrity/infrastructure failure and its typed
@@ -64,4 +65,5 @@ at a bounded interval; do not replace the active review.
 
 Completion always requires a non-null `review_result_path`. Never claim review
 completion from a transcript, draft, or model message alone. Never record human
-approval during review.
+approval during review. Never edit product source or continue into remediation
+inside this review task.

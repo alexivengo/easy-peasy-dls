@@ -28,7 +28,9 @@ from .operations import (
     REVIEW_LANE_MAX_ATTEMPTS,
     REVIEW_RUNNER_CONTRACT,
     _attempt_lease_expired,
+    _existing_remediation_manifest_path,
     _finding_blocks,
+    _latest_review_result,
     _process_is_alive,
     _read_review_result,
     _review_lane_entries,
@@ -37,6 +39,7 @@ from .operations import (
     _validate_review_report,
     _run_bounded_command,
     review_import,
+    review_ready,
     review_start,
 )
 from .repo import (
@@ -122,6 +125,7 @@ def review_status(
         None,
     )
     selected_review_id = review_id
+    status_result_entry = result_entry
     if result_entry:
         selected_review_id = result_entry["review_id"]
     elif pack_entry:
@@ -136,6 +140,7 @@ def review_status(
     latest_by_lane: dict[str, dict[str, Any]] = {}
     for attempt in lane_attempts:
         latest_by_lane[attempt["lane_key"]] = attempt
+    remediation_manifest_path: str | None = None
     if result_entry:
         status_value = "completed"
         next_action = {
@@ -167,14 +172,56 @@ def review_status(
             ),
         }
     else:
-        status_value = "not-prepared"
-        next_action = {
-            "id": "provide-review-base",
-            "detail": "no exact-HEAD ReviewPack or imported result",
-        }
+        latest_result = _latest_review_result(state)
+        if latest_result is None or review_id is not None:
+            status_value = "not-prepared"
+            next_action = {
+                "id": "provide-review-base",
+                "detail": "no exact-HEAD ReviewPack or imported result",
+            }
+        else:
+            selected_review_id = latest_result.get("review_id")
+            status_result_entry = latest_result
+            if isinstance(selected_review_id, str):
+                remediation_manifest_path = _existing_remediation_manifest_path(
+                    owner,
+                    change_id=change_id,
+                    review_entry=latest_result,
+                    review_id=selected_review_id,
+                )
+            readiness = review_ready(
+                owner,
+                change_id=change_id,
+                base_ref=None,
+                expected_revision=state["state_revision"],
+                operation_id="review-status-projection",
+                dry_run=True,
+            )
+            status_value = "ready" if readiness["ok"] else "blocked"
+            next_action = readiness["next_action"]
     runner_contract = "legacy-provenance"
-    if pack_entry and isinstance(pack_entry.get("pack_path"), str):
-        pack = read_json(safe_resolve(owner, pack_entry["pack_path"], must_exist=True))
+    provenance_pack_entry = pack_entry
+    if provenance_pack_entry is None and isinstance(selected_review_id, str):
+        provenance_pack_entry = next(
+            (
+                item
+                for item in reversed(state["reviews"])
+                if item.get("kind") == "pack"
+                and item.get("review_id") == selected_review_id
+            ),
+            None,
+        )
+    if provenance_pack_entry and isinstance(
+        provenance_pack_entry.get("pack_path"),
+        str,
+    ):
+        pack = read_json(
+            safe_resolve(
+                owner,
+                provenance_pack_entry["pack_path"],
+                must_exist=True,
+            )
+        )
         runner_contract = pack.get("runner_contract", runner_contract)
     return {
         "ok": True,
@@ -188,9 +235,23 @@ def review_status(
         "status": status_value,
         "runner_contract": runner_contract,
         "lanes": latest_by_lane,
-        "verdict": result_entry.get("verdict") if result_entry else None,
+        "verdict": (
+            status_result_entry.get("verdict")
+            if status_result_entry
+            else None
+        ),
         "review_result_path": (
-            result_entry.get("result_path") if result_entry else None
+            status_result_entry.get("result_path")
+            if status_result_entry
+            else None
+        ),
+        "remediation_manifest_path": (
+            (
+                status_result_entry.get("remediation_manifest_path")
+                if status_result_entry
+                else None
+            )
+            or remediation_manifest_path
         ),
         "next_action": next_action,
     }
@@ -1077,12 +1138,8 @@ def review_run(
         "verdict": imported["verdict"],
         "finding_counts": imported["finding_counts"],
         "review_result_path": imported["review_result_path"],
-        "next_action": {
-            "id": (
-                "accept-review"
-                if imported["verdict"] == "review-clear"
-                else "remediate-findings"
-            ),
-            "detail": imported["review_result_path"],
-        },
+        "remediation_manifest_path": imported.get(
+            "remediation_manifest_path"
+        ),
+        "next_action": imported["next_action"],
     }
