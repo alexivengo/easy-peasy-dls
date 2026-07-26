@@ -64,6 +64,7 @@ def initial_state(
         "approvals": [],
         "tickets": {},
         "reviews": [],
+        "candidate_runs": [],
         "finding_dispositions": [],
         "evidence": [],
         "operations": [
@@ -117,6 +118,8 @@ def validate_state(state: dict[str, Any]) -> None:
     ):
         if not isinstance(state.get(key), expected_type):
             raise IntegrityError(f"state.{key} must be {expected_type.__name__}")
+    if "candidate_runs" in state and not isinstance(state["candidate_runs"], list):
+        raise IntegrityError("state.candidate_runs must be list")
 
 
 class StateStore:
@@ -539,6 +542,111 @@ class StateStore:
                     utc_now(),
                 )
             updated["operations"] = updated["operations"][-200:]
+            updated["state_revision"] += 1
+            validate_state(updated)
+            atomic_write_json(path, updated)
+            return updated, copy.deepcopy(recorded), True
+
+    def claim_candidate_run(
+        self,
+        change_id: str,
+        *,
+        candidate_run: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+        """Claim or resume one exact candidate contract under the state lock."""
+        run_id = candidate_run.get("run_id")
+        contract_digest = candidate_run.get("contract_digest")
+        if not isinstance(run_id, str) or not isinstance(contract_digest, str):
+            raise IntegrityError("Candidate run requires stable identifiers")
+        path = self.path(change_id)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        with FileLock(lock_path):
+            state = self.load(change_id)
+            runs = state.get("candidate_runs", [])
+            running = next(
+                (
+                    item
+                    for item in reversed(runs)
+                    if isinstance(item, dict) and item.get("status") == "running"
+                ),
+                None,
+            )
+            if running is not None and running.get("run_id") != run_id:
+                return state, copy.deepcopy(running), False
+            existing_index = next(
+                (
+                    index
+                    for index, item in enumerate(runs)
+                    if isinstance(item, dict) and item.get("run_id") == run_id
+                ),
+                None,
+            )
+            if existing_index is not None:
+                existing = runs[existing_index]
+                if existing.get("contract_digest") != contract_digest:
+                    raise IntegrityError("Candidate run contract digest changed")
+                if existing.get("status") in {"running", "completed"}:
+                    return state, copy.deepcopy(existing), False
+            updated = copy.deepcopy(state)
+            updated_runs = updated.setdefault("candidate_runs", [])
+            if existing_index is None:
+                recorded = copy.deepcopy(candidate_run)
+                recorded["status"] = "running"
+                recorded.setdefault("started_at", utc_now())
+                recorded["updated_at"] = utc_now()
+                updated_runs.append(recorded)
+            else:
+                recorded = updated_runs[existing_index]
+                recorded.update(
+                    {
+                        "status": "running",
+                        "phase": "preflight",
+                        "active_command": None,
+                        "runner_pid": candidate_run.get("runner_pid"),
+                        "operation_id": candidate_run.get("operation_id"),
+                        "updated_at": utc_now(),
+                    }
+                )
+                recorded.pop("completed_at", None)
+                recorded.pop("failure_reason", None)
+                recorded.pop("failed_command", None)
+                recorded.pop("next_action", None)
+            updated["candidate_runs"] = updated_runs[-50:]
+            updated["state_revision"] += 1
+            validate_state(updated)
+            atomic_write_json(path, updated)
+            return updated, copy.deepcopy(recorded), True
+
+    def update_candidate_run(
+        self,
+        change_id: str,
+        *,
+        run_id: str,
+        updates: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+        """CAS-free progress update for the process that owns one candidate run."""
+        path = self.path(change_id)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        with FileLock(lock_path):
+            state = self.load(change_id)
+            runs = state.get("candidate_runs", [])
+            index = next(
+                (
+                    index
+                    for index, item in enumerate(runs)
+                    if isinstance(item, dict) and item.get("run_id") == run_id
+                ),
+                None,
+            )
+            if index is None:
+                raise IntegrityError(f"Unknown candidate run: {run_id}")
+            current = runs[index]
+            if all(current.get(key) == value for key, value in updates.items()):
+                return state, copy.deepcopy(current), False
+            updated = copy.deepcopy(state)
+            recorded = updated.setdefault("candidate_runs", [])[index]
+            recorded.update(copy.deepcopy(updates))
+            recorded["updated_at"] = utc_now()
             updated["state_revision"] += 1
             validate_state(updated)
             atomic_write_json(path, updated)

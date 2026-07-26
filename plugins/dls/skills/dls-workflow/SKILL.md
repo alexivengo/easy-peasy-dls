@@ -39,11 +39,11 @@ Read [gates.md](references/gates.md) when architecture, UI/UX, approvals, except
 
 Routine work remains in this task. For standard, roadmap, or critical work, use a clean implementation task with the generated implementation context manifest; do not replay the definition transcript.
 
-Implement one coherent slice at a time. Keep ticket definitions in Markdown and execution status in DLS state. Run named repository commands or normal repository tooling, then record bounded evidence. Do not claim validated from source inspection alone.
+Implement one coherent slice at a time. Keep ticket definitions in Markdown and execution status in DLS state. Use normal repository tooling and focused tests while developing. After the candidate is committed, invoke only `candidate-ready`; it runs trusted review commands, records bounded evidence, and creates the ReviewPack. Do not inspect state revisions or evidence files on the success path.
 
 When implementation runs in a linked Git worktree, register its change ID and absolute root with `dls worktree register` after DLS state exists. This is local routing metadata, not a new Codex project or repository artifact.
 
-Before the first standard or critical review handoff, run `review-ready` with the explicit epic base. Handoff only the short review request; never make the user copy a pack path or generated command.
+Before the first standard or critical review handoff, run `candidate-ready` with the explicit epic base. Handoff only the short review request; never make the user copy a pack path or generated command.
 
 If accepted behavior, architecture, or acceptance criteria change, pause affected work, edit the canonical contract and tickets, regenerate context, and request a new definition approval. Do not create a separate change-request document.
 
@@ -51,9 +51,9 @@ If accepted behavior, architecture, or acceptance criteria change, pause affecte
 
 For any code-review request, read and follow [review.md](references/review.md). After the user selects **Easy Peasy DLS: процесс**, a short request such as `Проведи code review EPIC-01.` is sufficient in a separate review task opened anywhere in the same Git repository when the epic worktree is registered.
 
-For a remediation request, read and follow [remediation.md](references/remediation.md). Start by verifying the latest-only canonical manifest that was created with the imported review, then work only from that bound context. Implementers mark fixes `addressed`; use `note` only to request independent adjudication of a disputed or incorrectly staged finding. Neither status creates `verified`.
+For a remediation request, read and follow [remediation.md](references/remediation.md). Start from the latest-only canonical manifest. After committing fixes, pass only the exact `addressed` and `note` finding IDs to `candidate-ready`; DLS binds SHA, evidence, rationale, and the next ReviewPack. Neither status creates `verified`.
 
-Never finish a review without the non-null `review_result_path` returned by `review-run`. A completed `not-clear` or actionable `blocked` review must also return a non-null canonical `remediation_manifest_path`. After remediation, the implementation task must run `review-ready`, hand off the short request, and stop. Only a separate explicit review task may run `review-run`. A `review-clear` verdict is not final acceptance.
+Never finish a review without the non-null `review_result_path` returned by `review-run`. A completed `not-clear` or actionable `blocked` review must also return a non-null canonical `remediation_manifest_path`. After implementation or remediation, the task must wait for the single `candidate-ready` process, stop at `open-review-task`, and never invoke `review-run`. Use compact `candidate-status` only when the original process is lost or long-running. A `review-clear` verdict is not final acceptance.
 
 When a completed exact-HEAD review returns DLS-owned `presentation.comments`, emit their prepared `::code-comment` directives verbatim after the severity-first summary. Do not invent inline comments from model transcripts or emit them for stale locations. During a long unchanged runner wait, avoid repeated narration: use the longest host wait available and provide at most one compact heartbeat per minute.
 

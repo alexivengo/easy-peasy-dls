@@ -92,7 +92,7 @@ replace `review_result_path`, finding IDs, ticket verdicts, or remediation state
 - a nonzero exit: report the integrity/infrastructure failure and its typed
   `next_action`; do not improvise a review.
 - `provide-review-base`: the implementation task must prepare the first candidate
-  with `review-ready --base BASE`.
+  with `candidate-ready --base BASE`.
 
 Completion always requires a non-null `review_result_path`. Never claim review
 completion from a transcript, draft, or model message alone. Never record human

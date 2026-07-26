@@ -1154,6 +1154,12 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         self.assertIn("failed-finalize", review)
         self.assertIn("same stable operation ID", review)
         self.assertIn("open-review-task", remediation)
+        self.assertIn("candidate-ready", remediation)
+        self.assertIn("candidate-status", remediation)
+        self.assertNotIn("--expect-revision", remediation)
+        self.assertNotIn("dls finding set", remediation)
+        self.assertNotIn("dls evidence add", remediation)
+        self.assertNotIn("review-ready CHANGE_ID", remediation)
         self.assertIn("Never invoke `review-run`", remediation)
         self.assertNotIn(" dls review-run ", remediation)
 

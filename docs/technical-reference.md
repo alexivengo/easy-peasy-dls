@@ -52,6 +52,8 @@ python3 plugins/dls/scripts/dls.py --root /path/to/project doctor
 | `review-pack` | Создать exact-revision review handoff |
 | `remediation-start` | Проверить canonical manifest последнего actionable ReviewIR |
 | `remediation-recover` | Восстановить отсутствующий legacy manifest из exact Git objects |
+| `candidate-ready` | Выполнить trusted validation, записать dispositions и атомарно создать ReviewPack |
+| `candidate-status` | Прочитать компактный implementation progress без запуска команд |
 | `review-ready` | Проверить candidate и создать full/delta ReviewPack; base повторного review выводится из ReviewIR |
 | `review-run` | Выполнить exact-revision review целиком и импортировать ReviewIR |
 | `review-status` | Прочитать состояние review без запуска модели |
@@ -59,7 +61,9 @@ python3 plugins/dls/scripts/dls.py --root /path/to/project doctor
 | `review-import` | Атомарно проверить и импортировать ReviewIR |
 | `finding` | Отметить addressed, waived, reopened или note |
 
-Для machine handoff используйте `--json`. Для поддерживаемых mutations доступны `--dry-run`, expected state revision и caller-stable operation ID.
+Для machine handoff используйте `--json`. Низкоуровневые mutations сохраняют
+`--dry-run`, expected state revision и caller-stable operation ID.
+`candidate-ready` сам владеет revisions и детерминированным operation ID.
 
 ## Repository contract
 
@@ -92,6 +96,17 @@ ReviewIR v2 обязан содержать ticket verdicts, provenance review l
 `evidence_count`. Это позволяет отдельно связать с finding, например, Swift suite
 и проверку JavaScript bridge, а не оставлять вторую проверку только на уровне
 ReviewPack.
+
+Обычный implementation/remediation-flow не вызывает эти primitives вручную.
+`candidate-ready` требует явный `policy.review_required_commands`, выполняет их
+последовательно и прикрепляет весь обязательный successful evidence set к
+каждому `addressed` finding. `--extra-command` принимает только дополнительный
+named command из repository config.
+
+Generated evidence содержит command-contract digest, exact HEAD/source digest,
+exit status, duration, размер и SHA-256 полного command output. Полный redacted output хранится
+только в ignored `.dls/cache/validation`; successful evidence не переносит его в
+ReviewPack/model context. Для failure сохраняется ограниченный excerpt.
 
 Последний импортированный ReviewIR является canonical finding snapshot для remediation и gates; более ранние результаты остаются audit history. `note` означает запрос на независимое adjudication, а не закрытие или waiver.
 
@@ -126,9 +141,14 @@ digest, существование reviewed commit и ancestry текущего 
 читаются из reviewed Git tree; checkout, branch и product source не меняются.
 Divergent history, dirty source и tampered artifacts блокируют recovery.
 
-Implementation/remediation-задача заканчивается `review-ready` с
-`next_action: open-review-task`. Только отдельная read-only review-задача
-запускает `review-run`.
+Implementation/remediation-задача после commit вызывает только
+`candidate-ready` и заканчивается его `next_action: open-review-task`.
+Pipeline использует optional `candidate_runs` в state schema v1, допускает один
+активный exact-contract run, переиспользует PASS только при совпадении HEAD,
+source и command-contract digests и атомарно записывает dispositions вместе с
+ReviewPack. `candidate-status` читает phase, active/completed/remaining commands
+и typed next action, но не запускает процесс и не возвращает логи. Только
+отдельная read-only review-задача запускает `review-run`.
 
 ### End-to-end runner
 
@@ -231,6 +251,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.3.5`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.4.0`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

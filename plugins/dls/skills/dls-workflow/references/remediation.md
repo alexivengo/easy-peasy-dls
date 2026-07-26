@@ -33,30 +33,25 @@ context.
 
 Fix every actionable finding in scope and inspect the manifest blast-radius triggers. A behavior, architecture, public contract, or acceptance-criteria change is an authored definition change and requires a new scoped approval. Finding status, evidence, generated regions, and DLS state do not belong in authored SPEC/TICKETS.
 
-After source changes:
-
-1. run focused regression checks and the required full validation;
-2. commit the product candidate;
-3. record current evidence for that HEAD;
-4. set each fixed finding to `addressed` with the candidate SHA and all relevant evidence paths; pass multiple records with one or repeated `--evidence` flags and confirm the returned `evidence_count`.
+After source changes, run focused regression checks and commit the product candidate. Do not manually record evidence, read state revision, or call `finding set`.
 
 For a disputed or incorrectly staged finding, use `note` with a current-SHA rationale instead of pretending to fix or waive it. This only permits independent adjudication in the next review; it does not close the finding. Never set `verified`. Only the next independent ReviewIR import can verify a finding. `resolved` is a deprecated alias for `addressed`.
 
-## 3. Create the next candidate
+## 3. Prepare the next candidate
 
-Read current state revision and run:
+Run one deterministic command through the plugin-local CLI:
 
 ```text
-dls --root OWNER_ROOT --json review-ready CHANGE_ID \
-  --expect-revision REVISION --operation-id <stable-id> --dry-run
-
-dls --root OWNER_ROOT --json review-ready CHANGE_ID \
-  --expect-revision REVISION --operation-id <stable-id>
+dls --root OWNER_ROOT --json candidate-ready CHANGE_ID \
+  --address FIXED_FINDING_ID ... \
+  --note ADJUDICATION_FINDING_ID ...
 ```
 
-For repeat review, DLS infers the epic base from the latest ReviewIR. The first review still requires explicit `--base BASE`. When blocked, perform exactly the returned typed `next_action`, refresh the state revision, and retry. Do not fall back to raw `review-pack` for repeat review.
+List every current actionable finding exactly once as `--address` or `--note`; omit human-waived findings. DLS infers the epic base, runs `policy.review_required_commands`, records exact-HEAD evidence, attaches all required evidence to each addressed finding, and atomically creates the next ReviewPack. Do not pass SHA, evidence paths, state revision, or operation ID.
+
+Wait for this original process. Do not start another. If host execution is lost or unusually long, read only compact `candidate-status` and report at most one heartbeat per minute. On a typed blocking action, perform that action in this implementation task and retry automatically; ask the user only when the action is an explicit human boundary such as definition approval.
 
 Handoff only the short review request. The reviewer resolves the registered worktree, ignores stale unfinished packs, and may create the current remediation pack automatically.
 
-Stop this implementation task after `review-ready` returns
+Stop this implementation task after `candidate-ready` returns
 `open-review-task`. Never invoke `review-run` from the remediation task.

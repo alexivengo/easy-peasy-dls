@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from . import VERSION
+from .candidate_runner import candidate_ready, candidate_status
 from .errors import DLSError, UsageError
 from .operations import (
     adopt_change,
@@ -254,6 +255,28 @@ def build_parser() -> argparse.ArgumentParser:
     remediation_recover_parser.add_argument("--review-id")
     _operation_id(remediation_recover_parser)
     _dry_run(remediation_recover_parser)
+
+    candidate_ready_parser = subparsers.add_parser(
+        "candidate-ready",
+        help="Validate and atomically prepare an implementation candidate for review.",
+    )
+    candidate_ready_parser.add_argument("change_id")
+    candidate_ready_parser.add_argument(
+        "--base",
+        help="Required for the first review; inferred from canonical ReviewIR for remediation.",
+    )
+    candidate_ready_parser.add_argument("--address", action="append", default=[])
+    candidate_ready_parser.add_argument("--note", action="append", default=[])
+    candidate_ready_parser.add_argument("--extra-command", action="append", default=[])
+    _operation_id(candidate_ready_parser)
+    _dry_run(candidate_ready_parser)
+
+    candidate_status_parser = subparsers.add_parser(
+        "candidate-status",
+        help="Read compact implementation candidate telemetry without running commands.",
+    )
+    candidate_status_parser.add_argument("change_id")
+    _operation_id(candidate_status_parser)
 
     review_ready_parser = subparsers.add_parser(
         "review-ready",
@@ -548,6 +571,23 @@ def dispatch(root: Path, args: argparse.Namespace) -> dict[str, Any]:
             operation_id=args.operation_id,
             dry_run=args.dry_run,
         )
+    if command == "candidate-ready":
+        return candidate_ready(
+            root,
+            change_id=args.change_id,
+            base_ref=args.base,
+            addressed=_split_values(args.address),
+            noted=_split_values(args.note),
+            extra_commands=_split_values(args.extra_command),
+            operation_id=args.operation_id,
+            dry_run=args.dry_run,
+        )
+    if command == "candidate-status":
+        return candidate_status(
+            root,
+            change_id=args.change_id,
+            operation_id=args.operation_id,
+        )
     if command == "review-ready":
         return review_ready(
             root,
@@ -730,6 +770,22 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             f"remediation recovery {result['review_id']}; "
             f"findings={len(manifest['open_findings']) if manifest else 0}; "
             f"path={result.get('remediation_manifest_path') or result.get('projected_remediation_manifest_path') or 'none'}; "
+            f"next={result['next_action']['id']}"
+        )
+    if command == "candidate-ready":
+        return prefix + (
+            f"candidate {result.get('status')}; "
+            f"phase={result.get('phase')}; "
+            f"pack={result.get('review_pack_path') or 'none'}; "
+            f"next={result['next_action']['id']}"
+        )
+    if command == "candidate-status":
+        return (
+            f"candidate {result.get('status')}; "
+            f"phase={result.get('phase') or 'none'}; "
+            f"active={result.get('active_command') or 'none'}; "
+            f"completed={len(result.get('completed_commands', []))}; "
+            f"remaining={len(result.get('remaining_commands', []))}; "
             f"next={result['next_action']['id']}"
         )
     if command == "review-ready":

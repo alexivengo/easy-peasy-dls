@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -38,6 +39,7 @@ from .repo import (
     TEMPLATES_ROOT,
     allowed_environment,
     command_config,
+    command_contract_digest,
     copy_asset,
     git_changed_files,
     git_head,
@@ -2549,6 +2551,30 @@ def _disposition_applies_to_head(
     )
 
 
+def _review_pack_state_entry(
+    pack: dict[str, Any],
+    relative_path: str,
+) -> dict[str, Any]:
+    return {
+        "review_id": pack["review_id"],
+        "kind": "pack",
+        "pack_path": relative_path,
+        "base_sha": pack["base_sha"],
+        "comparison_base_sha": pack["comparison_base_sha"],
+        "head_sha": pack["head_sha"],
+        "mode": pack["mode"],
+        "review_mode": pack["review_mode"],
+        "pack_digest": pack["pack_digest"],
+        "definition_digest": pack["definition_digest"],
+        "source_snapshot_digest": pack["source_snapshot_digest"],
+        "required_lanes": pack["required_lanes"],
+        "previous_pack": pack["previous_pack"],
+        "prior_review": pack["prior_review"],
+        "remediation_manifest": pack["remediation_manifest"],
+        "created_at": pack["created_at"],
+    }
+
+
 def review_pack(
     root: Path,
     *,
@@ -2565,11 +2591,14 @@ def review_pack(
     _prior_report: dict[str, Any] | None = None,
     _remediation_manifest: tuple[str, dict[str, Any]] | None = None,
     _operation_kind: str = "review-pack",
+    _state_override: dict[str, Any] | None = None,
+    _skip_review_gate: bool = False,
 ) -> dict[str, Any]:
     if not is_git_repo(root):
         raise IntegrityError("Review pack requires Git")
     state_store = StateStore(root)
-    state = state_store.load(change_id)
+    stored_state = state_store.load(change_id)
+    state = _state_override or stored_state
     if (
         _review_mode == "full"
         and _operation_kind == "review-pack"
@@ -2588,7 +2617,7 @@ def review_pack(
         )
     )
     relative_path = f".dls/reviews/{change_id}/packs/{review_id}.json"
-    existing_operation = _operation(state, effective_operation_id)
+    existing_operation = _operation(stored_state, effective_operation_id)
     if existing_operation:
         _require_operation_kind(existing_operation, operation_kind)
         pack = read_json(safe_resolve(root, relative_path, must_exist=True))
@@ -2597,7 +2626,7 @@ def review_pack(
             "dry_run": False,
             "changed": False,
             "change_id": change_id,
-            "state_revision": state["state_revision"],
+            "state_revision": stored_state["state_revision"],
             "operation_id": effective_operation_id,
             "review_id": review_id,
             "review_pack_path": relative_path,
@@ -2619,7 +2648,11 @@ def review_pack(
     if not definition_approval:
         raise IntegrityError("Review pack requires a current definition approval")
     if not advisory_dirty:
-        gate = check(root, change_id=change_id, gate="review")
+        gate = (
+            {"ok": True, "checks": []}
+            if _skip_review_gate
+            else check(root, change_id=change_id, gate="review")
+        )
         if not gate["ok"]:
             failed = [item["id"] for item in gate["checks"] if not item["ok"]]
             raise IntegrityError(f"Review gate failed: {', '.join(failed)}")
@@ -2710,26 +2743,7 @@ def review_pack(
     write_immutable_json(safe_resolve(root, relative_path), pack)
 
     def mutate(value: dict[str, Any]) -> None:
-        value["reviews"].append(
-            {
-                "review_id": review_id,
-                "kind": "pack",
-                "pack_path": relative_path,
-                "base_sha": base_sha,
-                "comparison_base_sha": comparison_sha,
-                "head_sha": head_sha,
-                "mode": pack["mode"],
-                "review_mode": pack["review_mode"],
-                "pack_digest": pack["pack_digest"],
-                "definition_digest": pack["definition_digest"],
-                "source_snapshot_digest": pack["source_snapshot_digest"],
-                "required_lanes": pack["required_lanes"],
-                "previous_pack": pack["previous_pack"],
-                "prior_review": pack["prior_review"],
-                "remediation_manifest": pack["remediation_manifest"],
-                "created_at": pack["created_at"],
-            }
-        )
+        value["reviews"].append(_review_pack_state_entry(pack, relative_path))
         value["phase"] = "review"
 
     updated, changed = state_store.mutate(
@@ -4727,6 +4741,7 @@ def validate_command(
             f"Stale state revision: expected {expected_revision}, current {state['state_revision']}"
         )
     safe_argv = _redact_argv(command["argv"])
+    contract_digest = command_contract_digest(root, command_id)
     if dry_run:
         return {
             "ok": True,
@@ -4742,6 +4757,7 @@ def validate_command(
                 "timeout_seconds": command["timeout_seconds"],
                 "max_output_bytes": command["max_output_bytes"],
                 "environment_keys": sorted(allowed_environment(command["env_allow"])),
+                "command_contract_digest": contract_digest,
             },
         }
     cache_dir = root / ".dls" / "cache" / "validation" / change_id
@@ -4757,11 +4773,21 @@ def validate_command(
         )
         output_text = redact_text(execution["output"].decode("utf-8", errors="replace"))
         atomic_write_text(output_path, output_text, backup=False)
+        output_digest = execution["output_sha256"]
+        failure_excerpt = ""
+        if (
+            execution["exit_code"] != 0
+            or execution["timed_out"]
+            or execution["overflow"]
+        ):
+            failure_excerpt = output_text[-4096:]
         summary = (
             f"command={command_id}; exit={execution['exit_code']}; "
             f"timeout={execution['timed_out']}; output_bytes={execution['output_bytes']}; "
-            f"output_overflow={execution['overflow']}\n{output_text}"
+            f"output_overflow={execution['overflow']}; output_sha256={output_digest}"
         )
+        if failure_excerpt:
+            summary += "\nexcerpt=" + failure_excerpt
         evidence = evidence_add(
             root,
             change_id=change_id,
@@ -4779,11 +4805,16 @@ def validate_command(
                 "timed_out": execution["timed_out"],
                 "output_bytes": execution["output_bytes"],
                 "output_overflow": execution["overflow"],
+                "spawn_error": execution["spawn_error"],
+                "output_sha256": output_digest,
+                "command_contract_digest": contract_digest,
+                "redacted_log_path": str(output_path.relative_to(root)),
             },
         )
         evidence["validation"] = {
             "timed_out": execution["timed_out"],
             "output_overflow": execution["overflow"],
+            "spawn_error": execution["spawn_error"],
             "redacted_log_path": str(output_path.relative_to(root)),
         }
         evidence["ok"] = (
@@ -5417,8 +5448,10 @@ def _run_bounded_command(
             "exit_code": 127,
             "timed_out": False,
             "overflow": len(message) > max_output_bytes,
+            "spawn_error": True,
             "output": message[:max_output_bytes],
             "output_bytes": len(message),
+            "output_sha256": sha256_bytes(message),
             "duration_seconds": time.monotonic() - started,
         }
     assert process.stdout is not None
@@ -5426,6 +5459,7 @@ def _run_bounded_command(
     selector.register(process.stdout, selectors.EVENT_READ)
     retained = bytearray()
     total = 0
+    output_hasher = hashlib.sha256()
     timed_out = False
     overflow = False
 
@@ -5455,6 +5489,7 @@ def _run_bounded_command(
                     selector.unregister(key.fileobj)
                     continue
                 total += len(chunk)
+                output_hasher.update(chunk)
                 remaining = max_output_bytes - len(retained)
                 if remaining > 0:
                     retained.extend(chunk[:remaining])
@@ -5476,7 +5511,9 @@ def _run_bounded_command(
         "exit_code": exit_code,
         "timed_out": timed_out,
         "overflow": overflow,
+        "spawn_error": False,
         "output": bytes(retained),
         "output_bytes": total,
+        "output_sha256": output_hasher.hexdigest(),
         "duration_seconds": time.monotonic() - started,
     }

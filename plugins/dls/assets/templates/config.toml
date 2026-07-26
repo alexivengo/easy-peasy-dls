@@ -6,8 +6,9 @@ default_profile = "generic"
 require_git_for_acceptance_review = true
 max_spawned_agents = 3
 max_agent_depth = 1
-# Optional stage-specific validation gates. When omitted, standard and critical
-# review keep the compatibility rule of at least one current successful command.
+# Stage-specific validation gates. candidate-ready requires an explicit
+# review_required_commands list. Low-level review-ready keeps the compatibility
+# rule of at least one current successful command when the list is omitted.
 # review_required_commands = ["test", "lint"]
 # acceptance_required_commands = ["test", "integration"]
 

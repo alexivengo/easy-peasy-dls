@@ -280,6 +280,21 @@ def command_config(root: Path, command_id: str) -> dict[str, Any]:
     }
 
 
+def command_contract_digest(root: Path, command_id: str) -> str:
+    """Bind reusable evidence to the exact trusted command contract."""
+    command = command_config(root, command_id)
+    payload = json.dumps(
+        {
+            "command_id": command_id,
+            **command,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256_bytes(payload)
+
+
 def allowed_environment(names: list[str]) -> dict[str, str]:
     environment: dict[str, str] = {}
     for key in ("PATH", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT", "WINDIR"):

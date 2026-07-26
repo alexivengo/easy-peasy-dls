@@ -53,6 +53,13 @@ DLS сначала определяет масштаб и риск:
 - умеет зарегистрировать отдельный worktree без добавления каждого worktree как проекта Codex;
 - возвращает одно типизированное `next_action`, когда следующий шаг пока невозможен.
 
+После committed candidate один `candidate-ready` автоматически завершает
+механическую часть implementation: выполняет обязательные review-команды,
+создаёт exact-HEAD evidence, записывает заявленные dispositions и атомарно
+создаёт ReviewPack. Implementer не переносит state revision, SHA или evidence
+paths. Полные validation logs остаются в локальном cache; модель получает только
+компактный итог или ограниченный фрагмент ошибки.
+
 Implementer может отметить finding как `addressed`, но не как `verified`. Если finding спорный или попал не в тот gate, `note` передаёт его на независимое adjudication и ничего не закрывает. Проверка исправления и reclassification принадлежат reviewer.
 
 ## 3. Независимо проверили
@@ -110,6 +117,8 @@ Runner выбирает только pack текущего HEAD. Для повт
 - mechanics вынесены в Python CLI и JSON schemas;
 - повторный review получает только последний актуальный ReviewIR и remediation manifest;
 - evidence дедуплицируется по command ID;
+- successful validation output заменяется компактным результатом и digest;
+- implementation handoff использует один deterministic `candidate-ready` вместо цикла CLI-команд;
 - generated status не переписывает authored definition;
 - routine work не получает пакет документов для critical work;
 - новые сессии используют manifest вместо копирования старого диалога.

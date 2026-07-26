@@ -22,6 +22,25 @@ CLI = PLUGIN_ROOT / "scripts" / "dls.py"
 
 
 class RunnerAndCLITests(unittest.TestCase):
+    def test_candidate_cli_accepts_compact_finding_map(self) -> None:
+        arguments = build_parser().parse_args(
+            [
+                "candidate-ready",
+                "EPIC-01",
+                "--address",
+                "R001",
+                "--address",
+                "R002,R003",
+                "--note",
+                "R004",
+                "--extra-command",
+                "focused",
+            ]
+        )
+        self.assertEqual(_evidence_paths(arguments.address), ["R001", "R002", "R003"])
+        self.assertEqual(arguments.note, ["R004"])
+        self.assertEqual(arguments.extra_command, ["focused"])
+
     def test_finding_cli_normalizes_multiple_evidence_spellings(self) -> None:
         arguments = build_parser().parse_args(
             [

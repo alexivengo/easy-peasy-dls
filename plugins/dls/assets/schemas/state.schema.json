@@ -49,6 +49,7 @@
     "approvals": { "type": "array" },
     "tickets": { "type": "object" },
     "reviews": { "type": "array" },
+    "candidate_runs": { "type": "array" },
     "finding_dispositions": { "type": "array" },
     "evidence": { "type": "array" },
     "operations": { "type": "array" }

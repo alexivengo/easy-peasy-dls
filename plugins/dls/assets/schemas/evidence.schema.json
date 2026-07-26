@@ -20,6 +20,22 @@
     "recorded_at": { "type": "string" },
     "exit_code": { "type": "integer" },
     "summary": { "type": "string" },
+    "extra": {
+      "type": "object",
+      "properties": {
+        "command_contract_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "output_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "redacted_log_path": { "type": "string" },
+        "spawn_error": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
     "source_digest": {
       "type": ["string", "null"],
       "pattern": "^[0-9a-f]{64}$"
