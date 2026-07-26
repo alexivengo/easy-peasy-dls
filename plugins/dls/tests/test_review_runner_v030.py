@@ -27,8 +27,10 @@ from dls_core.operations import (
     ticket_set,
 )
 from dls_core.review_runner import (
+    _codex_failure_reason,
     _derive_review_verdict,
     _derive_ticket_verdicts,
+    _validate_strict_output_schema,
     _validate_structured_payload,
     review_run,
     review_status,
@@ -46,6 +48,29 @@ from support import (
 
 
 class ReviewRunnerV030Tests(unittest.TestCase):
+    def test_model_output_schema_is_strict_and_failure_reason_is_actionable(self) -> None:
+        schema_path = (
+            Path(__file__).resolve().parents[1]
+            / "assets"
+            / "schemas"
+            / "review-decision.schema.json"
+        )
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        _validate_strict_output_schema(schema)
+        broken = json.loads(json.dumps(schema))
+        broken["properties"]["optional_field"] = {"type": "string"}
+        with self.assertRaisesRegex(IntegrityError, "missing=optional_field"):
+            _validate_strict_output_schema(broken)
+        transcript = (
+            b'{"type":"turn.failed","error":{"message":"'
+            b'{\\"error\\":{\\"code\\":\\"invalid_json_schema\\",'
+            b'\\"message\\":\\"missing required field\\"}}"}}\n'
+        )
+        self.assertEqual(
+            _codex_failure_reason(transcript, exit_code=1),
+            "invalid_json_schema: missing required field",
+        )
+
     def test_runner_derives_stage_correct_ticket_verdicts(self) -> None:
         pack = {"tickets": {"T01": {}, "T04": {}}}
         findings = [
@@ -162,6 +187,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         *,
         native_sleep: float = 0.0,
         invalid_semantic_once: bool = False,
+        semantic_exit: int = 0,
         native_exit: int = 0,
         reconciliation_blocker: bool = False,
     ) -> tuple[str | None, Path, Path]:
@@ -207,8 +233,6 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             "    pack_item = next(item for item in context['inputs'] "
             "if item.get('reason') == 'active-review-pack')\n"
             "    pack = json.loads(Path(pack_item['path']).read_text())\n"
-            "    ticket_verdicts = [{'ticket_id': ticket_id, 'verdict': 'clear', "
-            "'finding_ids': []} for ticket_id in pack.get('tickets', {})]\n"
             "    prior_verdicts = [{'finding_id': item['finding_id'], "
             "'verdict': 'verified', 'replacement_finding_id': None, "
             "'evidence': ['verified by fake reviewer']} for item in "
@@ -225,6 +249,15 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             "            kind = 'semantic-independent'\n"
             "            if Path('.dls-review-input/native.txt').exists():\n"
             "                raise SystemExit(68)\n"
+            f"            if {semantic_exit!r}:\n"
+            "                counter.parent.mkdir(parents=True, exist_ok=True)\n"
+            "                with counter.open('a') as handle: "
+            "handle.write(kind + '\\n')\n"
+            "                print(json.dumps({'type': 'turn.failed', "
+            "'error': {'message': json.dumps({'error': {"
+            "'code': 'synthetic_model_failure', "
+            "'message': 'semantic lane failed'}})}}))\n"
+            f"                raise SystemExit({semantic_exit!r})\n"
             f"            if {invalid_semantic_once!r} and not invalid_marker.exists():\n"
             "                invalid_marker.write_text('used')\n"
             "                output.write_text('{}')\n"
@@ -239,8 +272,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             "        elif prompt.startswith('# DLS remediation final-full review'):\n"
             "            kind = 'final-full'\n"
             "        payload = {'verdict': 'review-clear', 'summary': 'clear', "
-            "'findings': [], 'ticket_verdicts': ticket_verdicts, "
-            "'prior_finding_verdicts': prior_verdicts}\n"
+            "'findings': [], 'prior_finding_verdicts': prior_verdicts}\n"
             f"        if {reconciliation_blocker!r} and kind == 'reconciliation':\n"
             "            payload['verdict'] = 'not-clear'\n"
             "            payload['summary'] = 'blocker remains'\n"
@@ -393,6 +425,83 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 [item["status"] for item in semantic],
                 ["invalid-output", "completed"],
             )
+
+    def test_changed_lane_contract_retries_without_reusing_native_or_operation_id(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, pack_result = self._prepared_standard(root)
+            pack = pack_result["review_pack"]
+            start_review_with_fake_codex(
+                root,
+                change_id="C001",
+                operation_id="legacy-native",
+            )
+            store = StateStore(root)
+            _, _, claimed = store.claim_review_lane(
+                "C001",
+                attempt={
+                    "review_id": pack["review_id"],
+                    "kind": "semantic",
+                    "lane_key": "semantic:full",
+                    "attempt_id": "legacy-semantic-failure",
+                    "attempt_ordinal": 1,
+                    "operation_id": "shared-root:semantic-full",
+                    "runner_pid": os.getpid(),
+                    "runner_contract": REVIEW_RUNNER_CONTRACT,
+                    "head_sha": pack["head_sha"],
+                    "pack_digest": pack["pack_digest"],
+                    "model": "gpt-5.6-sol",
+                    "reasoning_effort": "high",
+                    "schema_digest": "legacy-invalid-schema",
+                    "started_at": utc_now(),
+                },
+                operation_kind="review-run:semantic:full",
+            )
+            self.assertTrue(claimed)
+            store.finish_review_lane(
+                "C001",
+                attempt_id="legacy-semantic-failure",
+                expected_status="running",
+                updates={
+                    "status": "failed",
+                    "failure_reason": "invalid_json_schema",
+                    "completed_at": utc_now(),
+                },
+            )
+            projected = review_status(root, change_id="C001")
+            self.assertEqual(projected["next_action"]["id"], "retry-review")
+            original, counter, _ = self._install_fake_codex(root)
+            try:
+                completed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="shared-root",
+                )
+            finally:
+                self._restore_path(original)
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(
+                counter.read_text(encoding="utf-8").splitlines(),
+                ["semantic-independent", "reconciliation"],
+            )
+            state = StateStore(root).load("C001")
+            semantic = [
+                item
+                for item in state["reviews"]
+                if item.get("lane_key") == "semantic:full"
+            ]
+            self.assertEqual(
+                [item["status"] for item in semantic],
+                ["failed", "completed"],
+            )
+            self.assertNotEqual(
+                semantic[0]["operation_id"],
+                semantic[1]["operation_id"],
+            )
+            self.assertIn(pack["review_id"], semantic[1]["operation_id"])
 
     def test_review_run_dry_run_projects_pipeline_without_model_or_state_write(
         self,
@@ -672,6 +781,44 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertEqual(
                 counter.read_text(encoding="utf-8").splitlines(),
                 ["native"],
+            )
+
+    def test_semantic_api_failure_finalizes_pipeline_and_exposes_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                semantic_exit=7,
+            )
+            try:
+                with self.assertRaisesRegex(
+                    IntegrityError,
+                    "synthetic_model_failure: semantic lane failed",
+                ):
+                    review_run(
+                        root,
+                        change_id="C001",
+                        pack_path=None,
+                        operation_id="semantic-failure-root",
+                    )
+                failed = review_status(root, change_id="C001", verbose=True)
+            finally:
+                self._restore_path(original)
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(
+                failed["next_action"]["id"],
+                "inspect-review-failure",
+            )
+            self.assertEqual(failed["pipeline"]["status"], "failed")
+            self.assertEqual(failed["pipeline"]["stage"], "semantic:full")
+            self.assertIn(
+                "synthetic_model_failure",
+                failed["pipeline"]["failure_reason"],
+            )
+            self.assertEqual(
+                counter.read_text(encoding="utf-8").splitlines(),
+                ["native", "semantic-independent"],
             )
 
     def test_finalize_failure_is_visible_and_resume_reuses_completed_lanes(self) -> None:

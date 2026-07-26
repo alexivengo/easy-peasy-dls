@@ -26,13 +26,6 @@
         "$ref": "#/$defs/finding"
       }
     },
-    "ticket_verdicts": {
-      "description": "Deprecated advisory field. DLS derives canonical ticket verdicts from findings and stage blockers.",
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/ticketVerdict"
-      }
-    },
     "prior_finding_verdicts": {
       "type": "array",
       "items": {
@@ -112,33 +105,6 @@
           }
         },
         "provenance": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    "ticketVerdict": {
-      "type": "object",
-      "required": [
-        "ticket_id",
-        "verdict",
-        "finding_ids"
-      ],
-      "properties": {
-        "ticket_id": {
-          "type": "string"
-        },
-        "verdict": {
-          "enum": [
-            "clear",
-            "not-clear",
-            "blocked"
-          ]
-        },
-        "finding_ids": {
           "type": "array",
           "items": {
             "type": "string"

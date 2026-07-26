@@ -3465,7 +3465,9 @@ def review_start(
             change_id=change_id,
             base_ref=inferred_base,
             expected_revision=state["state_revision"],
-            operation_id=f"{effective_operation_id}:prepare",
+            operation_id=(
+                f"{effective_operation_id}:prepare:{git_head(owner)}"
+            ),
             dry_run=dry_run,
         )
         if not prepared["ok"]:
@@ -3490,6 +3492,7 @@ def review_start(
             state = StateStore(owner).load(change_id)
     if pack is None:
         raise IntegrityError("ReviewPack preparation did not return a pack")
+    lane_operation_root = f"{effective_operation_id}:{pack['review_id']}"
     _validate_review_pack_current(owner, state=state, pack=pack)
     native_required = "native-diff" in pack["required_lanes"]
     native_entry = _successful_native_entry(
@@ -3501,7 +3504,7 @@ def review_start(
     predicted_attempt_id = str(
         uuid.uuid5(
             uuid.NAMESPACE_URL,
-            f"dls:{change_id}:{pack['review_id']}:native:1:{effective_operation_id}",
+            f"dls:{change_id}:{pack['review_id']}:native:1:{lane_operation_root}",
         )
     )
     predicted_output_path = (
@@ -3637,9 +3640,9 @@ def review_start(
                 )
             ordinal = len(attempts) + 1
             lane_operation_id = (
-                effective_operation_id
+                lane_operation_root
                 if ordinal == 1
-                else f"{effective_operation_id}:retry-{ordinal}"
+                else f"{lane_operation_root}:retry-{ordinal}"
             )
             attempt_id = str(
                 uuid.uuid5(

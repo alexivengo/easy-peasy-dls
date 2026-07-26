@@ -62,6 +62,101 @@ SPECIALIST_EFFORT = "high"
 REVIEW_PROMPTS_ROOT = PLUGIN_ROOT / "assets" / "review-prompts"
 
 
+def _validate_strict_output_schema(value: Any, *, location: str = "$") -> None:
+    """Reject schemas that the Responses API strict validator will reject.
+
+    Codex structured output requires every declared object property to be
+    required and forbids additional properties. Validating this locally keeps a
+    mechanical schema defect from consuming a model lane and failing remotely.
+    """
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _validate_strict_output_schema(item, location=f"{location}[{index}]")
+        return
+    if not isinstance(value, dict):
+        return
+    properties = value.get("properties")
+    if isinstance(properties, dict):
+        required = value.get("required")
+        if not isinstance(required, list) or set(required) != set(properties):
+            missing = sorted(set(properties) - set(required or []))
+            extra = sorted(set(required or []) - set(properties))
+            details = []
+            if missing:
+                details.append("missing=" + ",".join(missing))
+            if extra:
+                details.append("extra=" + ",".join(extra))
+            raise IntegrityError(
+                f"Strict output schema required mismatch at {location}: "
+                + ("; ".join(details) or "required must equal properties")
+            )
+        if value.get("additionalProperties") is not False:
+            raise IntegrityError(
+                f"Strict output schema must set additionalProperties=false at {location}"
+            )
+    for key, item in value.items():
+        _validate_strict_output_schema(item, location=f"{location}.{key}")
+
+
+def _lane_contract_digest(
+    *,
+    pack: dict[str, Any],
+    lane_key: str,
+    model: str,
+    effort: str,
+    prompt_digest: str,
+    schema_digest: str,
+    context_digest: str,
+) -> str:
+    contract = {
+        "runner_contract": REVIEW_RUNNER_CONTRACT,
+        "review_id": pack["review_id"],
+        "lane_key": lane_key,
+        "pack_digest": pack["pack_digest"],
+        "head_sha": pack["head_sha"],
+        "model": model,
+        "reasoning_effort": effort,
+        "prompt_digest": prompt_digest,
+        "schema_digest": schema_digest,
+        "context_digest": context_digest,
+    }
+    return sha256_bytes(
+        json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+
+def _codex_failure_reason(output: bytes, *, exit_code: int | None) -> str:
+    """Extract the bounded API/CLI reason from a Codex JSONL transcript."""
+    candidates: list[str] = []
+    for raw_line in output.decode("utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        message = event.get("message")
+        if isinstance(message, str):
+            candidates.append(message)
+        error = event.get("error")
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            candidates.append(error["message"])
+    for candidate in reversed(candidates):
+        try:
+            nested = json.loads(candidate)
+        except json.JSONDecodeError:
+            return candidate[:2000]
+        if isinstance(nested, dict) and isinstance(nested.get("error"), dict):
+            error = nested["error"]
+            code = error.get("code")
+            message = error.get("message")
+            if isinstance(message, str):
+                prefix = f"{code}: " if isinstance(code, str) and code else ""
+                return (prefix + message)[:2000]
+        return candidate[:2000]
+    return f"codex exec exited with code {exit_code}"
+
+
 def _owner_root(root: Path, change_id: str) -> tuple[Path, str]:
     candidate = root.resolve()
     if (
@@ -242,6 +337,59 @@ def _progress_summary(
     }
 
 
+def _terminal_lane_next_action(
+    terminal: dict[str, Any],
+    lane_attempts: list[dict[str, Any]],
+) -> dict[str, str]:
+    lane_key = terminal.get("lane_key")
+    current_schema_digest: str | None = None
+    if isinstance(lane_key, str) and lane_key.startswith("specialist:"):
+        current_schema_digest = sha256_file(
+            SCHEMAS_ROOT / "specialist-decision.schema.json"
+        )
+    elif lane_key in {
+        "semantic:full",
+        "semantic:targeted",
+        "semantic:final-full",
+        "reconciliation",
+    }:
+        current_schema_digest = sha256_file(
+            SCHEMAS_ROOT / "review-decision.schema.json"
+        )
+    if (
+        current_schema_digest is not None
+        and terminal.get("schema_digest") != current_schema_digest
+    ):
+        return {
+            "id": "retry-review",
+            "detail": "the installed lane contract changed after the failed attempt",
+        }
+    contract_digest = terminal.get("lane_contract_digest")
+    matching = [
+        item
+        for item in lane_attempts
+        if item.get("lane_key") == lane_key
+        and (
+            item.get("lane_contract_digest") == contract_digest
+            if isinstance(contract_digest, str) and contract_digest
+            else item.get("schema_digest") == terminal.get("schema_digest")
+        )
+    ]
+    if (
+        terminal.get("status") in RETRYABLE_REVIEW_LANE_STATUSES
+        and len(matching) < REVIEW_LANE_MAX_ATTEMPTS
+    ):
+        return {
+            "id": "retry-review",
+            "detail": f"last_status={terminal.get('status')}",
+        }
+    return {
+        "id": "inspect-review-failure",
+        "detail": terminal.get("failure_reason")
+        or f"last_status={terminal.get('status')}; automatic retry is not safe",
+    }
+
+
 def review_status(
     root: Path,
     *,
@@ -303,7 +451,7 @@ def review_status(
     terminal_lane = next(
         (
             item
-            for item in reversed(lane_attempts)
+            for item in reversed(list(latest_by_lane.values()))
             if item.get("status") not in {"completed", "running"}
         ),
         None,
@@ -319,10 +467,7 @@ def review_status(
         next_action = {"id": "review-complete", "detail": result_entry["result_path"]}
     elif terminal_lane is not None:
         status_value = "failed"
-        next_action = {
-            "id": "retry-review",
-            "detail": f"last_status={terminal_lane.get('status')}",
-        }
+        next_action = _terminal_lane_next_action(terminal_lane, lane_attempts)
     elif any(item.get("status") == "running" for item in latest_by_lane.values()) or pipeline_alive:
         status_value = "running"
         next_action = {"id": "wait-review", "detail": "review pipeline is active"}
@@ -610,6 +755,26 @@ def _completed_lane_payload(
     return payload
 
 
+def _mark_lane_pipeline_failed(
+    owner: Path,
+    *,
+    change_id: str,
+    review_id: str,
+    operation_id: str,
+    lane_key: str,
+    reason: str,
+) -> None:
+    _update_pipeline(
+        owner,
+        change_id=change_id,
+        review_id=review_id,
+        operation_id=operation_id,
+        stage=lane_key,
+        status="failed",
+        failure_reason=reason,
+    )
+
+
 def _execute_structured_lane(
     owner: Path,
     *,
@@ -630,9 +795,31 @@ def _execute_structured_lane(
     state_store = StateStore(owner)
     safe_lane = lane_key.replace(":", "-")
     prompt_digest = sha256_bytes(prompt_text.encode("utf-8"))
+    schema = read_json(schema_path)
+    try:
+        _validate_strict_output_schema(schema)
+    except IntegrityError as exc:
+        _mark_lane_pipeline_failed(
+            owner,
+            change_id=change_id,
+            review_id=pack["review_id"],
+            operation_id=root_operation_id,
+            lane_key=lane_key,
+            reason=str(exc),
+        )
+        raise
     schema_digest = sha256_file(schema_path)
     context_source = safe_resolve(owner, context_path, must_exist=True)
     context_digest = sha256_file(context_source)
+    lane_contract_digest = _lane_contract_digest(
+        pack=pack,
+        lane_key=lane_key,
+        model=model,
+        effort=effort,
+        prompt_digest=prompt_digest,
+        schema_digest=schema_digest,
+        context_digest=context_digest,
+    )
     while True:
         state = state_store.load(change_id)
         attempts = _review_lane_entries(
@@ -640,6 +827,11 @@ def _execute_structured_lane(
             review_id=pack["review_id"],
             lane_key=lane_key,
         )
+        contract_attempts = [
+            item
+            for item in attempts
+            if item.get("lane_contract_digest") == lane_contract_digest
+        ]
         running = next(
             (
                 item
@@ -667,7 +859,7 @@ def _execute_structured_lane(
         completed = next(
             (
                 item
-                for item in reversed(attempts)
+                for item in reversed(contract_attempts)
                 if item.get("status") == "completed"
             ),
             None,
@@ -679,16 +871,42 @@ def _execute_structured_lane(
                 payload_kind=payload_kind,
                 lens_id=lens_id,
             )
-        terminal = attempts[-1] if attempts else None
+        terminal = contract_attempts[-1] if contract_attempts else None
         if terminal and terminal.get("status") not in RETRYABLE_REVIEW_LANE_STATUSES:
-            raise IntegrityError(
+            reason = terminal.get("failure_reason") or (
                 f"Review lane {lane_key} failed: status={terminal.get('status')}"
             )
-        if len(attempts) >= REVIEW_LANE_MAX_ATTEMPTS:
-            raise IntegrityError(
-                f"Review lane {lane_key} exhausted automatic attempts"
+            _mark_lane_pipeline_failed(
+                owner,
+                change_id=change_id,
+                review_id=pack["review_id"],
+                operation_id=root_operation_id,
+                lane_key=lane_key,
+                reason=reason,
             )
-        ordinal = len(attempts) + 1
+            raise IntegrityError(
+                f"Review lane {lane_key} failed: status={terminal.get('status')}; "
+                f"reason={reason}"
+            )
+        if len(contract_attempts) >= REVIEW_LANE_MAX_ATTEMPTS:
+            reason = f"Review lane {lane_key} exhausted automatic attempts"
+            _mark_lane_pipeline_failed(
+                owner,
+                change_id=change_id,
+                review_id=pack["review_id"],
+                operation_id=root_operation_id,
+                lane_key=lane_key,
+                reason=reason,
+            )
+            raise IntegrityError(reason)
+        ordinal = max(
+            (
+                item.get("attempt_ordinal", 0)
+                for item in attempts
+                if isinstance(item.get("attempt_ordinal", 0), int)
+            ),
+            default=0,
+        ) + 1
         operation_id = (
             f"{root_operation_id}:{safe_lane}"
             if ordinal == 1
@@ -727,6 +945,7 @@ def _execute_structured_lane(
             "operation_id": operation_id,
             "runner_pid": os.getpid(),
             "runner_contract": REVIEW_RUNNER_CONTRACT,
+            "lane_contract_digest": lane_contract_digest,
             "status": "running",
             "base_sha": pack.get("comparison_base_sha", pack["base_sha"]),
             "head_sha": pack["head_sha"],
@@ -805,6 +1024,10 @@ def _execute_structured_lane(
                 status_value = "timeout"
             elif execution["exit_code"] != 0:
                 status_value = "failed"
+                failure_reason = _codex_failure_reason(
+                    execution["output"],
+                    exit_code=execution["exit_code"],
+                )
             elif not output_exists or output_bytes == 0:
                 status_value = "missing-output"
             elif output_overflow:
@@ -888,8 +1111,20 @@ def _execute_structured_lane(
             return recorded, payload
         if recorded["status"] in RETRYABLE_REVIEW_LANE_STATUSES:
             continue
-        raise IntegrityError(
+        reason = recorded.get("failure_reason") or (
             f"Review lane {lane_key} failed: status={recorded['status']}"
+        )
+        _mark_lane_pipeline_failed(
+            owner,
+            change_id=change_id,
+            review_id=pack["review_id"],
+            operation_id=root_operation_id,
+            lane_key=lane_key,
+            reason=reason,
+        )
+        raise IntegrityError(
+            f"Review lane {lane_key} failed: status={recorded['status']}; "
+            f"reason={reason}"
         )
 
 
@@ -1200,6 +1435,7 @@ def review_run(
         state,
         started["review_id"],
     )
+    pipeline_operation_id = f"{effective_operation_id}:{pack['review_id']}"
     _validate_review_pack_current(owner, state=state, pack=pack)
     context_path = started["review_context_path"]
     semantic_effort = _semantic_review_effort(state)
@@ -1214,7 +1450,7 @@ def review_run(
         owner,
         change_id=change_id,
         review_id=pack["review_id"],
-        operation_id=effective_operation_id,
+        operation_id=pipeline_operation_id,
         stage="specialists" if pack.get("risk_lenses") else "semantic-independent",
         create=True,
     )
@@ -1225,7 +1461,7 @@ def review_run(
             owner,
             change_id=change_id,
             review_id=pack["review_id"],
-            operation_id=effective_operation_id,
+            operation_id=pipeline_operation_id,
             stage=f"specialist:{lens['id']}",
         )
         prompt = _render_prompt(
@@ -1241,7 +1477,7 @@ def review_run(
             change_id=change_id,
             pack=pack,
             context_path=context_path,
-            root_operation_id=effective_operation_id,
+            root_operation_id=pipeline_operation_id,
             lane_key=f"specialist:{lens['id']}",
             lane_kind="specialist",
             model=SPECIALIST_MODEL,
@@ -1281,7 +1517,7 @@ def review_run(
         owner,
         change_id=change_id,
         review_id=pack["review_id"],
-        operation_id=effective_operation_id,
+        operation_id=pipeline_operation_id,
         stage=f"semantic:{independent_kind}",
     )
     independent_entry, independent_decision = _execute_structured_lane(
@@ -1289,7 +1525,7 @@ def review_run(
         change_id=change_id,
         pack=pack,
         context_path=context_path,
-        root_operation_id=effective_operation_id,
+        root_operation_id=pipeline_operation_id,
         lane_key=f"semantic:{independent_kind}",
         lane_kind="semantic",
         model=SEMANTIC_MODEL,
@@ -1321,7 +1557,7 @@ def review_run(
         owner,
         change_id=change_id,
         review_id=pack["review_id"],
-        operation_id=effective_operation_id,
+        operation_id=pipeline_operation_id,
         stage="reconciliation",
     )
     reconciliation_entry, decision = _execute_structured_lane(
@@ -1329,7 +1565,7 @@ def review_run(
         change_id=change_id,
         pack=pack,
         context_path=context_path,
-        root_operation_id=effective_operation_id,
+        root_operation_id=pipeline_operation_id,
         lane_key="reconciliation",
         lane_kind="reconciliation",
         model=SEMANTIC_MODEL,
@@ -1367,7 +1603,7 @@ def review_run(
             owner,
             change_id=change_id,
             review_id=pack["review_id"],
-            operation_id=effective_operation_id,
+            operation_id=pipeline_operation_id,
             stage="semantic:final-full",
         )
         final_full_entry, final_decision = _execute_structured_lane(
@@ -1375,7 +1611,7 @@ def review_run(
             change_id=change_id,
             pack=pack,
             context_path=context_path,
-            root_operation_id=effective_operation_id,
+            root_operation_id=pipeline_operation_id,
             lane_key="semantic:final-full",
             lane_kind="semantic",
             model=SEMANTIC_MODEL,
@@ -1416,7 +1652,7 @@ def review_run(
         owner,
         change_id=change_id,
         review_id=pack["review_id"],
-        operation_id=effective_operation_id,
+        operation_id=pipeline_operation_id,
         stage="finalizing",
     )
     try:
@@ -1444,14 +1680,14 @@ def review_run(
             change_id=change_id,
             report_path=report_relative,
             expected_revision=current_state["state_revision"],
-            operation_id=f"{effective_operation_id}:import",
+            operation_id=f"{pipeline_operation_id}:import",
         )
     except Exception as exc:
         _update_pipeline(
             owner,
             change_id=change_id,
             review_id=pack["review_id"],
-            operation_id=effective_operation_id,
+            operation_id=pipeline_operation_id,
             stage="finalizing",
             status="failed-finalize",
             failure_reason=f"{type(exc).__name__}: {exc}",
@@ -1461,7 +1697,7 @@ def review_run(
         owner,
         change_id=change_id,
         review_id=pack["review_id"],
-        operation_id=effective_operation_id,
+        operation_id=pipeline_operation_id,
         stage="completed",
         status="completed",
     )

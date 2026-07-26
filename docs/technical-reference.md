@@ -148,15 +148,21 @@ Model-runs выполняются через `codex exec` в read-only ephemeral
 встроенный prompt официального `codex exec review --base` и сохраняет его
 bounded text result; текущий Codex CLI не применяет structured output schema к
 этому subcommand. Все DLS-owned semantic decisions используют repository-owned
-prompt templates и schemas. Native, semantic и specialist lanes получают
-disposable detached worktree exact HEAD, поэтому локальные DLS metadata не
-попадают в анализ candidate. Independent lanes не видят native output или drafts
-соседних lanes; reconciliation получает их как digest-bound inputs.
+prompt templates и schemas. Перед модельным вызовом DLS локально проверяет
+strict Structured Outputs contract: каждый object запрещает дополнительные
+поля, а `required` точно совпадает с `properties`. Механически некорректная
+schema поэтому останавливается до API-вызова. Native, semantic и specialist
+lanes получают disposable detached worktree exact HEAD, поэтому локальные DLS
+metadata не попадают в анализ candidate. Independent lanes не видят native
+output или drafts соседних lanes; reconciliation получает их как digest-bound
+inputs.
 
 До запуска модели `StateStore` атомарно записывает attempt со статусом `running`.
 Для сочетания `review ID + lane + pass` возможна только одна активная попытка.
 Повторный `review-run` возвращает `status: running` и `next_action: wait-review`,
-не запуская вторую модель. `review-status` только читает state.
+не запуская вторую модель. Внутренние operation IDs включают review ID, поэтому
+одинаковая пользовательская метка не смешивает attempts разных ревизий.
+`review-status` только читает state.
 
 ### Наблюдаемость и финализация
 
@@ -173,10 +179,12 @@ skill читает `review-status` отдельной read-only командой
 предварительные findings пользователю не транслируются.
 
 Pipeline отдельно фиксирует `running`, `finalizing`, `failed-finalize` и
-`completed`. Если все model lanes завершились, но deterministic assembly или
-atomic import не прошли, следующий `review-run` проверяет exact HEAD, pack,
-context и output digests, переиспользует completed attempts и повторяет только
-финализацию.
+`completed`. Ошибка lane переводит pipeline в `failed` и сохраняет извлечённую
+причину API/CLI, а `next_action` предлагает retry только когда runner
+действительно может его выполнить. Если все model lanes завершились, но
+deterministic assembly или atomic import не прошли, следующий `review-run`
+проверяет exact HEAD, pack, context и output digests, переиспользует completed
+attempts и повторяет только финализацию.
 
 Canonical ticket verdicts не доверяются модели. DLS механически связывает
 findings с tickets и вычисляет review state из severity и `blocks`. Поэтому
@@ -192,7 +200,10 @@ API. DLS не отправляет эти данные во внешний analy
 output получают не более одной автоматической повторной попытки. Drift HEAD,
 source, definition или pack не повторяется автоматически. Timeout одной попытки
 — 30 минут; final output ограничен 256 KiB, JSONL transcript — 1 MiB с явным
-признаком truncation.
+признаком truncation. Model, effort, prompt, schema, context, pack и HEAD входят
+в digest lane contract: после исправления самого DLS старая failed attempt
+остаётся в истории, но не расходует retry budget нового контракта. Completed lane
+переиспользуется только при точном совпадении этого digest.
 
 Новые packs помечаются `runner_contract: dls-review-runner/v1`. Для них import
 доверяет provenance только completed attempts из DLS state: модель возвращает
@@ -220,6 +231,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.3.4`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.3.5`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

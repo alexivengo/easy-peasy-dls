@@ -14,6 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "dls"
 MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 MANIFEST = PLUGIN / ".codex-plugin" / "plugin.json"
+MODEL_OUTPUT_SCHEMAS = (
+    PLUGIN / "assets" / "schemas" / "review-decision.schema.json",
+    PLUGIN / "assets" / "schemas" / "specialist-decision.schema.json",
+)
 
 REQUIRED_FILES = (
     ROOT / "README.md",
@@ -151,6 +155,39 @@ def validate_json_files() -> None:
             load_json(path)
 
 
+def validate_strict_output_schema(value: object, *, location: str = "$") -> None:
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            validate_strict_output_schema(item, location=f"{location}[{index}]")
+        return
+    if not isinstance(value, dict):
+        return
+    properties = value.get("properties")
+    if isinstance(properties, dict):
+        required = value.get("required")
+        if not isinstance(required, list) or set(required) != set(properties):
+            fail(
+                f"Structured-output schema {location}: required должен точно "
+                "совпадать с properties"
+            )
+        if value.get("additionalProperties") is not False:
+            fail(
+                f"Structured-output schema {location}: "
+                "additionalProperties должен быть false"
+            )
+    for key, item in value.items():
+        validate_strict_output_schema(item, location=f"{location}.{key}")
+
+
+def validate_model_output_schemas() -> None:
+    for path in MODEL_OUTPUT_SCHEMAS:
+        schema = load_json(path)
+        validate_strict_output_schema(
+            schema,
+            location=str(path.relative_to(ROOT)),
+        )
+
+
 def validate_skills() -> None:
     for skill_name in ("dls-workflow", "dls-debug"):
         skill = PLUGIN / "skills" / skill_name / "SKILL.md"
@@ -185,6 +222,7 @@ def main() -> int:
         validate_marketplace,
         validate_plugin_manifest,
         validate_json_files,
+        validate_model_output_schemas,
         validate_skills,
         validate_public_surface,
     )

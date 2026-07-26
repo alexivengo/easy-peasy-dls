@@ -342,6 +342,16 @@ class StateStore:
                 and item.get("review_id") == review_id
                 and item.get("lane_key") == lane_key
             ]
+            contract_digest = attempt.get("lane_contract_digest")
+            contract_attempts = (
+                [
+                    item
+                    for item in attempts
+                    if item.get("lane_contract_digest") == contract_digest
+                ]
+                if isinstance(contract_digest, str) and contract_digest
+                else attempts
+            )
             matching = next(
                 (item for item in attempts if item.get("attempt_id") == attempt_id),
                 None,
@@ -358,8 +368,8 @@ class StateStore:
             )
             if running:
                 return state, running, False
-            if len(attempts) >= max_attempts:
-                return state, attempts[-1], False
+            if len(contract_attempts) >= max_attempts:
+                return state, contract_attempts[-1], False
             updated = copy.deepcopy(state)
             recorded_attempt = copy.deepcopy(attempt)
             recorded_attempt["status"] = "running"
