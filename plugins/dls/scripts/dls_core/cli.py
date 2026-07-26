@@ -304,6 +304,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     review_status_parser.add_argument("change_id")
     review_status_parser.add_argument("--review-id")
+    review_status_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Include full lane attempts, argv, paths, and provenance details.",
+    )
 
     review_import_parser = subparsers.add_parser(
         "review-import",
@@ -563,6 +568,7 @@ def dispatch(root: Path, args: argparse.Namespace) -> dict[str, Any]:
             root,
             change_id=args.change_id,
             review_id=args.review_id,
+            verbose=args.verbose,
         )
     if command == "review-import":
         return review_import(
@@ -759,9 +765,13 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             f"result={result.get('review_result_path') or 'pending'}"
         )
     if command == "review-status":
+        progress = result.get("progress", {})
         return (
             f"review {result.get('review_id') or 'none'} "
             f"{result['status']}; "
+            f"stage={progress.get('stage') or 'none'}; "
+            f"lanes={progress.get('completed_lanes', 0)}/"
+            f"{progress.get('projected_lanes', 0)}; "
             f"verdict={result.get('verdict') or 'pending'}; "
             f"result={result.get('review_result_path') or 'none'}; "
             f"next={result['next_action']['id']}"

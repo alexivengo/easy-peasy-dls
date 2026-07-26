@@ -443,6 +443,97 @@ class StateStore:
             atomic_write_json(path, updated)
             return updated, copy.deepcopy(recorded), True
 
+    def update_review_pipeline(
+        self,
+        change_id: str,
+        *,
+        review_id: str,
+        operation_id: str,
+        updates: dict[str, Any],
+        create: bool = False,
+    ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+        """Create or update one review-run pipeline record under the state lock.
+
+        Pipeline progress is deliberately separate from lane attempts. A lane can
+        complete successfully while deterministic assembly or import still fails;
+        recording that boundary prevents ``review-status`` from incorrectly
+        reporting the pack as merely ready to start again.
+        """
+        if not review_id or not operation_id:
+            raise IntegrityError("Review pipeline requires stable identifiers")
+        path = self.path(change_id)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        with FileLock(lock_path):
+            state = self.load(change_id)
+            index = next(
+                (
+                    index
+                    for index, item in enumerate(state["reviews"])
+                    if isinstance(item, dict)
+                    and item.get("kind") == "pipeline"
+                    and item.get("review_id") == review_id
+                    and item.get("operation_id") == operation_id
+                ),
+                None,
+            )
+            if index is None and not create:
+                raise IntegrityError(
+                    f"Unknown review pipeline: {review_id}/{operation_id}"
+                )
+            updated = copy.deepcopy(state)
+            if index is None:
+                record = {
+                    "kind": "pipeline",
+                    "review_id": review_id,
+                    "operation_id": operation_id,
+                    "status": "running",
+                    "stage": "preparing",
+                    "started_at": utc_now(),
+                }
+                record.update(copy.deepcopy(updates))
+                updated["reviews"].append(record)
+                recorded = updated["reviews"][-1]
+            else:
+                recorded = updated["reviews"][index]
+                if all(recorded.get(key) == value for key, value in updates.items()):
+                    return state, copy.deepcopy(recorded), False
+                recorded.update(copy.deepcopy(updates))
+            pipeline_operation_id = f"{operation_id}:pipeline"
+            operation = next(
+                (
+                    item
+                    for item in updated["operations"]
+                    if isinstance(item, dict)
+                    and item.get("id") == pipeline_operation_id
+                ),
+                None,
+            )
+            if operation is None:
+                updated["operations"].append(
+                    {
+                        "id": pipeline_operation_id,
+                        "kind": "review-run-pipeline",
+                        "recorded_at": utc_now(),
+                    }
+                )
+                operation = updated["operations"][-1]
+            operation["status"] = recorded.get("status")
+            operation["stage"] = recorded.get("stage")
+            if recorded.get("status") in {
+                "completed",
+                "failed",
+                "failed-finalize",
+            }:
+                operation["completed_at"] = recorded.get(
+                    "completed_at",
+                    utc_now(),
+                )
+            updated["operations"] = updated["operations"][-200:]
+            updated["state_revision"] += 1
+            validate_state(updated)
+            atomic_write_json(path, updated)
+            return updated, copy.deepcopy(recorded), True
+
 
 def current_definition_digest(root: Path, state: dict[str, Any]) -> str:
     return package_digest(root, state["artifacts"])

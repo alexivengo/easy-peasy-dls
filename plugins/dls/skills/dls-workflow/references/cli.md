@@ -51,7 +51,9 @@ Rules:
 - `dls remediation-recover CHANGE_ID [--review-id ID]` is the explicit legacy-only repair path. It validates exact Git objects, ancestry, definition, ReviewPack and ReviewIR digests without switching the checkout, then creates the missing canonical manifest.
 - `dls review-ready CHANGE_ID [--base BASE]` is the candidate gateway. The first review requires `--base`; remediation infers it from the latest ReviewIR. It either creates a full/remediation ReviewPack v2 and returns `open-review-task`, or returns one typed `next_action`. Repeat review must not call raw `review-pack`.
 - `dls review-run CHANGE_ID` is the public review orchestration command. It selects or prepares the exact-HEAD pack, runs every mandatory lane with single-flight protection, creates ReviewIR, and imports it. A completed `not-clear` verdict exits successfully; nonzero exit is reserved for infrastructure or integrity failure.
-- `dls review-status CHANGE_ID [--review-id ID]` is read-only. It never launches a model.
+- `dls review-status CHANGE_ID [--review-id ID]` is read-only and compact by
+  default. It never launches a model. `--verbose` adds full argv, paths, and
+  provenance only for diagnostics.
 - `dls review-start CHANGE_ID` remains a native-only compatibility and diagnostic primitive.
 - Implementation/remediation tasks stop after `review-ready`; only a separate explicit review task invokes `review-run`.
 - Implementers use `dls finding set ... addressed` with candidate SHA/evidence. `verified` is unavailable to this command and is created only by independent `review-import`; legacy `resolved` is treated as `addressed`.

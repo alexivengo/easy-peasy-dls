@@ -3339,14 +3339,39 @@ def _review_start_ready_response(
     native_entry: dict[str, Any] | None,
     changed: bool,
 ) -> dict[str, Any]:
-    context = build_context(
-        owner,
-        change_id=change_id,
-        phase="review",
-        include=[],
-        exclude=[],
-        dry_run=False,
+    completed_semantic = next(
+        (
+            item
+            for item in reversed(state["reviews"])
+            if isinstance(item, dict)
+            and item.get("review_id") == pack["review_id"]
+            and item.get("kind") == "semantic"
+            and item.get("status") == "completed"
+            and isinstance(item.get("context_manifest_path"), str)
+        ),
+        None,
     )
+    if completed_semantic is not None:
+        context_path = safe_resolve(
+            owner,
+            completed_semantic["context_manifest_path"],
+            must_exist=True,
+        )
+        if sha256_file(context_path) != completed_semantic.get("context_digest"):
+            raise IntegrityError("Completed semantic context digest mismatch")
+        context = {
+            "manifest_path": completed_semantic["context_manifest_path"],
+            "manifest": read_json(context_path),
+        }
+    else:
+        context = build_context(
+            owner,
+            change_id=change_id,
+            phase="review",
+            include=[],
+            exclude=[],
+            dry_run=False,
+        )
     native_coverage = list(pack.get("prior_native_coverage", []))
     if native_entry:
         native_coverage.append(
@@ -3797,6 +3822,7 @@ def review_start(
             "transcript_output_bytes": execution["output_bytes"],
             "transcript_retained_bytes": len(execution["output"]),
             "transcript_truncated": execution["overflow"],
+            "usage": _codex_usage_from_output(execution["output"]),
             "duration_seconds": execution["duration_seconds"],
             "source_snapshot_digest": snapshot_after,
             "failure_reason": failure_reason,
@@ -5321,6 +5347,37 @@ def _redact_argv(argv: list[str]) -> list[str]:
             continue
         redacted.append(redact_text(argument))
     return redacted
+
+
+def _codex_usage_from_output(output: bytes) -> dict[str, int] | None:
+    """Return the last structured Codex usage event from a JSONL transcript."""
+    latest: dict[str, int] | None = None
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line.startswith(b"{"):
+            continue
+        try:
+            event = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+            continue
+        usage = event.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        normalized: dict[str, int] = {}
+        for key in (
+            "input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+        ):
+            value = usage.get(key)
+            if isinstance(value, int) and value >= 0:
+                normalized[key] = value
+        if normalized and any(normalized.values()):
+            latest = normalized
+    return latest
 
 
 def _run_bounded_command(

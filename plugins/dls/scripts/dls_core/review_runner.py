@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ from .operations import (
     REVIEW_LANE_MAX_ATTEMPTS,
     REVIEW_RUNNER_CONTRACT,
     _attempt_lease_expired,
+    _codex_usage_from_output,
     _existing_remediation_manifest_path,
     _finding_blocks,
     _latest_review_result,
@@ -90,11 +92,162 @@ def _pack_for_review(
     return relative, pack
 
 
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _lane_summary(owner: Path, entry: dict[str, Any]) -> dict[str, Any]:
+    usage = entry.get("usage")
+    if not isinstance(usage, dict):
+        transcript = entry.get("transcript_path")
+        if isinstance(transcript, str):
+            path = safe_resolve(owner, transcript)
+            if path.is_file():
+                usage = _codex_usage_from_output(path.read_bytes())
+    return {
+        key: entry.get(key)
+        for key in (
+            "status",
+            "kind",
+            "model",
+            "reasoning_effort",
+            "attempt_ordinal",
+            "started_at",
+            "completed_at",
+            "duration_seconds",
+            "failure_reason",
+        )
+    } | {"usage": usage if isinstance(usage, dict) else None}
+
+
+def _progress_summary(
+    owner: Path,
+    *,
+    pack: dict[str, Any] | None,
+    latest_by_lane: dict[str, dict[str, Any]],
+    pipeline: dict[str, Any] | None,
+    status_value: str,
+) -> dict[str, Any]:
+    summaries = {
+        lane_key: _lane_summary(owner, entry)
+        for lane_key, entry in latest_by_lane.items()
+    }
+    running_lane = next(
+        (
+            lane_key
+            for lane_key, item in latest_by_lane.items()
+            if item.get("status") == "running"
+        ),
+        None,
+    )
+    projected = 0
+    if pack is not None:
+        projected = int("native-diff" in pack.get("required_lanes", []))
+        projected += len(pack.get("risk_lenses", []))
+        projected += 2  # independent semantic and reconciliation
+        if pack.get("review_mode") == "remediation":
+            projected += 1  # conditional final-full
+    projected = max(projected, len(latest_by_lane))
+    completed = sum(
+        item.get("status") == "completed" for item in latest_by_lane.values()
+    )
+    timestamps = [
+        parsed
+        for item in latest_by_lane.values()
+        for parsed in (
+            _parse_timestamp(item.get("started_at")),
+            _parse_timestamp(item.get("completed_at")),
+        )
+        if parsed is not None
+    ]
+    if pipeline is not None:
+        for field in ("started_at", "completed_at", "updated_at"):
+            parsed = _parse_timestamp(pipeline.get(field))
+            if parsed is not None:
+                timestamps.append(parsed)
+    started_at = min(timestamps) if timestamps else None
+    terminal_at = max(timestamps) if timestamps else None
+    end = (
+        datetime.now(timezone.utc)
+        if status_value == "running"
+        else terminal_at
+    )
+    elapsed = (
+        max(0.0, (end - started_at).total_seconds())
+        if started_at is not None and end is not None
+        else None
+    )
+    usage_totals = {
+        "input_tokens": 0,
+        "cached_input_tokens": 0,
+        "uncached_input_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_output_tokens": 0,
+    }
+    usage_seen = False
+    for summary in summaries.values():
+        usage = summary.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        usage_seen = True
+        for key in (
+            "input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+        ):
+            usage_totals[key] += int(usage.get(key, 0))
+    usage_totals["uncached_input_tokens"] = max(
+        0,
+        usage_totals["input_tokens"] - usage_totals["cached_input_tokens"],
+    )
+    context_totals = None
+    for item in reversed(list(latest_by_lane.values())):
+        context_path = item.get("context_manifest_path")
+        if not isinstance(context_path, str) or "context/" not in context_path:
+            continue
+        path = safe_resolve(owner, context_path)
+        if path.is_file():
+            manifest = read_json(path)
+            if isinstance(manifest.get("totals"), dict):
+                context_totals = manifest["totals"]
+                break
+    return {
+        "stage": (
+            pipeline.get("stage")
+            if pipeline is not None
+            else running_lane
+            or ("finalize" if status_value == "failed-finalize" else status_value)
+        ),
+        "active_lane": running_lane,
+        "completed_lanes": completed,
+        "projected_lanes": projected,
+        "elapsed_seconds": elapsed,
+        "last_transition_at": (
+            terminal_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            if terminal_at is not None
+            else None
+        ),
+        "usage": usage_totals if usage_seen else None,
+        "context": context_totals,
+        "lanes": summaries,
+    }
+
+
 def review_status(
     root: Path,
     *,
     change_id: str,
     review_id: str | None = None,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     owner, owner_selection = _owner_root(root, change_id)
     state = StateStore(owner).load(change_id)
@@ -105,10 +258,7 @@ def review_status(
             for item in reversed(state["reviews"])
             if item.get("kind") == "result"
             and (review_id is None or item.get("review_id") == review_id)
-            and (
-                review_id is not None
-                or item.get("head_sha") == current_head
-            )
+            and (review_id is not None or item.get("head_sha") == current_head)
         ),
         None,
     )
@@ -118,10 +268,7 @@ def review_status(
             for item in reversed(state["reviews"])
             if item.get("kind") == "pack"
             and (review_id is None or item.get("review_id") == review_id)
-            and (
-                review_id is not None
-                or item.get("head_sha") == current_head
-            )
+            and (review_id is not None or item.get("head_sha") == current_head)
         ),
         None,
     )
@@ -141,37 +288,72 @@ def review_status(
     latest_by_lane: dict[str, dict[str, Any]] = {}
     for attempt in lane_attempts:
         latest_by_lane[attempt["lane_key"]] = attempt
+    pipelines = [
+        item
+        for item in state["reviews"]
+        if isinstance(item, dict)
+        and item.get("kind") == "pipeline"
+        and item.get("review_id") == selected_review_id
+    ]
+    pipeline = max(
+        pipelines,
+        key=lambda item: item.get("updated_at") or item.get("started_at") or "",
+        default=None,
+    )
+    terminal_lane = next(
+        (
+            item
+            for item in reversed(lane_attempts)
+            if item.get("status") not in {"completed", "running"}
+        ),
+        None,
+    )
+    pipeline_alive = bool(
+        pipeline is not None
+        and pipeline.get("status") == "running"
+        and _process_is_alive(pipeline.get("runner_pid"))
+    )
     remediation_manifest_path: str | None = None
     if result_entry:
         status_value = "completed"
+        next_action = {"id": "review-complete", "detail": result_entry["result_path"]}
+    elif terminal_lane is not None:
+        status_value = "failed"
         next_action = {
-            "id": "review-complete",
-            "detail": result_entry["result_path"],
+            "id": "retry-review",
+            "detail": f"last_status={terminal_lane.get('status')}",
         }
-    elif any(item.get("status") == "running" for item in latest_by_lane.values()):
+    elif any(item.get("status") == "running" for item in latest_by_lane.values()) or pipeline_alive:
         status_value = "running"
+        next_action = {"id": "wait-review", "detail": "review pipeline is active"}
+    elif pipeline is not None and pipeline.get("status") in {
+        "failed",
+        "failed-finalize",
+    }:
+        status_value = pipeline["status"]
         next_action = {
-            "id": "wait-review",
-            "detail": "one or more review lanes are running",
+            "id": "resume-review" if status_value == "failed-finalize" else "retry-review",
+            "detail": pipeline.get("failure_reason") or pipeline.get("stage") or "review failed",
+        }
+    elif pipeline is not None and pipeline.get("status") == "running":
+        status_value = "failed"
+        next_action = {
+            "id": "resume-review",
+            "detail": "review pipeline owner exited before canonical completion",
         }
     elif pack_entry:
-        terminal = next(
-            (
-                item
-                for item in reversed(lane_attempts)
-                if item.get("status") not in {"completed", "running"}
-            ),
-            None,
-        )
-        status_value = "failed" if terminal else "ready"
-        next_action = {
-            "id": "retry-review" if terminal else "start-review",
-            "detail": (
-                f"last_status={terminal.get('status')}"
-                if terminal
-                else pack_entry["pack_path"]
-            ),
-        }
+        completed_without_result = bool(latest_by_lane) and all(
+            item.get("status") == "completed" for item in latest_by_lane.values()
+        ) and "reconciliation" in latest_by_lane
+        if completed_without_result:
+            status_value = "failed-finalize"
+            next_action = {
+                "id": "resume-review",
+                "detail": "all model lanes completed but ReviewIR was not imported",
+            }
+        else:
+            status_value = "ready"
+            next_action = {"id": "start-review", "detail": pack_entry["pack_path"]}
     else:
         latest_result = _latest_review_result(state)
         if latest_result is None or review_id is not None:
@@ -212,23 +394,24 @@ def review_status(
             ),
             None,
         )
-    if provenance_pack_entry and isinstance(
-        provenance_pack_entry.get("pack_path"),
-        str,
-    ):
+    pack: dict[str, Any] | None = None
+    if provenance_pack_entry and isinstance(provenance_pack_entry.get("pack_path"), str):
         pack = read_json(
-            safe_resolve(
-                owner,
-                provenance_pack_entry["pack_path"],
-                must_exist=True,
-            )
+            safe_resolve(owner, provenance_pack_entry["pack_path"], must_exist=True)
         )
         runner_contract = pack.get("runner_contract", runner_contract)
     presentation = None
     if result_entry is not None:
         _, report = _read_review_result(owner, result_entry)
         presentation = build_review_presentation(owner, report)
-    return {
+    progress = _progress_summary(
+        owner,
+        pack=pack,
+        latest_by_lane=latest_by_lane,
+        pipeline=pipeline,
+        status_value=status_value,
+    )
+    payload = {
         "ok": True,
         "changed": False,
         "change_id": change_id,
@@ -239,28 +422,23 @@ def review_status(
         "review_id": selected_review_id,
         "status": status_value,
         "runner_contract": runner_contract,
-        "lanes": latest_by_lane,
-        "verdict": (
-            status_result_entry.get("verdict")
-            if status_result_entry
-            else None
-        ),
+        "progress": progress,
+        "lanes": progress["lanes"],
+        "verdict": status_result_entry.get("verdict") if status_result_entry else None,
         "review_result_path": (
-            status_result_entry.get("result_path")
-            if status_result_entry
-            else None
+            status_result_entry.get("result_path") if status_result_entry else None
         ),
         "remediation_manifest_path": (
-            (
-                status_result_entry.get("remediation_manifest_path")
-                if status_result_entry
-                else None
-            )
+            (status_result_entry.get("remediation_manifest_path") if status_result_entry else None)
             or remediation_manifest_path
         ),
         "presentation": presentation,
         "next_action": next_action,
     }
+    if verbose:
+        payload["lane_details"] = latest_by_lane
+        payload["pipeline"] = pipeline
+    return payload
 
 
 def _render_prompt(name: str, values: dict[str, str]) -> str:
@@ -391,7 +569,6 @@ def _validate_structured_payload(
         "verdict",
         "summary",
         "findings",
-        "ticket_verdicts",
         "prior_finding_verdicts",
     }
     missing = sorted(required - payload.keys())
@@ -401,9 +578,14 @@ def _validate_structured_payload(
         )
     if payload["verdict"] not in {"review-clear", "not-clear", "blocked"}:
         raise IntegrityError("Semantic decision verdict is invalid")
-    for field in ("findings", "ticket_verdicts", "prior_finding_verdicts"):
+    for field in ("findings", "prior_finding_verdicts"):
         if not isinstance(payload[field], list):
             raise IntegrityError(f"Semantic decision {field} must be an array")
+    if "ticket_verdicts" in payload and not isinstance(
+        payload["ticket_verdicts"],
+        list,
+    ):
+        raise IntegrityError("Semantic decision ticket_verdicts must be an array")
 
 
 def _completed_lane_payload(
@@ -656,6 +838,7 @@ def _execute_structured_lane(
                 "transcript_output_bytes": execution["output_bytes"],
                 "transcript_retained_bytes": len(execution["output"]),
                 "transcript_truncated": execution["overflow"],
+                "usage": _codex_usage_from_output(execution["output"]),
                 "duration_seconds": execution["duration_seconds"],
                 "source_snapshot_digest": snapshot_after,
                 "failure_reason": failure_reason,
@@ -743,6 +926,96 @@ def _has_review_blocker(decision: dict[str, Any]) -> bool:
     )
 
 
+def _derive_ticket_verdicts(
+    pack: dict[str, Any],
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Derive stage-correct ticket verdicts from canonical findings.
+
+    Model-produced ticket verdicts are advisory input at most. Review readiness
+    is a mechanical relation between ticket links, severity, and ``blocks``;
+    deriving it here prevents a release-only note from making code review
+    ``not-clear`` and avoids paying for a correction model call.
+    """
+    verdicts: list[dict[str, Any]] = []
+    for ticket_id in pack["tickets"]:
+        linked = [
+            finding
+            for finding in findings
+            if ticket_id in finding.get("ticket_ids", [])
+        ]
+        review_blockers = [
+            finding
+            for finding in linked
+            if finding.get("severity") in {"blocker", "should-fix"}
+            and "review" in _finding_blocks(finding)
+        ]
+        if any(finding.get("kind") == "external" for finding in review_blockers):
+            verdict = "blocked"
+        elif review_blockers:
+            verdict = "not-clear"
+        else:
+            verdict = "clear"
+        verdicts.append(
+            {
+                "ticket_id": ticket_id,
+                "verdict": verdict,
+                "finding_ids": [finding["id"] for finding in linked],
+            }
+        )
+    return verdicts
+
+
+def _derive_review_verdict(
+    ticket_verdicts: list[dict[str, Any]],
+    findings: list[dict[str, Any]] | None = None,
+) -> str:
+    review_blockers = [
+        finding
+        for finding in findings or []
+        if finding.get("severity") in {"blocker", "should-fix"}
+        and "review" in _finding_blocks(finding)
+    ]
+    if any(finding.get("kind") == "external" for finding in review_blockers):
+        return "blocked"
+    values = {item["verdict"] for item in ticket_verdicts}
+    if "blocked" in values:
+        return "blocked"
+    if review_blockers or "not-clear" in values:
+        return "not-clear"
+    return "review-clear"
+
+
+def _update_pipeline(
+    owner: Path,
+    *,
+    change_id: str,
+    review_id: str,
+    operation_id: str,
+    stage: str,
+    status: str = "running",
+    create: bool = False,
+    failure_reason: str | None = None,
+) -> None:
+    updates: dict[str, Any] = {
+        "status": status,
+        "stage": stage,
+        "runner_pid": os.getpid(),
+        "updated_at": utc_now(),
+    }
+    if failure_reason is not None:
+        updates["failure_reason"] = failure_reason
+    if status in {"completed", "failed", "failed-finalize"}:
+        updates["completed_at"] = utc_now()
+    StateStore(owner).update_review_pipeline(
+        change_id,
+        review_id=review_id,
+        operation_id=operation_id,
+        updates=updates,
+        create=create,
+    )
+
+
 def _build_review_ir(
     *,
     pack: dict[str, Any],
@@ -759,6 +1032,8 @@ def _build_review_ir(
         finding["base_sha"] = pack["base_sha"]
         finding["head_sha"] = pack["head_sha"]
         findings.append(finding)
+    ticket_verdicts = _derive_ticket_verdicts(pack, findings)
+    review_verdict = _derive_review_verdict(ticket_verdicts, findings)
     pass_kind = "full" if pack["review_mode"] == "full" else "targeted"
     passes = [
         {
@@ -844,10 +1119,10 @@ def _build_review_ir(
         "pack_digest": pack["pack_digest"],
         "definition_digest": pack["definition_digest"],
         "review_mode": pack["review_mode"],
-        "verdict": decision["verdict"],
+        "verdict": review_verdict,
         "summary": decision["summary"],
         "lanes": lanes,
-        "ticket_verdicts": decision["ticket_verdicts"],
+        "ticket_verdicts": ticket_verdicts,
         "prior_finding_verdicts": decision["prior_finding_verdicts"],
         "findings": findings,
     }
@@ -935,9 +1210,24 @@ def review_run(
         "EPIC_BASE_SHA": pack["epic_base_sha"],
         "HEAD_SHA": pack["head_sha"],
     }
+    _update_pipeline(
+        owner,
+        change_id=change_id,
+        review_id=pack["review_id"],
+        operation_id=effective_operation_id,
+        stage="specialists" if pack.get("risk_lenses") else "semantic-independent",
+        create=True,
+    )
     specialist_entries: list[tuple[dict[str, Any], str]] = []
     specialist_paths: dict[str, Path] = {}
     for lens in pack.get("risk_lenses", []):
+        _update_pipeline(
+            owner,
+            change_id=change_id,
+            review_id=pack["review_id"],
+            operation_id=effective_operation_id,
+            stage=f"specialist:{lens['id']}",
+        )
         prompt = _render_prompt(
             "specialist.md",
             {
@@ -987,6 +1277,13 @@ def review_run(
             "PASS_KIND": independent_kind,
         },
     )
+    _update_pipeline(
+        owner,
+        change_id=change_id,
+        review_id=pack["review_id"],
+        operation_id=effective_operation_id,
+        stage=f"semantic:{independent_kind}",
+    )
     independent_entry, independent_decision = _execute_structured_lane(
         owner,
         change_id=change_id,
@@ -1020,6 +1317,13 @@ def review_run(
             must_exist=True,
         ).read_bytes()
     reconciliation_prompt = _render_prompt("reconcile.md", prompt_values)
+    _update_pipeline(
+        owner,
+        change_id=change_id,
+        review_id=pack["review_id"],
+        operation_id=effective_operation_id,
+        stage="reconciliation",
+    )
     reconciliation_entry, decision = _execute_structured_lane(
         owner,
         change_id=change_id,
@@ -1059,6 +1363,13 @@ def review_run(
     final_full_entry: dict[str, Any] | None = None
     if pack["review_mode"] == "remediation" and not _has_review_blocker(decision):
         final_prompt = _render_prompt("final-full.md", prompt_values)
+        _update_pipeline(
+            owner,
+            change_id=change_id,
+            review_id=pack["review_id"],
+            operation_id=effective_operation_id,
+            stage="semantic:final-full",
+        )
         final_full_entry, final_decision = _execute_structured_lane(
             owner,
             change_id=change_id,
@@ -1101,31 +1412,58 @@ def review_run(
                 "review_result_path": None,
             }
         decision = final_decision
-    report = _build_review_ir(
-        pack=pack,
-        start_result=started,
-        decision=decision,
-        independent_entry=independent_entry,
-        reconciliation_entry=reconciliation_entry,
-        specialist_entries=specialist_entries,
-        final_full_entry=final_full_entry,
-    )
-    _validate_review_report(report, change_id, pack)
-    report_relative = (
-        f".dls/cache/reviews/{change_id}/{pack['review_id']}/reviewir.json"
-    )
-    atomic_write_json(
-        safe_resolve(owner, report_relative),
-        report,
-        backup=False,
-    )
-    current_state = StateStore(owner).load(change_id)
-    imported = review_import(
+    _update_pipeline(
         owner,
         change_id=change_id,
-        report_path=report_relative,
-        expected_revision=current_state["state_revision"],
-        operation_id=f"{effective_operation_id}:import",
+        review_id=pack["review_id"],
+        operation_id=effective_operation_id,
+        stage="finalizing",
+    )
+    try:
+        report = _build_review_ir(
+            pack=pack,
+            start_result=started,
+            decision=decision,
+            independent_entry=independent_entry,
+            reconciliation_entry=reconciliation_entry,
+            specialist_entries=specialist_entries,
+            final_full_entry=final_full_entry,
+        )
+        _validate_review_report(report, change_id, pack)
+        report_relative = (
+            f".dls/cache/reviews/{change_id}/{pack['review_id']}/reviewir.json"
+        )
+        atomic_write_json(
+            safe_resolve(owner, report_relative),
+            report,
+            backup=False,
+        )
+        current_state = StateStore(owner).load(change_id)
+        imported = review_import(
+            owner,
+            change_id=change_id,
+            report_path=report_relative,
+            expected_revision=current_state["state_revision"],
+            operation_id=f"{effective_operation_id}:import",
+        )
+    except Exception as exc:
+        _update_pipeline(
+            owner,
+            change_id=change_id,
+            review_id=pack["review_id"],
+            operation_id=effective_operation_id,
+            stage="finalizing",
+            status="failed-finalize",
+            failure_reason=f"{type(exc).__name__}: {exc}",
+        )
+        raise
+    _update_pipeline(
+        owner,
+        change_id=change_id,
+        review_id=pack["review_id"],
+        operation_id=effective_operation_id,
+        stage="completed",
+        status="completed",
     )
     presentation = build_review_presentation(owner, report)
     return {

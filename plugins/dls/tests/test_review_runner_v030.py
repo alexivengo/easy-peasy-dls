@@ -7,11 +7,13 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 from dls_core.errors import IntegrityError
 from dls_core.io import utc_now
 from dls_core.operations import (
     REVIEW_RUNNER_CONTRACT,
+    _codex_usage_from_output,
     _review_pack_digest,
     _validate_review_pack,
     _validate_review_report,
@@ -24,7 +26,13 @@ from dls_core.operations import (
     review_ready,
     ticket_set,
 )
-from dls_core.review_runner import review_run, review_status
+from dls_core.review_runner import (
+    _derive_review_verdict,
+    _derive_ticket_verdicts,
+    _validate_structured_payload,
+    review_run,
+    review_status,
+)
 from dls_core.state import StateStore
 
 from support import (
@@ -38,6 +46,69 @@ from support import (
 
 
 class ReviewRunnerV030Tests(unittest.TestCase):
+    def test_runner_derives_stage_correct_ticket_verdicts(self) -> None:
+        pack = {"tickets": {"T01": {}, "T04": {}}}
+        findings = [
+            {
+                "id": "R-CODE",
+                "severity": "should-fix",
+                "kind": "defect",
+                "ticket_ids": ["T01"],
+                "blocks": ["review", "acceptance"],
+            },
+            {
+                "id": "R-RELEASE",
+                "severity": "note",
+                "kind": "external",
+                "ticket_ids": ["T04"],
+                "blocks": ["release", "production"],
+            },
+        ]
+        verdicts = _derive_ticket_verdicts(pack, findings)
+        self.assertEqual(
+            verdicts,
+            [
+                {
+                    "ticket_id": "T01",
+                    "verdict": "not-clear",
+                    "finding_ids": ["R-CODE"],
+                },
+                {
+                    "ticket_id": "T04",
+                    "verdict": "clear",
+                    "finding_ids": ["R-RELEASE"],
+                },
+            ],
+        )
+        self.assertEqual(_derive_review_verdict(verdicts), "not-clear")
+
+    def test_semantic_ticket_verdicts_are_optional_and_usage_is_local(self) -> None:
+        _validate_structured_payload(
+            {
+                "verdict": "review-clear",
+                "summary": "clear",
+                "findings": [],
+                "prior_finding_verdicts": [],
+            },
+            payload_kind="decision",
+            lens_id=None,
+        )
+        usage = _codex_usage_from_output(
+            b"diagnostic\n"
+            b'{"type":"turn.completed","usage":{"input_tokens":12,'
+            b'"cached_input_tokens":9,"output_tokens":3,'
+            b'"reasoning_output_tokens":2}}\n'
+        )
+        self.assertEqual(
+            usage,
+            {
+                "input_tokens": 12,
+                "cached_input_tokens": 9,
+                "output_tokens": 3,
+                "reasoning_output_tokens": 2,
+            },
+        )
+
     def _prepared_standard(self, root: Path) -> tuple[str, dict]:
         base_sha = initialize_git(root)
         initialize(root)
@@ -603,6 +674,51 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 ["native"],
             )
 
+    def test_finalize_failure_is_visible_and_resume_reuses_completed_lanes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            original, counter, _ = self._install_fake_codex(root)
+            try:
+                with mock.patch(
+                    "dls_core.review_runner._build_review_ir",
+                    side_effect=IntegrityError("synthetic assembly failure"),
+                ):
+                    with self.assertRaisesRegex(
+                        IntegrityError,
+                        "synthetic assembly failure",
+                    ):
+                        review_run(
+                            root,
+                            change_id="C001",
+                            pack_path=None,
+                            operation_id="broken-finalize",
+                        )
+                calls_before_resume = counter.read_text(encoding="utf-8").splitlines()
+                failed = review_status(root, change_id="C001")
+                self.assertEqual(failed["status"], "failed-finalize")
+                self.assertEqual(failed["next_action"]["id"], "resume-review")
+                self.assertEqual(failed["progress"]["stage"], "finalizing")
+                self.assertNotIn("argv", json.dumps(failed["lanes"]))
+
+                completed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="resume-finalize",
+                )
+                self.assertEqual(completed["status"], "completed")
+                self.assertTrue(completed["review_result_path"])
+                self.assertEqual(
+                    counter.read_text(encoding="utf-8").splitlines(),
+                    calls_before_resume,
+                )
+                verbose = review_status(root, change_id="C001", verbose=True)
+                self.assertIn("lane_details", verbose)
+                self.assertEqual(verbose["pipeline"]["status"], "completed")
+            finally:
+                self._restore_path(original)
+
     def test_orphaned_native_attempt_is_abandoned_then_retried_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -886,7 +1002,10 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         self.assertNotIn("review-import CHANGE_ID", review)
         self.assertIn("presentation.comments[].directive", review)
         self.assertIn("::code-comment", combined)
-        self.assertIn("one compact unchanged heartbeat per minute", review)
+        self.assertIn("one compact unchanged heartbeat every 60–90 seconds", review)
+        self.assertIn("regardless of whether the primary command has emitted", review)
+        self.assertIn("failed-finalize", review)
+        self.assertIn("same stable operation ID", review)
         self.assertIn("open-review-task", remediation)
         self.assertIn("Never invoke `review-run`", remediation)
         self.assertNotIn(" dls review-run ", remediation)

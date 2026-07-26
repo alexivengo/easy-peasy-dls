@@ -7,7 +7,6 @@
     "verdict",
     "summary",
     "findings",
-    "ticket_verdicts",
     "prior_finding_verdicts"
   ],
   "properties": {
@@ -28,6 +27,7 @@
       }
     },
     "ticket_verdicts": {
+      "description": "Deprecated advisory field. DLS derives canonical ticket verdicts from findings and stage blockers.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/ticketVerdict"

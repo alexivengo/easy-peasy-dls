@@ -41,7 +41,10 @@ review остаются читаемыми, но не попадают в раб
 выбирает pack текущего HEAD, выполняет state-owned model lanes и атомарно
 импортирует ReviewIR. Повторный процесс видит `running` и ждёт вместо запуска
 дубликата. `review-start` остаётся native-only diagnostic primitive, а
-`review-status` никогда не запускает модель.
+`review-status` никогда не запускает модель. Его компактный progress показывает
+активный этап, завершённые lanes, elapsed time и локальные token counters. Если
+модели завершились, а сборка ReviewIR упала, повторный `review-run` использует
+сохранённые digest-bound outputs и не вызывает модели заново.
 
 Implementation/remediation-задача не запускает review runner: после
 `review-ready` она передаёт candidate в отдельную read-only review-задачу.

@@ -151,6 +151,36 @@ disposable detached worktree exact HEAD, поэтому локальные DLS m
 Повторный `review-run` возвращает `status: running` и `next_action: wait-review`,
 не запуская вторую модель. `review-status` только читает state.
 
+### Наблюдаемость и финализация
+
+`review-status` по умолчанию возвращает компактный `progress`: текущий pipeline
+stage, активную lane, количество completed/projected lanes, elapsed time,
+последний переход, размер model-facing context и локально извлечённые Codex token
+counters. Полные argv, cache paths и provenance доступны только с `--verbose`,
+чтобы обычный heartbeat сам не расходовал контекст агента.
+
+Skill не ждёт появления текста в stdout `review-run`: stdout зарезервирован для
+единственного финального JSON. Пока исходный shell/session продолжает работать,
+skill читает `review-status` отдельной read-only командой раз в 60–90 секунд и
+сообщает только переход этапа или один короткий heartbeat. Сырые transcripts и
+предварительные findings пользователю не транслируются.
+
+Pipeline отдельно фиксирует `running`, `finalizing`, `failed-finalize` и
+`completed`. Если все model lanes завершились, но deterministic assembly или
+atomic import не прошли, следующий `review-run` проверяет exact HEAD, pack,
+context и output digests, переиспользует completed attempts и повторяет только
+финализацию.
+
+Canonical ticket verdicts не доверяются модели. DLS механически связывает
+findings с tickets и вычисляет review state из severity и `blocks`. Поэтому
+release/production-only note сохраняется в ReviewIR, но не делает code-review
+ticket `not-clear`. Общий review verdict выводится из тех же stage-correct
+relations.
+
+Token counters являются локальной диагностической телеметрией. Они включают
+cached context и повторные tool turns, поэтому не трактуются как точная стоимость
+API. DLS не отправляет эти данные во внешний analytics service.
+
 Подтверждённые `orphan`, `timeout`, `output-cap`, missing или invalid structured
 output получают не более одной автоматической повторной попытки. Drift HEAD,
 source, definition или pack не повторяется автоматически. Timeout одной попытки
@@ -183,6 +213,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.3.1`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.3.3`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

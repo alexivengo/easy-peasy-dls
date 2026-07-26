@@ -38,8 +38,10 @@ The command can run for up to 30 minutes per model attempt. If the shell tool
 returns a running cell or session, wait on that same execution until it exits.
 Never start a second `review-run`.
 
-If a separate process already owns a lane, the command returns exit code `0` with
-`status: running` and `next_action: wait-review`. Read progress with:
+Do not wait for `review-run` to print `status: running`: its stdout is reserved
+for the final machine-readable payload. After 20–30 seconds without completion,
+keep the original shell/session alive and read progress from a separate shell
+command:
 
 ```text
 python3 <plugin-root>/scripts/dls.py --root <current-project> --json \
@@ -47,10 +49,17 @@ python3 <plugin-root>/scripts/dls.py --root <current-project> --json \
 ```
 
 `review-status` is read-only and never launches a model. Continue checking status
-at a bounded interval; do not replace the active review. Do not narrate every
-unchanged shell poll. Use the longest wait allowed by the host, report only a
-lane/status transition or one compact unchanged heartbeat per minute, and never
-repeat the same explanatory paragraph.
+at a bounded interval regardless of whether the primary command has emitted any
+stdout; do not replace the active review. Use its compact `progress` object and
+do not request `--verbose` unless diagnosing an integrity failure. Report only a
+lane/status transition or one compact unchanged heartbeat every 60–90 seconds,
+for example `3/4 · semantic:final-full · Sol/xhigh · 8m`. Never stream raw model
+transcripts or provisional findings.
+
+If all lanes completed but final assembly/import failed, `review-status` returns
+`failed-finalize` and `next_action: resume-review`. Re-run the same public
+`review-run` with the same stable operation ID: it must reuse digest-bound
+completed lanes and retry only deterministic finalization, never the models.
 
 ## Present the canonical result
 
@@ -78,6 +87,8 @@ replace `review_result_path`, finding IDs, ticket verdicts, or remediation state
   `remediation_manifest_path`. This is a successful runner execution, not an
   infrastructure failure.
 - `running`: wait or use only `review-status`.
+- `failed-finalize`: resume the same `review-run`; do not start an informal or
+  replacement review.
 - a nonzero exit: report the integrity/infrastructure failure and its typed
   `next_action`; do not improvise a review.
 - `provide-review-base`: the implementation task must prepare the first candidate

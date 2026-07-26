@@ -10,6 +10,7 @@ Read the bound context and ReviewPack, then read:
 
 Verify every observation against the exact source at `{{HEAD_SHA}}`. Reject false
 positives, merge duplicates, preserve independently supported omissions, and
-produce one internally consistent decision. Every ticket needs a verdict and
-every required prior finding needs exactly one verdict. Do not modify files.
-Return only JSON matching `.dls-review-input/output.schema.json`.
+produce one internally consistent decision. Every required prior finding needs
+exactly one verdict. DLS derives canonical ticket verdicts from finding links,
+severity, and stage blockers. Do not modify files. Return only JSON matching
+`.dls-review-input/output.schema.json`.

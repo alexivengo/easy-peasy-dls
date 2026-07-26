@@ -12,4 +12,6 @@ contract conformance, and validation gaps.
 
 Do not search for or read native review output, specialist output, or another
 semantic draft. Do not modify any file. Return only JSON matching
-`.dls-review-input/output.schema.json`.
+`.dls-review-input/output.schema.json`. DLS derives canonical ticket verdicts
+from finding links, severity, and review-stage blockers; do not spend analysis
+on that mechanical aggregation.

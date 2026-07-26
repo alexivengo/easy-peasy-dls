@@ -9,4 +9,6 @@ ticket, cross-ticket integration, contract conformance, blast radius, and curren
 validation evidence. The returned decision supersedes the targeted decision.
 
 Do not modify files. Return only JSON matching
-`.dls-review-input/output.schema.json`.
+`.dls-review-input/output.schema.json`. DLS derives canonical ticket verdicts
+from the returned findings; keep review, acceptance, release, and production
+stages distinct.
