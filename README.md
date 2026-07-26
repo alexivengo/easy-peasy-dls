@@ -109,8 +109,8 @@ codex plugin add dls@easy-peasy-dls
 ```
 
 После committed candidate handoff короткой команды достаточно. DLS найдёт
-зарегистрированный worktree, проигнорирует устаревшие packs и при повторном
-review подготовит актуальный remediation-pack автоматически. Затем один
+зарегистрированный worktree и выберет exact-HEAD pack, подготовленный
+`candidate-ready`. Затем один
 single-flight runner выполнит native, specialist и semantic passes, соберёт
 ReviewIR и импортирует его. Переносить пути, запускать subagents или вручную
 собирать provenance не нужно. Human approval DLS всё равно не запишет без вашего
@@ -122,6 +122,11 @@ ReviewIR и импортирует его. Переносить пути, зап
 `.dls/config.toml`, сохраняет компактное evidence, связывает его с findings и
 создаёт ReviewPack. Пользователь видит итоговый handoff в отдельную
 review-задачу, а не цепочку SHA, revision и evidence-команд.
+
+Если HEAD изменился после handoff или candidate ещё не подготовлен, review не
+запускает ручные проверки и не показывает старый результат как текущий. Он
+возвращает `prepare-candidate`, после чего implementation-задача завершает один
+автоматический `candidate-ready`.
 
 Во время длинного review навык показывает компактный прогресс по этапам, не
 вываливая сырые model transcripts и предварительные findings. Техническая

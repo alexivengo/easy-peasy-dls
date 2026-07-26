@@ -392,6 +392,62 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 self.assertTrue(attempt.get("prompt_digest"))
                 self.assertTrue(attempt.get("schema_digest"))
 
+    def test_review_run_returns_unprepared_candidate_to_implementation_task(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                reconciliation_blocker=True,
+            )
+            try:
+                completed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="first-review",
+                )
+            finally:
+                self._restore_path(original)
+            self.assertEqual(completed["verdict"], "not-clear")
+            self.assertTrue(completed["review_result_path"])
+            self.assertTrue(completed["remediation_manifest_path"])
+            prior_review_id = completed["review_id"]
+            prior_result_path = completed["review_result_path"]
+            calls_before = counter.read_text(encoding="utf-8")
+
+            (root / "README.md").write_text(
+                "# Fixture\n\nRemediation candidate without handoff.\n",
+                encoding="utf-8",
+            )
+            git(root, "add", "README.md")
+            git(root, "commit", "-m", "advance without candidate-ready")
+
+            status = review_status(root, change_id="C001")
+            self.assertEqual(status["status"], "not-prepared")
+            self.assertEqual(status["next_action"]["id"], "prepare-candidate")
+            self.assertIsNone(status["review_id"])
+            self.assertIsNone(status["review_result_path"])
+            self.assertIsNone(status["verdict"])
+            self.assertEqual(status["prior_review_id"], prior_review_id)
+            self.assertEqual(
+                status["prior_review_result_path"],
+                prior_result_path,
+            )
+
+            blocked = review_run(
+                root,
+                change_id="C001",
+                pack_path=None,
+                operation_id="must-not-start-models",
+            )
+            self.assertTrue(blocked["ok"])
+            self.assertEqual(blocked["status"], "not-prepared")
+            self.assertEqual(blocked["next_action"]["id"], "prepare-candidate")
+            self.assertIsNone(blocked["review_result_path"])
+            self.assertIsNone(blocked["review_pack_path"])
+            self.assertEqual(counter.read_text(encoding="utf-8"), calls_before)
+
     def test_invalid_semantic_output_retries_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1153,6 +1209,9 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         self.assertIn("regardless of whether the primary command has emitted", review)
         self.assertIn("failed-finalize", review)
         self.assertIn("same stable operation ID", review)
+        self.assertIn("prepare-candidate", review)
+        self.assertIn("return to the implementation", review)
+        self.assertIn("do not run validation", review)
         self.assertIn("open-review-task", remediation)
         self.assertIn("candidate-ready", remediation)
         self.assertIn("candidate-status", remediation)

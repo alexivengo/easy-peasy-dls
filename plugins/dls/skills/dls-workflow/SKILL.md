@@ -9,7 +9,7 @@ Use DLS as the process owner. Repository rules and domain skills may add technic
 
 ## Start
 
-For an explicit code-review request, skip the generic repository doctor and follow [review.md](references/review.md); `review-run` owns the complete review and can resolve an explicitly registered epic worktree from the main project.
+For an explicit code-review request, skip the generic repository doctor and follow [review.md](references/review.md); `review-run` owns the complete review of an exact-HEAD candidate prepared by `candidate-ready` and can resolve an explicitly registered epic worktree from the main project.
 
 For other work:
 

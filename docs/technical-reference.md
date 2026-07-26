@@ -184,6 +184,13 @@ inputs.
 одинаковая пользовательская метка не смешивает attempts разных ревизий.
 `review-status` только читает state.
 
+Если для текущего HEAD нет ReviewPack, `review-status` и `review-run` возвращают
+`status: not-prepared` и `next_action: prepare-candidate`. Они не запускают
+legacy validation и не показывают прежний ReviewIR как результат текущего HEAD.
+Review-задача останавливается, а implementation/remediation-задача завершает
+один `candidate-ready`. Поля `prior_review_id` и `prior_review_result_path`
+остаются только явной исторической ссылкой.
+
 ### Наблюдаемость и финализация
 
 `review-status` по умолчанию возвращает компактный `progress`: текущий pipeline
@@ -251,6 +258,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.4.0`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.4.1`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

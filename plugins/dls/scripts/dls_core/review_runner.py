@@ -41,7 +41,6 @@ from .operations import (
     _validate_review_report,
     _run_bounded_command,
     review_import,
-    review_ready,
     review_start,
 )
 from .repo import (
@@ -462,6 +461,8 @@ def review_status(
         and _process_is_alive(pipeline.get("runner_pid"))
     )
     remediation_manifest_path: str | None = None
+    prior_review_id: str | None = None
+    prior_review_result_path: str | None = None
     if result_entry:
         status_value = "completed"
         next_action = {"id": "review-complete", "detail": result_entry["result_path"]}
@@ -504,29 +505,43 @@ def review_status(
         if latest_result is None or review_id is not None:
             status_value = "not-prepared"
             next_action = {
-                "id": "provide-review-base",
-                "detail": "no exact-HEAD ReviewPack or imported result",
+                "id": "prepare-candidate",
+                "detail": (
+                    "return to the implementation task and complete candidate-ready "
+                    "for the current HEAD; the first review also requires --base BASE"
+                ),
             }
         else:
-            selected_review_id = latest_result.get("review_id")
-            status_result_entry = latest_result
-            if isinstance(selected_review_id, str):
+            prior_review_id = latest_result.get("review_id")
+            prior_review_result_path = latest_result.get("result_path")
+            if isinstance(prior_review_id, str):
                 remediation_manifest_path = _existing_remediation_manifest_path(
                     owner,
                     change_id=change_id,
                     review_entry=latest_result,
-                    review_id=selected_review_id,
+                    review_id=prior_review_id,
                 )
-            readiness = review_ready(
-                owner,
-                change_id=change_id,
-                base_ref=None,
-                expected_revision=state["state_revision"],
-                operation_id="review-status-projection",
-                dry_run=True,
-            )
-            status_value = "ready" if readiness["ok"] else "blocked"
-            next_action = readiness["next_action"]
+            if (
+                latest_result.get("verdict") in {"not-clear", "blocked"}
+                and remediation_manifest_path is None
+            ):
+                status_value = "blocked"
+                next_action = {
+                    "id": "recover-remediation-manifest",
+                    "detail": (
+                        f"latest review {prior_review_id} has no canonical "
+                        "remediation manifest"
+                    ),
+                }
+            else:
+                status_value = "not-prepared"
+                next_action = {
+                    "id": "prepare-candidate",
+                    "detail": (
+                        "return to the implementation/remediation task and complete "
+                        f"candidate-ready for current HEAD {current_head}"
+                    ),
+                }
     runner_contract = "legacy-provenance"
     provenance_pack_entry = pack_entry
     if provenance_pack_entry is None and isinstance(selected_review_id, str):
@@ -565,6 +580,8 @@ def review_status(
         "owner_selection": owner_selection,
         "current_head": current_head,
         "review_id": selected_review_id,
+        "prior_review_id": prior_review_id,
+        "prior_review_result_path": prior_review_result_path,
         "status": status_value,
         "runner_contract": runner_contract,
         "progress": progress,
@@ -1385,6 +1402,22 @@ def review_run(
                     "operation_id": effective_operation_id,
                     "review_pack_path": None,
                     "pack_created": False,
+                }
+            )
+            return existing_status
+        if existing_status.get("next_action", {}).get("id") in {
+            "prepare-candidate",
+            "recover-remediation-manifest",
+        }:
+            existing_status.update(
+                {
+                    "dry_run": dry_run,
+                    "operation_id": effective_operation_id,
+                    "review_pack_path": None,
+                    "pack_created": False,
+                    "review_result_path": None,
+                    "verdict": None,
+                    "presentation": None,
                 }
             )
             return existing_status

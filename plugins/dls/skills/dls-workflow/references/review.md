@@ -22,7 +22,7 @@ sibling folders or infers branches.
 
 `review-run` owns:
 
-1. exact-HEAD ReviewPack selection or remediation-pack preparation;
+1. exact-HEAD ReviewPack selection prepared by `candidate-ready`;
 2. native Terra/high review;
 3. at most three deterministic critical specialist lanes;
 4. independent Sol high/xhigh semantic review;
@@ -87,12 +87,16 @@ replace `review_result_path`, finding IDs, ticket verdicts, or remediation state
   `remediation_manifest_path`. This is a successful runner execution, not an
   infrastructure failure.
 - `running`: wait or use only `review-status`.
+- `prepare-candidate`: stop this review task and return to the implementation
+  or remediation task. That task must commit the candidate and complete one
+  `candidate-ready`; do not run validation, `review-ready`, or `candidate-ready`
+  from the independent review task.
 - `failed-finalize`: resume the same `review-run`; do not start an informal or
   replacement review.
 - a nonzero exit: report the integrity/infrastructure failure and its typed
   `next_action`; do not improvise a review.
-- `provide-review-base`: the implementation task must prepare the first candidate
-  with `candidate-ready --base BASE`.
+- `provide-review-base`: legacy low-level output; the implementation task must
+  prepare the first candidate with `candidate-ready --base BASE`.
 
 Completion always requires a non-null `review_result_path`. Never claim review
 completion from a transcript, draft, or model message alone. Never record human
