@@ -56,5 +56,5 @@ Rules:
   provenance only for diagnostics.
 - `dls review-start CHANGE_ID` remains a native-only compatibility and diagnostic primitive.
 - Implementation/remediation tasks stop after `review-ready`; only a separate explicit review task invokes `review-run`.
-- Implementers use `dls finding set ... addressed` with candidate SHA/evidence. `verified` is unavailable to this command and is created only by independent `review-import`; legacy `resolved` is treated as `addressed`.
+- Implementers use `dls finding set ... addressed` with the candidate SHA and every relevant evidence record. Multiple records may be passed as `--evidence A B`, `--evidence A --evidence B`, or `--evidence A,B`; the CLI normalizes and deduplicates them. Confirm `evidence_count` in the JSON response. `verified` is unavailable to this command and is created only by independent `review-import`; legacy `resolved` is treated as `addressed`.
 - Native review model and effort are fixed inside `review-start`; do not change global Codex model configuration.

@@ -86,6 +86,13 @@ ReviewPack v2 связывает:
 
 ReviewIR v2 обязан содержать ticket verdicts, provenance review lanes и verdict для каждого прежнего actionable finding. Implementer записывает только `addressed`; `verified` появляется исключительно при независимом импорте нового ReviewIR.
 
+Один finding может ссылаться на несколько validation evidence records. CLI принимает
+`--evidence A B`, повторённые `--evidence A --evidence B` и comma-separated
+`--evidence A,B`, нормализует порядок, удаляет дубли и возвращает
+`evidence_count`. Это позволяет отдельно связать с finding, например, Swift suite
+и проверку JavaScript bridge, а не оставлять вторую проверку только на уровне
+ReviewPack.
+
 Последний импортированный ReviewIR является canonical finding snapshot для remediation и gates; более ранние результаты остаются audit history. `note` означает запрос на независимое adjudication, а не закрытие или waiver.
 
 Повторный `review-clear` требует непрерывной native coverage chain и final whole-change semantic pass.
@@ -213,6 +220,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.3.3`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.3.4`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

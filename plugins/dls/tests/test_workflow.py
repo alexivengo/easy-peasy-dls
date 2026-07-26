@@ -625,12 +625,25 @@ class WorkflowTests(unittest.TestCase):
                 duration_seconds=0.1,
                 operation_id="evidence-1",
             )
+            bridge_evidence = evidence_add(
+                root,
+                change_id="C001",
+                command_id="bridge-test",
+                exit_code=0,
+                summary="PASS bridge",
+                expected_revision=StateStore(root).load("C001")["state_revision"],
+                git_sha=head_sha,
+                artifacts=[],
+                environment="fixture",
+                duration_seconds=0.1,
+                operation_id="evidence-bridge-1",
+            )
             pack = review_pack(
                 root,
                 change_id="C001",
                 base_ref=base_sha,
                 head_ref=None,
-                expected_revision=3,
+                expected_revision=StateStore(root).load("C001")["state_revision"],
                 advisory_dirty=False,
                 operation_id="review-pack-1",
             )
@@ -675,7 +688,11 @@ class WorkflowTests(unittest.TestCase):
                 rationale="Boundary proof is attached.",
                 expected_revision=StateStore(root).load("C001")["state_revision"],
                 git_sha=head_sha,
-                evidence=[evidence["evidence_path"]],
+                evidence=[
+                    evidence["evidence_path"],
+                    bridge_evidence["evidence_path"],
+                    evidence["evidence_path"],
+                ],
                 actor="codex",
                 prompt=None,
                 response=None,
@@ -683,6 +700,11 @@ class WorkflowTests(unittest.TestCase):
             )
             self.assertEqual(resolved["disposition"]["status"], "addressed")
             self.assertEqual(resolved["disposition"]["legacy_alias"], "resolved")
+            self.assertEqual(
+                resolved["disposition"]["evidence"],
+                [evidence["evidence_path"], bridge_evidence["evidence_path"]],
+            )
+            self.assertEqual(resolved["evidence_count"], 2)
             reopened = finding_disposition(
                 root,
                 change_id="C001",

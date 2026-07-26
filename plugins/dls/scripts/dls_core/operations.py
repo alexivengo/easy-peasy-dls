@@ -4478,6 +4478,7 @@ def finding_disposition(
     operation_id: str | None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
+    evidence = list(dict.fromkeys(evidence))
     if disposition_status not in WRITABLE_DISPOSITION_STATUSES:
         raise UsageError(f"Invalid finding disposition: {disposition_status}")
     normalized_status = _normalized_disposition_status(disposition_status)
@@ -4522,6 +4523,8 @@ def finding_disposition(
             "state_revision": state["state_revision"],
             "operation_id": effective_operation_id,
             "disposition": recorded,
+            "evidence": recorded["evidence"],
+            "evidence_count": len(recorded["evidence"]),
         }
     _require_revision(state, expected_revision)
     latest_result = _latest_review_result(state)
@@ -4562,6 +4565,8 @@ def finding_disposition(
             "state_revision": state["state_revision"],
             "operation_id": effective_operation_id,
             "disposition": record,
+            "evidence": record["evidence"],
+            "evidence_count": len(record["evidence"]),
         }
 
     def mutate(value: dict[str, Any]) -> None:
@@ -4586,6 +4591,8 @@ def finding_disposition(
         "state_revision": updated["state_revision"],
         "operation_id": effective_operation_id,
         "disposition": recorded,
+        "evidence": recorded["evidence"],
+        "evidence_count": len(recorded["evidence"]),
     }
 
 

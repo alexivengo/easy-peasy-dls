@@ -38,7 +38,7 @@ After source changes:
 1. run focused regression checks and the required full validation;
 2. commit the product candidate;
 3. record current evidence for that HEAD;
-4. set each fixed finding to `addressed` with candidate SHA and evidence.
+4. set each fixed finding to `addressed` with the candidate SHA and all relevant evidence paths; pass multiple records with one or repeated `--evidence` flags and confirm the returned `evidence_count`.
 
 For a disputed or incorrectly staged finding, use `note` with a current-SHA rationale instead of pretending to fix or waive it. This only permits independent adjudication in the next review; it does not close the finding. Never set `verified`. Only the next independent ReviewIR import can verify a finding. `resolved` is a deprecated alias for `addressed`.
 

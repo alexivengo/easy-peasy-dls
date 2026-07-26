@@ -334,7 +334,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finding_set_parser.add_argument("--rationale", required=True)
     finding_set_parser.add_argument("--git-sha")
-    finding_set_parser.add_argument("--evidence", action="append", default=[])
+    finding_set_parser.add_argument(
+        "--evidence",
+        action="extend",
+        nargs="+",
+        default=[],
+        metavar="PATH",
+        help=(
+            "Repository-relative DLS evidence path. Accepts multiple paths, "
+            "comma-separated paths, or repeated --evidence flags."
+        ),
+    )
     finding_set_parser.add_argument("--actor", required=True, choices=("codex", "user"))
     finding_set_parser.add_argument("--prompt")
     finding_set_parser.add_argument("--response")
@@ -588,7 +598,7 @@ def dispatch(root: Path, args: argparse.Namespace) -> dict[str, Any]:
             rationale=args.rationale,
             expected_revision=args.expect_revision,
             git_sha=args.git_sha,
-            evidence=args.evidence,
+            evidence=_evidence_paths(args.evidence),
             actor=args.actor,
             prompt=args.prompt,
             response=args.response,
@@ -784,7 +794,10 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
         )
     if command == "finding":
         disposition = result["disposition"]
-        return prefix + f"{disposition['finding_id']}={disposition['status']}"
+        return prefix + (
+            f"{disposition['finding_id']}={disposition['status']}; "
+            f"evidence={len(disposition['evidence'])}"
+        )
     if command == "validate":
         validation = result["validation"]
         if result.get("dry_run"):
@@ -816,6 +829,18 @@ def _split_values(values: list[str]) -> list[str]:
     output: list[str] = []
     for value in values:
         output.extend(item.strip() for item in value.split(",") if item.strip())
+    return output
+
+
+def _evidence_paths(values: list[str]) -> list[str]:
+    """Normalize every supported CLI spelling to one stable path list."""
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in _split_values(values):
+        if value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
     return output
 
 

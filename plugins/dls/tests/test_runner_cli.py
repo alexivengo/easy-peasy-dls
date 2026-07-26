@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from dls_core.errors import ConfigError
+from dls_core.cli import _evidence_paths, build_parser
 from dls_core.operations import validate_command
 
 from support import create_change, git, initialize, initialize_git
@@ -21,6 +22,37 @@ CLI = PLUGIN_ROOT / "scripts" / "dls.py"
 
 
 class RunnerAndCLITests(unittest.TestCase):
+    def test_finding_cli_normalizes_multiple_evidence_spellings(self) -> None:
+        arguments = build_parser().parse_args(
+            [
+                "finding",
+                "set",
+                "C001",
+                "R001",
+                "addressed",
+                "--rationale",
+                "Covered by Swift and bridge checks.",
+                "--evidence",
+                ".dls/evidence/C001/swift.json",
+                ".dls/evidence/C001/bridge.json",
+                "--evidence",
+                ".dls/evidence/C001/bridge.json,.dls/evidence/C001/schema.json",
+                "--actor",
+                "codex",
+                "--expect-revision",
+                "7",
+            ]
+        )
+
+        self.assertEqual(
+            _evidence_paths(arguments.evidence),
+            [
+                ".dls/evidence/C001/swift.json",
+                ".dls/evidence/C001/bridge.json",
+                ".dls/evidence/C001/schema.json",
+            ],
+        )
+
     @unittest.skipUnless(shutil.which("codex"), "Codex CLI is unavailable")
     def test_plugin_install_and_remove_in_disposable_codex_home(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
