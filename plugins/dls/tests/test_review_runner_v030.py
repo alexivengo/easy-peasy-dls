@@ -239,6 +239,12 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertEqual(completed["status"], "completed")
             self.assertEqual(completed["verdict"], "review-clear")
             self.assertTrue(completed["review_result_path"])
+            self.assertEqual(
+                completed["presentation"]["contract"],
+                "codex-inline-comments/v1",
+            )
+            self.assertTrue(completed["presentation"]["exact_head"])
+            self.assertEqual(completed["presentation"]["comments"], [])
             calls = counter.read_text(encoding="utf-8").splitlines()
             self.assertEqual(calls.count("native"), 1)
             self.assertEqual(
@@ -257,6 +263,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 status["review_result_path"],
                 completed["review_result_path"],
             )
+            self.assertEqual(status["presentation"], completed["presentation"])
             repeated = review_run(
                 root,
                 change_id="C001",
@@ -740,6 +747,18 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertEqual(completed["status"], "completed")
             self.assertEqual(completed["verdict"], "not-clear")
             self.assertTrue(completed["review_result_path"])
+            self.assertTrue(completed["presentation"]["renderable"])
+            self.assertEqual(
+                [
+                    item["finding_id"]
+                    for item in completed["presentation"]["comments"]
+                ],
+                ["RNEW"],
+            )
+            self.assertIn(
+                "::code-comment{",
+                completed["presentation"]["comments"][0]["directive"],
+            )
             self.assertNotIn(
                 "final-full",
                 counter.read_text(encoding="utf-8").splitlines(),
@@ -865,6 +884,9 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         self.assertNotIn("which dls", combined)
         self.assertIn("Do not create subagents", review)
         self.assertNotIn("review-import CHANGE_ID", review)
+        self.assertIn("presentation.comments[].directive", review)
+        self.assertIn("::code-comment", combined)
+        self.assertIn("one compact unchanged heartbeat per minute", review)
         self.assertIn("open-review-task", remediation)
         self.assertIn("Never invoke `review-run`", remediation)
         self.assertNotIn(" dls review-run ", remediation)

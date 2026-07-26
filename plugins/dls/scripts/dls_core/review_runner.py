@@ -50,6 +50,7 @@ from .repo import (
     git_source_snapshot_digest,
     run_git,
 )
+from .review_presentation import build_review_presentation
 from .state import StateStore
 from .worktrees import resolve_registered_worktree
 
@@ -223,6 +224,10 @@ def review_status(
             )
         )
         runner_contract = pack.get("runner_contract", runner_contract)
+    presentation = None
+    if result_entry is not None:
+        _, report = _read_review_result(owner, result_entry)
+        presentation = build_review_presentation(owner, report)
     return {
         "ok": True,
         "changed": False,
@@ -253,6 +258,7 @@ def review_status(
             )
             or remediation_manifest_path
         ),
+        "presentation": presentation,
         "next_action": next_action,
     }
 
@@ -1121,6 +1127,7 @@ def review_run(
         expected_revision=current_state["state_revision"],
         operation_id=f"{effective_operation_id}:import",
     )
+    presentation = build_review_presentation(owner, report)
     return {
         "ok": imported["review_result_path"] is not None,
         "dry_run": False,
@@ -1141,5 +1148,6 @@ def review_run(
         "remediation_manifest_path": imported.get(
             "remediation_manifest_path"
         ),
+        "presentation": presentation,
         "next_action": imported["next_action"],
     }

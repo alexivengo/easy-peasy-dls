@@ -47,7 +47,27 @@ python3 <plugin-root>/scripts/dls.py --root <current-project> --json \
 ```
 
 `review-status` is read-only and never launches a model. Continue checking status
-at a bounded interval; do not replace the active review.
+at a bounded interval; do not replace the active review. Do not narrate every
+unchanged shell poll. Use the longest wait allowed by the host, report only a
+lane/status transition or one compact unchanged heartbeat per minute, and never
+repeat the same explanatory paragraph.
+
+## Present the canonical result
+
+For a completed exact-HEAD review, use the DLS-owned `presentation` object from
+`review-run` or `review-status`. It is derived from the imported ReviewIR and is
+not a second review result.
+
+1. Report the verdict, result path, remediation path, and findings severity-first.
+2. Emit every string in `presentation.comments[].directive` verbatim as a
+   top-level Codex `::code-comment` directive. Do not rewrite its title, body,
+   file, lines, or priority.
+3. If `presentation.unplaced_findings` is non-empty, keep those findings in the
+   Markdown summary and explicitly say that no safe inline location was derived.
+4. Never emit inline directives when `presentation.exact_head` is false.
+
+Inline comments are only a presentation of the canonical ReviewIR. They never
+replace `review_result_path`, finding IDs, ticket verdicts, or remediation state.
 
 ## Handle outcomes
 

@@ -55,6 +55,8 @@ For a remediation request, read and follow [remediation.md](references/remediati
 
 Never finish a review without the non-null `review_result_path` returned by `review-run`. A completed `not-clear` or actionable `blocked` review must also return a non-null canonical `remediation_manifest_path`. After remediation, the implementation task must run `review-ready`, hand off the short request, and stop. Only a separate explicit review task may run `review-run`. A `review-clear` verdict is not final acceptance.
 
+When a completed exact-HEAD review returns DLS-owned `presentation.comments`, emit their prepared `::code-comment` directives verbatim after the severity-first summary. Do not invent inline comments from model transcripts or emit them for stale locations. During a long unchanged runner wait, avoid repeated narration: use the longest host wait available and provide at most one compact heartbeat per minute.
+
 ## Finish
 
 Run the acceptance gate. Ask a scoped `accept` question naming the exact short digest; for Git-backed work also name the reviewed head. Record acceptance only after the user's direct affirmative reply.

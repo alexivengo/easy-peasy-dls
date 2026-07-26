@@ -98,6 +98,15 @@ state revision. Успешный runner result поэтому всегда во�
 `review_result_path`, а actionable результат дополнительно возвращает
 `remediation_manifest_path`.
 
+Для интерфейса Codex `review-run` и завершённый `review-status` также возвращают
+производный объект `presentation` с контрактом `codex-inline-comments/v1`.
+Он содержит безопасные absolute owner-path, строки и готовые `::code-comment`
+directives для blocker/should-fix findings. Это только слой отображения:
+каноническими остаются ReviewIR, finding ID и ticket verdict. Если текущий HEAD
+уже отличается от reviewed HEAD или location нельзя безопасно разрешить внутри
+owner checkout, inline-комментарий не создаётся, а finding остаётся в текстовом
+отчёте.
+
 Canonical manifest хранится в
 `.dls/reviews/<change>/remediations/<review-id>.json`; очистка локального cache
 его не удаляет. Manifest содержит только findings последнего canonical ReviewIR,
