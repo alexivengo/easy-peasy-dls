@@ -126,6 +126,7 @@ NATIVE_REVIEW_TIMEOUT_SECONDS = 1800
 NATIVE_REVIEW_MAX_OUTPUT_BYTES = 262144
 NATIVE_REVIEW_TRANSCRIPT_MAX_BYTES = 1048576
 REVIEW_RUNNER_CONTRACT = "dls-review-runner/v1"
+REVIEW_IDENTIFIER_CONTRACT = "canonical-ticket-ids/v1"
 REVIEW_LANE_MAX_ATTEMPTS = 2
 RETRYABLE_REVIEW_LANE_STATUSES = {
     "abandoned",
@@ -2296,6 +2297,11 @@ def _validate_review_pack(pack: dict[str, Any], change_id: str) -> None:
     if not isinstance(pack["tickets"], dict) or not isinstance(pack["artifacts"], dict):
         raise IntegrityError("ReviewPack artifacts and tickets must be objects")
     if schema_version == REVIEW_PACK_SCHEMA_VERSION:
+        identifier_contract = pack.get("identifier_contract")
+        if identifier_contract not in {None, REVIEW_IDENTIFIER_CONTRACT}:
+            raise IntegrityError(
+                f"Unsupported ReviewPack identifier contract: {identifier_contract}"
+            )
         v2_required = {
             "review_mode",
             "epic_base_sha",
@@ -2558,6 +2564,7 @@ def _review_pack_state_entry(
     return {
         "review_id": pack["review_id"],
         "kind": "pack",
+        "identifier_contract": pack.get("identifier_contract"),
         "pack_path": relative_path,
         "base_sha": pack["base_sha"],
         "comparison_base_sha": pack["comparison_base_sha"],
@@ -2693,6 +2700,7 @@ def review_pack(
     pack = {
         "schema_version": REVIEW_PACK_SCHEMA_VERSION,
         "runner_contract": REVIEW_RUNNER_CONTRACT,
+        "identifier_contract": REVIEW_IDENTIFIER_CONTRACT,
         "review_id": review_id,
         "change_id": change_id,
         "mode": mode,
@@ -4891,6 +4899,9 @@ def _validate_review_report(
     )
     if schema_version != expected_schema or report["change_id"] != change_id:
         raise IntegrityError("Review report schema or change_id mismatch")
+    identifier_contract = pack.get("identifier_contract")
+    if identifier_contract is not None and report.get("identifier_contract") != identifier_contract:
+        raise IntegrityError("ReviewIR identifier contract does not match ReviewPack")
     if report["verdict"] not in REVIEW_VERDICTS:
         raise IntegrityError(f"Invalid review verdict: {report['verdict']}")
     lanes = report["lanes"]
@@ -5025,6 +5036,26 @@ def _validate_review_report(
             )
         if finding["base_sha"] != report["base_sha"] or finding["head_sha"] != report["head_sha"]:
             raise IntegrityError(f"Finding {finding_id} base/head mismatch")
+    identifier_normalizations = report.get("identifier_normalizations", [])
+    if not isinstance(identifier_normalizations, list):
+        raise IntegrityError("ReviewIR identifier_normalizations must be an array")
+    for item in identifier_normalizations:
+        if not isinstance(item, dict):
+            raise IntegrityError("ReviewIR identifier normalization must be an object")
+        finding_id = item.get("finding_id")
+        source = item.get("source")
+        canonical = item.get("canonical")
+        if (
+            finding_id not in seen
+            or item.get("field") != "ticket_ids"
+            or not isinstance(source, str)
+            or not source
+            or not isinstance(canonical, str)
+            or canonical not in pack["tickets"]
+            or source == canonical
+            or item.get("rule") != "unique-ticket-alias"
+        ):
+            raise IntegrityError("ReviewIR identifier normalization is invalid")
     ticket_verdicts = report["ticket_verdicts"]
     if not isinstance(ticket_verdicts, list):
         raise IntegrityError("ReviewIR ticket_verdicts must be an array")

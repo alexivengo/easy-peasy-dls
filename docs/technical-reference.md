@@ -213,6 +213,34 @@ deterministic assembly или atomic import не прошли, следующи�
 проверяет exact HEAD, pack, context и output digests, переиспользует completed
 attempts и повторяет только финализацию.
 
+### Канонические идентификаторы review
+
+Новые ReviewPack помечаются
+`identifier_contract: canonical-ticket-ids/v1`. Каждый model prompt получает
+точный список допустимых ticket IDs. Ссылки проверяются сразу после каждой
+specialist или semantic lane — до запуска следующей дорогой модели.
+
+Raw model output и его digest остаются неизменными. DLS создаёт отдельную
+каноническую проекцию для downstream lanes и ReviewIR. Допустимы только точный
+ticket ID или однозначные сокращения хвоста `T02` и `T-02`; fuzzy matching,
+изменение регистра и удаление ведущих нулей запрещены. Применённые преобразования
+сохраняются в DLS-owned `identifier_normalizations`. `requirement_ids` не
+нормализуются: до появления отдельного реестра они копируются точно из authored
+inputs.
+
+Это устраняет класс сбоев, при котором структурно корректный model JSON проходил
+несколько lanes, а неизвестная ссылка обнаруживалась только при ReviewIR import.
+Для старого `failed-finalize` DLS сначала выполняет deterministic reassembly из
+проверенных completed attempts. Однозначная ссылка исправляется без model call;
+неоднозначная может вызвать ровно одну новую terminal decision lane. Native,
+specialists и independent semantic при этом не повторяются.
+
+`resume-review` означает повторяемую deterministic finalization,
+`retry-review-decision` — ограниченное исправление model decision, а
+`inspect-review-integrity` — tampering или drift, которые нельзя повторять
+автоматически. Предварительные findings во всех трёх случаях остаются скрыты до
+успешного канонического импорта.
+
 Canonical ticket verdicts не доверяются модели. DLS механически связывает
 findings с tickets и вычисляет review state из severity и `blocks`. Поэтому
 release/production-only note сохраняется в ReviewIR, но не делает code-review
@@ -258,6 +286,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.4.1`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.4.2`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

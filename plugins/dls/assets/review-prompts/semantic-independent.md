@@ -5,6 +5,11 @@ pass. Read `.dls-review-input/context.json`, the bound ReviewPack, and every inp
 named by the context. Inspect the exact Git range
 `{{COMPARISON_BASE_SHA}}..{{HEAD_SHA}}`.
 
+Use ticket IDs exactly as listed here: `{{CANONICAL_TICKET_IDS}}`. Required
+prior finding IDs are `{{REQUIRED_PRIOR_FINDING_IDS}}`. Do not abbreviate or
+invent either kind of identifier. Copy requirement IDs exactly from bound
+authored inputs.
+
 For a targeted pass, independently adjudicate every required prior finding,
 the remediation delta, affected paths, blast radius, and current evidence. For a
 full pass, review the whole epic range, all tickets, cross-ticket integration,

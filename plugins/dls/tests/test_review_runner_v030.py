@@ -12,6 +12,7 @@ from unittest import mock
 from dls_core.errors import IntegrityError
 from dls_core.io import utc_now
 from dls_core.operations import (
+    REVIEW_IDENTIFIER_CONTRACT,
     REVIEW_RUNNER_CONTRACT,
     _codex_usage_from_output,
     _review_pack_digest,
@@ -27,9 +28,11 @@ from dls_core.operations import (
     ticket_set,
 )
 from dls_core.review_runner import (
+    ReviewDecisionReferenceError,
     _codex_failure_reason,
     _derive_review_verdict,
     _derive_ticket_verdicts,
+    _normalize_structured_payload,
     _validate_strict_output_schema,
     _validate_structured_payload,
     review_run,
@@ -48,6 +51,147 @@ from support import (
 
 
 class ReviewRunnerV030Tests(unittest.TestCase):
+    @staticmethod
+    def _decision_with_tickets(*ticket_ids: str) -> dict:
+        return {
+            "verdict": "not-clear" if ticket_ids else "review-clear",
+            "summary": "fixture decision",
+            "findings": (
+                [
+                    {
+                        "id": "R001",
+                        "severity": "should-fix",
+                        "kind": "defect",
+                        "location": "README.md:1",
+                        "issue": "fixture issue",
+                        "impact": "fixture impact",
+                        "required_fix": "fixture fix",
+                        "ticket_ids": list(ticket_ids),
+                        "requirement_ids": ["REQ-001"],
+                        "blocks": ["review", "acceptance"],
+                        "provenance": ["fixture"],
+                    }
+                ]
+                if ticket_ids
+                else []
+            ),
+            "prior_finding_verdicts": [],
+        }
+
+    def test_ticket_aliases_normalize_only_when_unique(self) -> None:
+        pack = {
+            "change_id": "EPIC-01",
+            "tickets": {
+                "EPIC-01-T01": {},
+                "EPIC-01-T02": {},
+            },
+            "required_prior_findings": [],
+        }
+        raw = self._decision_with_tickets("T02", "T-01")
+        normalized, audit = _normalize_structured_payload(
+            raw,
+            pack=pack,
+            payload_kind="decision",
+            lens_id=None,
+        )
+        self.assertEqual(
+            normalized["findings"][0]["ticket_ids"],
+            ["EPIC-01-T02", "EPIC-01-T01"],
+        )
+        self.assertEqual(
+            [(item["source"], item["canonical"]) for item in audit],
+            [
+                ("T02", "EPIC-01-T02"),
+                ("T-01", "EPIC-01-T01"),
+            ],
+        )
+        self.assertEqual(raw["findings"][0]["ticket_ids"], ["T02", "T-01"])
+        self.assertTrue(
+            all(item["rule"] == "unique-ticket-alias" for item in audit)
+        )
+
+    def test_ticket_aliases_reject_unknown_ambiguous_and_duplicate_links(self) -> None:
+        base_pack = {
+            "change_id": "EPIC-01",
+            "tickets": {"EPIC-01-T02": {}},
+            "required_prior_findings": [],
+        }
+        with self.assertRaisesRegex(ReviewDecisionReferenceError, "unknown ticket"):
+            _normalize_structured_payload(
+                self._decision_with_tickets("T-99"),
+                pack=base_pack,
+                payload_kind="decision",
+                lens_id=None,
+            )
+        ambiguous_pack = {
+            **base_pack,
+            "tickets": {"EPIC-01-T02": {}, "T-02": {}},
+        }
+        with self.assertRaisesRegex(ReviewDecisionReferenceError, "ambiguous ticket"):
+            _normalize_structured_payload(
+                self._decision_with_tickets("T-02"),
+                pack=ambiguous_pack,
+                payload_kind="decision",
+                lens_id=None,
+            )
+        with self.assertRaisesRegex(
+            ReviewDecisionReferenceError,
+            "duplicate ticket after normalization",
+        ):
+            _normalize_structured_payload(
+                self._decision_with_tickets("T02", "T-02"),
+                pack=base_pack,
+                payload_kind="decision",
+                lens_id=None,
+            )
+
+    def test_new_reviewpacks_declare_identifier_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, pack = self._prepared_standard(Path(directory))
+            self.assertEqual(
+                pack["review_pack"]["identifier_contract"],
+                REVIEW_IDENTIFIER_CONTRACT,
+            )
+
+    def test_prior_finding_links_are_checked_before_the_next_lane(self) -> None:
+        pack = {
+            "change_id": "EPIC-01",
+            "tickets": {"EPIC-01-T02": {}},
+            "required_prior_findings": [
+                {"finding_id": "EPIC01-R040", "disposition": {"status": "addressed"}}
+            ],
+        }
+        missing = self._decision_with_tickets()
+        with self.assertRaisesRegex(
+            ReviewDecisionReferenceError,
+            "missing prior finding verdicts",
+        ):
+            _normalize_structured_payload(
+                missing,
+                pack=pack,
+                payload_kind="decision",
+                lens_id=None,
+            )
+        invalid_replacement = self._decision_with_tickets("EPIC-01-T02")
+        invalid_replacement["prior_finding_verdicts"] = [
+            {
+                "finding_id": "EPIC01-R040",
+                "verdict": "still-open",
+                "replacement_finding_id": "EPIC01-R999",
+                "evidence": ["fixture"],
+            }
+        ]
+        with self.assertRaisesRegex(
+            ReviewDecisionReferenceError,
+            "requires a replacement finding",
+        ):
+            _normalize_structured_payload(
+                invalid_replacement,
+                pack=pack,
+                payload_kind="decision",
+                lens_id=None,
+            )
+
     def test_model_output_schema_is_strict_and_failure_reason_is_actionable(self) -> None:
         schema_path = (
             Path(__file__).resolve().parents[1]
@@ -187,6 +331,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         *,
         native_sleep: float = 0.0,
         invalid_semantic_once: bool = False,
+        invalid_ticket_once: bool = False,
         semantic_exit: int = 0,
         native_exit: int = 0,
         reconciliation_blocker: bool = False,
@@ -273,6 +418,17 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             "            kind = 'final-full'\n"
             "        payload = {'verdict': 'review-clear', 'summary': 'clear', "
             "'findings': [], 'prior_finding_verdicts': prior_verdicts}\n"
+            f"        if {invalid_ticket_once!r} and kind == 'semantic-independent' "
+            "and not invalid_marker.exists():\n"
+            "            invalid_marker.write_text('used')\n"
+            "            payload['verdict'] = 'not-clear'\n"
+            "            payload['findings'] = [{'id': 'R-BAD-TICKET', "
+            "'severity': 'should-fix', 'kind': 'defect', "
+            "'location': 'README.md:1', 'issue': 'bad ticket link', "
+            "'impact': 'invalid review decision', "
+            "'required_fix': 'use a canonical ticket ID', "
+            "'ticket_ids': ['T-99'], 'requirement_ids': [], "
+            "'blocks': ['review'], 'provenance': ['fixture']}]\n"
             f"        if {reconciliation_blocker!r} and kind == 'reconciliation':\n"
             "            payload['verdict'] = 'not-clear'\n"
             "            payload['summary'] = 'blocker remains'\n"
@@ -358,6 +514,11 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 (root / completed["review_result_path"]).read_text(encoding="utf-8")
             )
             self.assertEqual(result["runner_contract"], REVIEW_RUNNER_CONTRACT)
+            self.assertEqual(
+                result["identifier_contract"],
+                REVIEW_IDENTIFIER_CONTRACT,
+            )
+            self.assertEqual(result["identifier_normalizations"], [])
             self.assertEqual(result["review_id"], pack["review_id"])
             self.assertIn("reconciliation", result["lanes"])
             status = review_status(root, change_id="C001")
@@ -391,6 +552,13 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 self.assertTrue(attempt.get("context_digest"))
                 self.assertTrue(attempt.get("prompt_digest"))
                 self.assertTrue(attempt.get("schema_digest"))
+                if attempt.get("lane_key") != "native":
+                    self.assertTrue(attempt.get("normalized_output_path"))
+                    self.assertTrue(attempt.get("normalized_output_digest"))
+                    self.assertIn(
+                        "Use ticket IDs exactly as listed here",
+                        (root / attempt["prompt_path"]).read_text(encoding="utf-8"),
+                    )
 
     def test_review_run_returns_unprepared_candidate_to_implementation_task(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -481,6 +649,44 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 [item["status"] for item in semantic],
                 ["invalid-output", "completed"],
             )
+
+    def test_invalid_ticket_reference_retries_before_reconciliation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                invalid_ticket_once=True,
+            )
+            try:
+                completed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="ticket-reference-retry",
+                )
+            finally:
+                self._restore_path(original)
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(
+                counter.read_text(encoding="utf-8").splitlines(),
+                [
+                    "native",
+                    "semantic-independent",
+                    "semantic-independent",
+                    "reconciliation",
+                ],
+            )
+            attempts = [
+                item
+                for item in StateStore(root).load("C001")["reviews"]
+                if item.get("lane_key") == "semantic:full"
+            ]
+            self.assertEqual(
+                [item["status"] for item in attempts],
+                ["invalid-output", "completed"],
+            )
+            self.assertIn("unknown ticket", attempts[0]["failure_reason"])
 
     def test_changed_lane_contract_retries_without_reusing_native_or_operation_id(
         self,
@@ -922,6 +1128,65 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             finally:
                 self._restore_path(original)
 
+    def test_failed_finalize_retries_only_terminal_decision_when_alias_is_unsafe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            original_path, counter, _ = self._install_fake_codex(root)
+            try:
+                with mock.patch(
+                    "dls_core.review_runner._build_review_ir",
+                    side_effect=IntegrityError("synthetic assembly failure"),
+                ):
+                    with self.assertRaisesRegex(
+                        IntegrityError,
+                        "synthetic assembly failure",
+                    ):
+                        review_run(
+                            root,
+                            change_id="C001",
+                            pack_path=None,
+                            operation_id="terminal-repair",
+                        )
+                calls_before = counter.read_text(encoding="utf-8").splitlines()
+                from dls_core import review_runner as runner_module
+
+                original_loader = runner_module._completed_lane_payload
+
+                def reject_terminal_alias(owner, entry, **kwargs):
+                    if entry.get("lane_key") == "reconciliation":
+                        raise ReviewDecisionReferenceError(
+                            "Finding R001 references unknown ticket: T-99"
+                        )
+                    return original_loader(owner, entry, **kwargs)
+
+                with mock.patch(
+                    "dls_core.review_runner._completed_lane_payload",
+                    side_effect=reject_terminal_alias,
+                ):
+                    completed = review_run(
+                        root,
+                        change_id="C001",
+                        pack_path=None,
+                        operation_id="terminal-repair",
+                    )
+            finally:
+                self._restore_path(original_path)
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(
+                counter.read_text(encoding="utf-8").splitlines(),
+                calls_before + ["reconciliation"],
+            )
+            attempts = [
+                item
+                for item in StateStore(root).load("C001")["reviews"]
+                if item.get("lane_key")
+                == "reconciliation:identifier-correction"
+            ]
+            self.assertEqual(len(attempts), 1)
+            self.assertEqual(attempts[0]["max_attempts"], 1)
+            self.assertEqual(attempts[0]["status"], "completed")
+
     def test_orphaned_native_attempt_is_abandoned_then_retried_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1129,6 +1394,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             legacy_pack_result = json.loads(json.dumps(pack_result))
             legacy_pack = legacy_pack_result["review_pack"]
             legacy_pack.pop("runner_contract")
+            legacy_pack.pop("identifier_contract")
             legacy_pack["pack_digest"] = _review_pack_digest(legacy_pack)
             _validate_review_pack(legacy_pack, "C001")
             report = build_review_report(

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
+import re
 import shutil
 import tempfile
 import uuid
@@ -27,6 +29,7 @@ from .operations import (
     NATIVE_REVIEW_TRANSCRIPT_MAX_BYTES,
     RETRYABLE_REVIEW_LANE_STATUSES,
     REVIEW_LANE_MAX_ATTEMPTS,
+    REVIEW_IDENTIFIER_CONTRACT,
     REVIEW_RUNNER_CONTRACT,
     _attempt_lease_expired,
     _codex_usage_from_output,
@@ -59,6 +62,151 @@ SEMANTIC_MODEL = "gpt-5.6-sol"
 SPECIALIST_MODEL = "gpt-5.6-terra"
 SPECIALIST_EFFORT = "high"
 REVIEW_PROMPTS_ROOT = PLUGIN_ROOT / "assets" / "review-prompts"
+
+
+class ReviewDecisionReferenceError(IntegrityError):
+    """A model decision contains unsafe or inconsistent identifier links."""
+
+
+def _ticket_alias_index(pack: dict[str, Any]) -> dict[str, set[str]]:
+    aliases: dict[str, set[str]] = {}
+    change_prefix = f"{pack['change_id']}-"
+    for canonical in pack["tickets"]:
+        candidates = {canonical}
+        if canonical.startswith(change_prefix):
+            suffix = canonical[len(change_prefix) :]
+            candidates.add(suffix)
+            match = re.fullmatch(r"T([0-9]+)", suffix)
+            if match:
+                candidates.add(f"T-{match.group(1)}")
+        for candidate in candidates:
+            aliases.setdefault(candidate, set()).add(canonical)
+    return aliases
+
+
+def _normalize_structured_payload(
+    payload: dict[str, Any],
+    *,
+    pack: dict[str, Any],
+    payload_kind: str,
+    lens_id: str | None,
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Validate model-owned references and return a canonical DLS projection.
+
+    Raw model output remains immutable. Only exact ticket IDs and conservative,
+    unique aliases derived from the active ReviewPack are accepted.
+    """
+
+    _validate_structured_payload(
+        payload,
+        payload_kind=payload_kind,
+        lens_id=lens_id,
+    )
+    normalized = copy.deepcopy(payload)
+    findings = normalized.get("findings", [])
+    if not isinstance(findings, list):
+        raise ReviewDecisionReferenceError("Review findings must be an array")
+    aliases = _ticket_alias_index(pack)
+    normalizations: list[dict[str, str]] = []
+    finding_ids: set[str] = set()
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise ReviewDecisionReferenceError("Each review finding must be an object")
+        finding_id = finding.get("id")
+        if (
+            not isinstance(finding_id, str)
+            or not finding_id
+            or finding_id in finding_ids
+        ):
+            raise ReviewDecisionReferenceError(
+                f"Invalid or duplicate review finding ID: {finding_id!r}"
+            )
+        finding_ids.add(finding_id)
+        for field in ("ticket_ids", "requirement_ids"):
+            values = finding.get(field)
+            if (
+                not isinstance(values, list)
+                or not all(isinstance(item, str) and item for item in values)
+                or len(values) != len(set(values))
+            ):
+                raise ReviewDecisionReferenceError(
+                    f"Finding {finding_id} has invalid {field}"
+                )
+        canonical_values: list[str] = []
+        for source in finding["ticket_ids"]:
+            targets = aliases.get(source, set())
+            if len(targets) != 1:
+                reason = "unknown" if not targets else "ambiguous"
+                raise ReviewDecisionReferenceError(
+                    f"Finding {finding_id} references {reason} ticket: {source}"
+                )
+            canonical = next(iter(targets))
+            if canonical in canonical_values:
+                raise ReviewDecisionReferenceError(
+                    f"Finding {finding_id} has duplicate ticket after normalization: "
+                    f"{canonical}"
+                )
+            canonical_values.append(canonical)
+            if source != canonical:
+                normalizations.append(
+                    {
+                        "finding_id": finding_id,
+                        "field": "ticket_ids",
+                        "source": source,
+                        "canonical": canonical,
+                        "rule": "unique-ticket-alias",
+                    }
+                )
+        finding["ticket_ids"] = canonical_values
+
+    if payload_kind == "specialist":
+        return normalized, normalizations
+
+    required_prior = {
+        item["finding_id"]: item
+        for item in pack.get("required_prior_findings", [])
+        if isinstance(item, dict) and isinstance(item.get("finding_id"), str)
+    }
+    actual_prior: dict[str, dict[str, Any]] = {}
+    for item in normalized["prior_finding_verdicts"]:
+        if not isinstance(item, dict):
+            raise ReviewDecisionReferenceError(
+                "Prior finding verdict must be an object"
+            )
+        finding_id = item.get("finding_id")
+        if (
+            not isinstance(finding_id, str)
+            or finding_id not in required_prior
+            or finding_id in actual_prior
+        ):
+            raise ReviewDecisionReferenceError(
+                f"Invalid or duplicate prior finding verdict: {finding_id!r}"
+            )
+        verdict = item.get("verdict")
+        replacement = item.get("replacement_finding_id")
+        if verdict in {"still-open", "regressed"}:
+            if not isinstance(replacement, str) or replacement not in finding_ids:
+                raise ReviewDecisionReferenceError(
+                    f"Prior finding {finding_id} requires a replacement finding"
+                )
+        elif replacement is not None:
+            raise ReviewDecisionReferenceError(
+                f"Prior finding {finding_id} cannot declare a replacement"
+            )
+        if verdict == "waived":
+            disposition = required_prior[finding_id].get("disposition")
+            if not isinstance(disposition, dict) or disposition.get("status") != "waived":
+                raise ReviewDecisionReferenceError(
+                    f"Prior finding {finding_id} has no current human waiver"
+                )
+        actual_prior[finding_id] = item
+    missing_prior = sorted(set(required_prior) - set(actual_prior))
+    if missing_prior:
+        raise ReviewDecisionReferenceError(
+            "Review decision is missing prior finding verdicts: "
+            + ", ".join(missing_prior)
+        )
+    return normalized, normalizations
 
 
 def _validate_strict_output_schema(value: Any, *, location: str = "$") -> None:
@@ -376,7 +524,7 @@ def _terminal_lane_next_action(
     ]
     if (
         terminal.get("status") in RETRYABLE_REVIEW_LANE_STATUSES
-        and len(matching) < REVIEW_LANE_MAX_ATTEMPTS
+        and len(matching) < int(terminal.get("max_attempts", REVIEW_LANE_MAX_ATTEMPTS))
     ):
         return {
             "id": "retry-review",
@@ -477,14 +625,27 @@ def review_status(
         "failed-finalize",
     }:
         status_value = pipeline["status"]
+        failure_kind = pipeline.get("failure_kind")
+        if failure_kind == "model-output":
+            action_id = "retry-review-decision"
+        elif failure_kind == "integrity":
+            action_id = "inspect-review-integrity"
+        else:
+            action_id = (
+                "resume-review" if status_value == "failed-finalize" else "retry-review"
+            )
         next_action = {
-            "id": "resume-review" if status_value == "failed-finalize" else "retry-review",
+            "id": action_id,
             "detail": pipeline.get("failure_reason") or pipeline.get("stage") or "review failed",
         }
     elif pipeline is not None and pipeline.get("status") == "running":
         status_value = "failed"
         next_action = {
-            "id": "resume-review",
+            "id": (
+                "retry-review-decision"
+                if pipeline.get("failure_kind") == "model-output"
+                else "resume-review"
+            ),
             "detail": "review pipeline owner exited before canonical completion",
         }
     elif pack_entry:
@@ -611,6 +772,27 @@ def _render_prompt(name: str, values: dict[str, str]) -> str:
     if "{{" in text or "}}" in text:
         raise IntegrityError(f"Unresolved review prompt placeholder: {name}")
     return text
+
+
+def _review_prompt_values(pack: dict[str, Any]) -> dict[str, str]:
+    return {
+        "CHANGE_ID": pack["change_id"],
+        "REVIEW_ID": pack["review_id"],
+        "COMPARISON_BASE_SHA": pack["comparison_base_sha"],
+        "EPIC_BASE_SHA": pack["epic_base_sha"],
+        "HEAD_SHA": pack["head_sha"],
+        "CANONICAL_TICKET_IDS": json.dumps(
+            list(pack["tickets"]),
+            ensure_ascii=False,
+        ),
+        "REQUIRED_PRIOR_FINDING_IDS": json.dumps(
+            [
+                item["finding_id"]
+                for item in pack.get("required_prior_findings", [])
+            ],
+            ensure_ascii=False,
+        ),
+    }
 
 
 def _model_argv(
@@ -754,6 +936,7 @@ def _completed_lane_payload(
     owner: Path,
     entry: dict[str, Any],
     *,
+    pack: dict[str, Any],
     payload_kind: str,
     lens_id: str | None,
 ) -> dict[str, Any]:
@@ -764,12 +947,29 @@ def _completed_lane_payload(
     if sha256_file(path) != entry.get("output_digest"):
         raise IntegrityError("Completed review lane output digest mismatch")
     payload = read_json(path)
-    _validate_structured_payload(
+    normalized, _ = _normalize_structured_payload(
         payload,
+        pack=pack,
         payload_kind=payload_kind,
         lens_id=lens_id,
     )
-    return payload
+    normalized_path_value = entry.get("normalized_output_path")
+    normalized_digest = entry.get("normalized_output_digest")
+    if isinstance(normalized_path_value, str) or isinstance(normalized_digest, str):
+        if not isinstance(normalized_path_value, str) or not isinstance(
+            normalized_digest, str
+        ):
+            raise IntegrityError("Completed review lane normalized projection is incomplete")
+        normalized_path = safe_resolve(owner, normalized_path_value, must_exist=True)
+        if sha256_file(normalized_path) != normalized_digest:
+            raise IntegrityError(
+                "Completed review lane normalized projection digest mismatch"
+            )
+        if read_json(normalized_path) != normalized:
+            raise IntegrityError(
+                "Completed review lane normalized projection content mismatch"
+            )
+    return normalized
 
 
 def _mark_lane_pipeline_failed(
@@ -808,6 +1008,7 @@ def _execute_structured_lane(
     payload_kind: str,
     lens_id: str | None = None,
     extra_files: dict[str, Path | bytes] | None = None,
+    max_attempts: int = REVIEW_LANE_MAX_ATTEMPTS,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     state_store = StateStore(owner)
     safe_lane = lane_key.replace(":", "-")
@@ -885,6 +1086,7 @@ def _execute_structured_lane(
             return completed, _completed_lane_payload(
                 owner,
                 completed,
+                pack=pack,
                 payload_kind=payload_kind,
                 lens_id=lens_id,
             )
@@ -905,7 +1107,7 @@ def _execute_structured_lane(
                 f"Review lane {lane_key} failed: status={terminal.get('status')}; "
                 f"reason={reason}"
             )
-        if len(contract_attempts) >= REVIEW_LANE_MAX_ATTEMPTS:
+        if len(contract_attempts) >= max_attempts:
             reason = f"Review lane {lane_key} exhausted automatic attempts"
             _mark_lane_pipeline_failed(
                 owner,
@@ -942,6 +1144,9 @@ def _execute_structured_lane(
             f".dls/cache/reviews/{change_id}/{pack['review_id']}"
         )
         output_relative = f"{cache_root}/{safe_lane}-{attempt_id}.json"
+        normalized_output_relative = (
+            f"{cache_root}/{safe_lane}-{attempt_id}.normalized.json"
+        )
         transcript_relative = (
             f"{cache_root}/{safe_lane}-transcript-{attempt_id}.jsonl"
         )
@@ -959,6 +1164,7 @@ def _execute_structured_lane(
             "lane_key": lane_key,
             "attempt_id": attempt_id,
             "attempt_ordinal": ordinal,
+            "max_attempts": max_attempts,
             "operation_id": operation_id,
             "runner_pid": os.getpid(),
             "runner_contract": REVIEW_RUNNER_CONTRACT,
@@ -985,13 +1191,14 @@ def _execute_structured_lane(
             change_id,
             attempt=proposed,
             operation_kind=f"review-run:{lane_key}",
-            max_attempts=REVIEW_LANE_MAX_ATTEMPTS,
+            max_attempts=max_attempts,
         )
         if not claimed:
             if claimed_attempt.get("status") == "running":
                 return claimed_attempt, None
             continue
         output_path = safe_resolve(owner, output_relative)
+        normalized_output_path = safe_resolve(owner, normalized_output_relative)
         transcript_path = safe_resolve(owner, transcript_relative)
         prompt_path = safe_resolve(owner, prompt_relative)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1051,11 +1258,17 @@ def _execute_structured_lane(
                 status_value = "output-cap"
             else:
                 try:
-                    payload = read_json(output_path)
-                    _validate_structured_payload(
-                        payload,
+                    raw_payload = read_json(output_path)
+                    payload, identifier_normalizations = _normalize_structured_payload(
+                        raw_payload,
+                        pack=pack,
                         payload_kind=payload_kind,
                         lens_id=lens_id,
+                    )
+                    atomic_write_json(
+                        normalized_output_path,
+                        payload,
+                        backup=False,
                     )
                 except IntegrityError as exc:
                     status_value = "invalid-output"
@@ -1068,6 +1281,19 @@ def _execute_structured_lane(
                 "output_path": output_relative if output_path.is_file() else None,
                 "output_digest": (
                     sha256_file(output_path) if output_path.is_file() else None
+                ),
+                "normalized_output_path": (
+                    normalized_output_relative
+                    if status_value == "completed" and normalized_output_path.is_file()
+                    else None
+                ),
+                "normalized_output_digest": (
+                    sha256_file(normalized_output_path)
+                    if status_value == "completed" and normalized_output_path.is_file()
+                    else None
+                ),
+                "identifier_normalizations": (
+                    identifier_normalizations if status_value == "completed" else []
                 ),
                 "output_bytes": output_bytes,
                 "exit_code": execution["exit_code"],
@@ -1162,6 +1388,9 @@ def _lane_provenance(entry: dict[str, Any]) -> dict[str, Any]:
             "context_digest",
             "output_path",
             "output_digest",
+            "normalized_output_path",
+            "normalized_output_digest",
+            "identifier_normalizations",
             "transcript_path",
             "transcript_digest",
             "source_snapshot_digest",
@@ -1248,6 +1477,7 @@ def _update_pipeline(
     status: str = "running",
     create: bool = False,
     failure_reason: str | None = None,
+    failure_kind: str | None = None,
 ) -> None:
     updates: dict[str, Any] = {
         "status": status,
@@ -1257,6 +1487,8 @@ def _update_pipeline(
     }
     if failure_reason is not None:
         updates["failure_reason"] = failure_reason
+    if failure_kind is not None:
+        updates["failure_kind"] = failure_kind
     if status in {"completed", "failed", "failed-finalize"}:
         updates["completed_at"] = utc_now()
     StateStore(owner).update_review_pipeline(
@@ -1277,7 +1509,16 @@ def _build_review_ir(
     reconciliation_entry: dict[str, Any],
     specialist_entries: list[tuple[dict[str, Any], str]],
     final_full_entry: dict[str, Any] | None,
+    identifier_normalizations: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
+    decision, derived_normalizations = _normalize_structured_payload(
+        decision,
+        pack=pack,
+        payload_kind="decision",
+        lens_id=None,
+    )
+    if identifier_normalizations is None:
+        identifier_normalizations = derived_normalizations
     findings: list[dict[str, Any]] = []
     for raw in decision["findings"]:
         finding = dict(raw)
@@ -1362,6 +1603,11 @@ def _build_review_ir(
     return {
         "schema_version": 2,
         "runner_contract": REVIEW_RUNNER_CONTRACT,
+        **(
+            {"identifier_contract": pack["identifier_contract"]}
+            if pack.get("identifier_contract") == REVIEW_IDENTIFIER_CONTRACT
+            else {}
+        ),
         "review_id": pack["review_id"],
         "change_id": pack["change_id"],
         "base_sha": pack["base_sha"],
@@ -1377,6 +1623,394 @@ def _build_review_ir(
         "ticket_verdicts": ticket_verdicts,
         "prior_finding_verdicts": decision["prior_finding_verdicts"],
         "findings": findings,
+        "identifier_normalizations": identifier_normalizations,
+    }
+
+
+def _completed_lane_entry(
+    state: dict[str, Any],
+    *,
+    review_id: str,
+    lane_key: str,
+) -> dict[str, Any]:
+    entry = next(
+        (
+            item
+            for item in reversed(state["reviews"])
+            if isinstance(item, dict)
+            and item.get("review_id") == review_id
+            and item.get("lane_key") == lane_key
+            and item.get("status") == "completed"
+        ),
+        None,
+    )
+    if entry is None:
+        raise IntegrityError(
+            f"Failed-finalize recovery is missing completed lane: {lane_key}"
+        )
+    return entry
+
+
+def _finalize_review(
+    owner: Path,
+    *,
+    change_id: str,
+    pack: dict[str, Any],
+    start_result: dict[str, Any],
+    decision: dict[str, Any],
+    independent_entry: dict[str, Any],
+    reconciliation_entry: dict[str, Any],
+    specialist_entries: list[tuple[dict[str, Any], str]],
+    final_full_entry: dict[str, Any] | None,
+    pipeline_operation_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    _update_pipeline(
+        owner,
+        change_id=change_id,
+        review_id=pack["review_id"],
+        operation_id=pipeline_operation_id,
+        stage="finalizing",
+        create=True,
+    )
+    try:
+        terminal_entry = final_full_entry or reconciliation_entry
+        terminal_output_path = safe_resolve(
+            owner,
+            terminal_entry["output_path"],
+            must_exist=True,
+        )
+        if sha256_file(terminal_output_path) != terminal_entry.get("output_digest"):
+            raise IntegrityError("Terminal review decision output digest mismatch")
+        _, identifier_normalizations = _normalize_structured_payload(
+            read_json(terminal_output_path),
+            pack=pack,
+            payload_kind="decision",
+            lens_id=None,
+        )
+        report = _build_review_ir(
+            pack=pack,
+            start_result=start_result,
+            decision=decision,
+            independent_entry=independent_entry,
+            reconciliation_entry=reconciliation_entry,
+            specialist_entries=specialist_entries,
+            final_full_entry=final_full_entry,
+            identifier_normalizations=identifier_normalizations,
+        )
+        _validate_review_report(report, change_id, pack)
+        report_relative = (
+            f".dls/cache/reviews/{change_id}/{pack['review_id']}/reviewir.json"
+        )
+        atomic_write_json(
+            safe_resolve(owner, report_relative),
+            report,
+            backup=False,
+        )
+        current_state = StateStore(owner).load(change_id)
+        imported = review_import(
+            owner,
+            change_id=change_id,
+            report_path=report_relative,
+            expected_revision=current_state["state_revision"],
+            operation_id=f"{pipeline_operation_id}:import",
+        )
+    except Exception as exc:
+        failure_kind = (
+            "model-output"
+            if isinstance(exc, ReviewDecisionReferenceError)
+            else "deterministic-finalization"
+        )
+        _update_pipeline(
+            owner,
+            change_id=change_id,
+            review_id=pack["review_id"],
+            operation_id=pipeline_operation_id,
+            stage="finalizing",
+            status="failed-finalize",
+            failure_reason=f"{type(exc).__name__}: {exc}",
+            failure_kind=failure_kind,
+        )
+        raise
+    _update_pipeline(
+        owner,
+        change_id=change_id,
+        review_id=pack["review_id"],
+        operation_id=pipeline_operation_id,
+        stage="completed",
+        status="completed",
+    )
+    return report, imported, build_review_presentation(owner, report)
+
+
+def _resume_failed_finalization(
+    owner: Path,
+    *,
+    change_id: str,
+    review_id: str,
+    effective_operation_id: str,
+    owner_selection: str,
+) -> dict[str, Any]:
+    """Reassemble an exact-HEAD review without recomputing lane contracts."""
+
+    state = StateStore(owner).load(change_id)
+    relative_pack_path, pack = _pack_for_review(owner, state, review_id)
+    _validate_review_pack_current(owner, state=state, pack=pack)
+    independent_key = (
+        "semantic:full" if pack["review_mode"] == "full" else "semantic:targeted"
+    )
+    independent_entry = _completed_lane_entry(
+        state,
+        review_id=review_id,
+        lane_key=independent_key,
+    )
+    independent_decision = _completed_lane_payload(
+        owner,
+        independent_entry,
+        pack=pack,
+        payload_kind="decision",
+        lens_id=None,
+    )
+    reconciliation_entry = _completed_lane_entry(
+        state,
+        review_id=review_id,
+        lane_key="reconciliation",
+    )
+    terminal_reference_error: ReviewDecisionReferenceError | None = None
+    reconciliation_decision: dict[str, Any] | None = None
+    try:
+        reconciliation_decision = _completed_lane_payload(
+            owner,
+            reconciliation_entry,
+            pack=pack,
+            payload_kind="decision",
+            lens_id=None,
+        )
+    except ReviewDecisionReferenceError as exc:
+        terminal_reference_error = exc
+    decision = reconciliation_decision
+    specialist_entries: list[tuple[dict[str, Any], str]] = []
+    specialist_payloads: dict[str, bytes] = {}
+    for lens in pack.get("risk_lenses", []):
+        entry = _completed_lane_entry(
+            state,
+            review_id=review_id,
+            lane_key=f"specialist:{lens['id']}",
+        )
+        specialist_payload = _completed_lane_payload(
+            owner,
+            entry,
+            pack=pack,
+            payload_kind="specialist",
+            lens_id=lens["id"],
+        )
+        specialist_entries.append((entry, lens["id"]))
+        specialist_payloads[f"{lens['id']}.json"] = json.dumps(
+            specialist_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    final_full_entry = next(
+        (
+            item
+            for item in reversed(state["reviews"])
+            if isinstance(item, dict)
+            and item.get("review_id") == review_id
+            and item.get("lane_key") == "semantic:final-full"
+            and item.get("status") == "completed"
+        ),
+        None,
+    )
+    if final_full_entry is not None:
+        try:
+            decision = _completed_lane_payload(
+                owner,
+                final_full_entry,
+                pack=pack,
+                payload_kind="decision",
+                lens_id=None,
+            )
+            terminal_reference_error = None
+        except ReviewDecisionReferenceError as exc:
+            decision = None
+            terminal_reference_error = exc
+    native_entry = next(
+        (
+            item
+            for item in reversed(state["reviews"])
+            if isinstance(item, dict)
+            and item.get("review_id") == review_id
+            and item.get("lane_key") == "native"
+            and item.get("status") == "completed"
+        ),
+        None,
+    )
+    native_coverage = list(pack.get("prior_native_coverage", []))
+    if native_entry is not None:
+        output_path = safe_resolve(
+            owner,
+            native_entry["output_path"],
+            must_exist=True,
+        )
+        if sha256_file(output_path) != native_entry.get("output_digest"):
+            raise IntegrityError("Completed native output digest mismatch")
+        native_coverage.append(
+            {
+                "review_id": review_id,
+                "base_sha": pack["comparison_base_sha"],
+                "head_sha": pack["head_sha"],
+                "output_digest": native_entry["output_digest"],
+            }
+        )
+    native_bytes = b"No native lane was required for this ReviewPack.\n"
+    if native_entry is not None:
+        native_bytes = safe_resolve(
+            owner,
+            native_entry["output_path"],
+            must_exist=True,
+        ).read_bytes()
+    context_path = independent_entry.get("context_manifest_path")
+    if not isinstance(context_path, str):
+        raise IntegrityError("Completed semantic lane is missing context manifest")
+    resolved_context = safe_resolve(owner, context_path, must_exist=True)
+    if sha256_file(resolved_context) != independent_entry.get("context_digest"):
+        raise IntegrityError("Completed semantic context digest mismatch")
+    context_manifest = read_json(resolved_context)
+    context_manifest_digest = context_manifest.get("manifest_digest")
+    if not isinstance(context_manifest_digest, str) or not context_manifest_digest:
+        raise IntegrityError("Completed semantic context manifest is missing digest")
+    start_result = {
+        "owner_root": str(owner),
+        "owner_selection": owner_selection,
+        "review_id": review_id,
+        "review_pack_path": relative_pack_path,
+        "pack_created": False,
+        "review_context_path": context_path,
+        "review_context_digest": context_manifest_digest,
+        "native": native_entry,
+        "native_coverage": native_coverage,
+    }
+    pipeline_operation_id = f"{effective_operation_id}:{review_id}"
+    if decision is None:
+        if terminal_reference_error is None:
+            raise IntegrityError("Failed-finalize recovery has no terminal decision")
+        prompt_values = _review_prompt_values(pack)
+        if final_full_entry is not None:
+            correction_lane_key = "semantic:final-full:identifier-correction"
+            correction_prompt = _render_prompt("final-full.md", prompt_values)
+            targeted_bytes: Path | bytes
+            if reconciliation_decision is not None:
+                targeted_bytes = json.dumps(
+                    reconciliation_decision,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8")
+            else:
+                targeted_bytes = safe_resolve(
+                    owner,
+                    reconciliation_entry["output_path"],
+                    must_exist=True,
+                )
+            extra_files: dict[str, Path | bytes] = {
+                "native.txt": native_bytes,
+                "semantic-independent.json": json.dumps(
+                    independent_decision,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8"),
+                "targeted-decision.json": targeted_bytes,
+                **{
+                    f"specialists/{name}": payload
+                    for name, payload in specialist_payloads.items()
+                },
+            }
+        else:
+            correction_lane_key = "reconciliation:identifier-correction"
+            correction_prompt = _render_prompt("reconcile.md", prompt_values)
+            extra_files = {
+                "native.txt": native_bytes,
+                "semantic-independent.json": json.dumps(
+                    independent_decision,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8"),
+                **{
+                    f"specialists/{name}": payload
+                    for name, payload in specialist_payloads.items()
+                },
+            }
+        _update_pipeline(
+            owner,
+            change_id=change_id,
+            review_id=review_id,
+            operation_id=pipeline_operation_id,
+            stage=correction_lane_key,
+            create=True,
+            failure_reason=str(terminal_reference_error),
+            failure_kind="model-output",
+        )
+        correction_entry, corrected_decision = _execute_structured_lane(
+            owner,
+            change_id=change_id,
+            pack=pack,
+            context_path=context_path,
+            root_operation_id=pipeline_operation_id,
+            lane_key=correction_lane_key,
+            lane_kind=(
+                "semantic" if final_full_entry is not None else "reconciliation"
+            ),
+            model=SEMANTIC_MODEL,
+            effort=_semantic_review_effort(state),
+            prompt_text=correction_prompt,
+            schema_path=SCHEMAS_ROOT / "review-decision.schema.json",
+            payload_kind="decision",
+            extra_files=extra_files,
+            max_attempts=1,
+        )
+        if corrected_decision is None:
+            return {
+                **review_status(owner, change_id=change_id, review_id=review_id),
+                "operation_id": effective_operation_id,
+                "review_result_path": None,
+            }
+        decision = corrected_decision
+        if final_full_entry is not None:
+            final_full_entry = correction_entry
+        else:
+            reconciliation_entry = correction_entry
+    report, imported, presentation = _finalize_review(
+        owner,
+        change_id=change_id,
+        pack=pack,
+        start_result=start_result,
+        decision=decision,
+        independent_entry=independent_entry,
+        reconciliation_entry=reconciliation_entry,
+        specialist_entries=specialist_entries,
+        final_full_entry=final_full_entry,
+        pipeline_operation_id=pipeline_operation_id,
+    )
+    return {
+        "ok": imported["review_result_path"] is not None,
+        "dry_run": False,
+        "changed": imported["changed"],
+        "status": "completed",
+        "change_id": change_id,
+        "state_revision": imported["state_revision"],
+        "operation_id": effective_operation_id,
+        "owner_root": str(owner),
+        "owner_selection": owner_selection,
+        "review_id": review_id,
+        "review_pack_path": relative_pack_path,
+        "pack_created": False,
+        "runner_contract": REVIEW_RUNNER_CONTRACT,
+        "verdict": imported["verdict"],
+        "finding_counts": imported["finding_counts"],
+        "review_result_path": imported["review_result_path"],
+        "remediation_manifest_path": imported.get("remediation_manifest_path"),
+        "presentation": presentation,
+        "next_action": imported["next_action"],
+        "reused_completed_lanes": True,
+        "identifier_normalizations": report.get("identifier_normalizations", []),
     }
 
 
@@ -1405,6 +2039,60 @@ def review_run(
                 }
             )
             return existing_status
+        if (
+            existing_status["status"] == "failed-finalize"
+            and isinstance(existing_status.get("review_id"), str)
+        ):
+            if dry_run:
+                existing_status.update(
+                    {
+                        "dry_run": True,
+                        "operation_id": effective_operation_id,
+                        "review_pack_path": None,
+                        "pack_created": False,
+                        "reused_completed_lanes": True,
+                    }
+                )
+                return existing_status
+            recovery_owner = Path(existing_status["owner_root"])
+            recovery_review_id = existing_status["review_id"]
+            try:
+                return _resume_failed_finalization(
+                    recovery_owner,
+                    change_id=change_id,
+                    review_id=recovery_review_id,
+                    effective_operation_id=effective_operation_id,
+                    owner_selection=existing_status["owner_selection"],
+                )
+            except IntegrityError as exc:
+                recovery_operation_id = (
+                    f"{effective_operation_id}:{recovery_review_id}"
+                )
+                recovery_state = StateStore(recovery_owner).load(change_id)
+                pipeline = next(
+                    (
+                        item
+                        for item in reversed(recovery_state["reviews"])
+                        if isinstance(item, dict)
+                        and item.get("kind") == "pipeline"
+                        and item.get("review_id") == recovery_review_id
+                        and item.get("operation_id") == recovery_operation_id
+                    ),
+                    None,
+                )
+                if pipeline is None or not pipeline.get("failure_kind"):
+                    _update_pipeline(
+                        recovery_owner,
+                        change_id=change_id,
+                        review_id=recovery_review_id,
+                        operation_id=recovery_operation_id,
+                        stage="finalizing",
+                        status="failed-finalize",
+                        create=True,
+                        failure_reason=f"{type(exc).__name__}: {exc}",
+                        failure_kind="integrity",
+                    )
+                raise
         if existing_status.get("next_action", {}).get("id") in {
             "prepare-candidate",
             "recover-remediation-manifest",
@@ -1472,13 +2160,7 @@ def review_run(
     _validate_review_pack_current(owner, state=state, pack=pack)
     context_path = started["review_context_path"]
     semantic_effort = _semantic_review_effort(state)
-    prompt_values = {
-        "CHANGE_ID": change_id,
-        "REVIEW_ID": pack["review_id"],
-        "COMPARISON_BASE_SHA": pack["comparison_base_sha"],
-        "EPIC_BASE_SHA": pack["epic_base_sha"],
-        "HEAD_SHA": pack["head_sha"],
-    }
+    prompt_values = _review_prompt_values(pack)
     _update_pipeline(
         owner,
         change_id=change_id,
@@ -1488,7 +2170,7 @@ def review_run(
         create=True,
     )
     specialist_entries: list[tuple[dict[str, Any], str]] = []
-    specialist_paths: dict[str, Path] = {}
+    specialist_payloads: dict[str, bytes] = {}
     for lens in pack.get("risk_lenses", []):
         _update_pipeline(
             owner,
@@ -1531,11 +2213,11 @@ def review_run(
                 "review_result_path": None,
             }
         specialist_entries.append((entry, lens["id"]))
-        specialist_paths[f"{lens['id']}.json"] = safe_resolve(
-            owner,
-            entry["output_path"],
-            must_exist=True,
-        )
+        specialist_payloads[f"{lens['id']}.json"] = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
     independent_kind = (
         "full" if pack["review_mode"] == "full" else "targeted"
     )
@@ -1608,14 +2290,14 @@ def review_run(
         payload_kind="decision",
         extra_files={
             "native.txt": native_bytes,
-            "semantic-independent.json": safe_resolve(
-                owner,
-                independent_entry["output_path"],
-                must_exist=True,
-            ),
+            "semantic-independent.json": json.dumps(
+                independent_decision,
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8"),
             **{
-                f"specialists/{name}": path
-                for name, path in specialist_paths.items()
+                f"specialists/{name}": payload
+                for name, payload in specialist_payloads.items()
             },
         },
     )
@@ -1654,19 +2336,19 @@ def review_run(
             payload_kind="decision",
             extra_files={
                 "native.txt": native_bytes,
-                "semantic-independent.json": safe_resolve(
-                    owner,
-                    independent_entry["output_path"],
-                    must_exist=True,
-                ),
-                "targeted-decision.json": safe_resolve(
-                    owner,
-                    reconciliation_entry["output_path"],
-                    must_exist=True,
-                ),
+                "semantic-independent.json": json.dumps(
+                    independent_decision,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8"),
+                "targeted-decision.json": json.dumps(
+                    decision,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8"),
                 **{
-                    f"specialists/{name}": path
-                    for name, path in specialist_paths.items()
+                    f"specialists/{name}": payload
+                    for name, payload in specialist_payloads.items()
                 },
             },
         )
@@ -1681,60 +2363,18 @@ def review_run(
                 "review_result_path": None,
             }
         decision = final_decision
-    _update_pipeline(
+    report, imported, presentation = _finalize_review(
         owner,
         change_id=change_id,
-        review_id=pack["review_id"],
-        operation_id=pipeline_operation_id,
-        stage="finalizing",
+        pack=pack,
+        start_result=started,
+        decision=decision,
+        independent_entry=independent_entry,
+        reconciliation_entry=reconciliation_entry,
+        specialist_entries=specialist_entries,
+        final_full_entry=final_full_entry,
+        pipeline_operation_id=pipeline_operation_id,
     )
-    try:
-        report = _build_review_ir(
-            pack=pack,
-            start_result=started,
-            decision=decision,
-            independent_entry=independent_entry,
-            reconciliation_entry=reconciliation_entry,
-            specialist_entries=specialist_entries,
-            final_full_entry=final_full_entry,
-        )
-        _validate_review_report(report, change_id, pack)
-        report_relative = (
-            f".dls/cache/reviews/{change_id}/{pack['review_id']}/reviewir.json"
-        )
-        atomic_write_json(
-            safe_resolve(owner, report_relative),
-            report,
-            backup=False,
-        )
-        current_state = StateStore(owner).load(change_id)
-        imported = review_import(
-            owner,
-            change_id=change_id,
-            report_path=report_relative,
-            expected_revision=current_state["state_revision"],
-            operation_id=f"{pipeline_operation_id}:import",
-        )
-    except Exception as exc:
-        _update_pipeline(
-            owner,
-            change_id=change_id,
-            review_id=pack["review_id"],
-            operation_id=pipeline_operation_id,
-            stage="finalizing",
-            status="failed-finalize",
-            failure_reason=f"{type(exc).__name__}: {exc}",
-        )
-        raise
-    _update_pipeline(
-        owner,
-        change_id=change_id,
-        review_id=pack["review_id"],
-        operation_id=pipeline_operation_id,
-        stage="completed",
-        status="completed",
-    )
-    presentation = build_review_presentation(owner, report)
     return {
         "ok": imported["review_result_path"] is not None,
         "dry_run": False,

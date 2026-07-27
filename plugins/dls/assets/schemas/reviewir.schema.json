@@ -22,6 +22,7 @@
   "properties": {
     "schema_version": { "const": 2 },
     "runner_contract": { "const": "dls-review-runner/v1" },
+    "identifier_contract": { "const": "canonical-ticket-ids/v1" },
     "review_id": { "type": "string", "minLength": 1 },
     "change_id": { "type": "string", "minLength": 1 },
     "base_sha": { "type": "string", "minLength": 1 },
@@ -200,7 +201,22 @@
         "additionalProperties": false
       }
     },
-    "findings": { "type": "array" }
+    "findings": { "type": "array" },
+    "identifier_normalizations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["finding_id", "field", "source", "canonical", "rule"],
+        "properties": {
+          "finding_id": { "type": "string", "minLength": 1 },
+          "field": { "const": "ticket_ids" },
+          "source": { "type": "string", "minLength": 1 },
+          "canonical": { "type": "string", "minLength": 1 },
+          "rule": { "const": "unique-ticket-alias" }
+        },
+        "additionalProperties": false
+      }
+    }
   },
   "allOf": [
     {

@@ -2,6 +2,11 @@
 
 Reconcile review `{{REVIEW_ID}}` for change `{{CHANGE_ID}}`.
 
+Use ticket IDs exactly as listed here: `{{CANONICAL_TICKET_IDS}}`. Required
+prior finding IDs are `{{REQUIRED_PRIOR_FINDING_IDS}}`. Do not abbreviate or
+invent either kind of identifier. Copy requirement IDs exactly from bound
+authored inputs.
+
 Read the bound context and ReviewPack, then read:
 
 - `.dls-review-input/native.txt`;

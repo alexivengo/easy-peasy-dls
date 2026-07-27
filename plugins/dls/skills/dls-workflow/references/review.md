@@ -58,8 +58,11 @@ transcripts or provisional findings.
 
 If all lanes completed but final assembly/import failed, `review-status` returns
 `failed-finalize` and `next_action: resume-review`. Re-run the same public
-`review-run` with the same stable operation ID: it must reuse digest-bound
-completed lanes and retry only deterministic finalization, never the models.
+`review-run` with the same stable operation ID. DLS first verifies the exact
+HEAD, pack, context, and cached output digests, then retries deterministic
+assembly without recomputing lane contracts. A unique ticket alias may be
+normalized by DLS without a model call. An unsafe reference may retry only the
+terminal decision lane once; it must never restart native or whole-epic review.
 
 ## Present the canonical result
 
@@ -93,6 +96,9 @@ replace `review_result_path`, finding IDs, ticket verdicts, or remediation state
   from the independent review task.
 - `failed-finalize`: resume the same `review-run`; do not start an informal or
   replacement review.
+- `retry-review-decision`: let the same `review-run` retry only its terminal
+  decision lane; do not launch another review task.
+- `inspect-review-integrity`: stop. Do not retry changed or tampered inputs.
 - a nonzero exit: report the integrity/infrastructure failure and its typed
   `next_action`; do not improvise a review.
 - `provide-review-base`: legacy low-level output; the implementation task must

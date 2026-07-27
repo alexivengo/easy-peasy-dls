@@ -479,6 +479,11 @@ def build_review_report(
             if pack.get("runner_contract") == REVIEW_RUNNER_CONTRACT
             else {}
         ),
+        **(
+            {"identifier_contract": pack["identifier_contract"]}
+            if isinstance(pack.get("identifier_contract"), str)
+            else {}
+        ),
         "review_id": pack["review_id"],
         "change_id": pack["change_id"],
         "base_sha": pack["base_sha"],
