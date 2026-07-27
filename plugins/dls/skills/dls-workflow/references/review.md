@@ -62,8 +62,9 @@ structurally valid but has an inconsistent reference, it returns
 `resume-review-repair`. Re-run the same public `review-run` with the same stable operation ID.
 DLS first verifies exact HEAD, source, definition, pack, context,
 and immutable raw-output digests. It then performs one compact Sol repair using
-only the raw decision, exact error, canonical references, and reserved finding
-IDs. The repair workspace contains no product source, native output, sibling
+only the raw decision, every safely classified exact error, canonical references,
+and reserved finding IDs. All supplied errors must be repaired in that single
+bounded pass. The repair workspace contains no product source, native output, sibling
 drafts, or user-created correction prompt. Never read raw output or create a
 correction subagent. Native, specialists, and the original semantic analysis are
 not restarted.

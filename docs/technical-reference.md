@@ -250,9 +250,11 @@ Runner повторял исходную lane с тем же prompt, но не �
 - логически противоречивый, но parseable decision не повторяет анализ. DLS
   запускает отдельную compact Sol repair lane.
 
-Repair получает только immutable raw decision, структурированную ошибку с JSON
-path, допустимые ticket/prior IDs, полные canonical prior findings и заранее
-зарезервированные DLS replacement IDs. Временный Git workspace не содержит
+Repair получает только immutable raw decision, полный список структурированных
+ошибок с JSON path, допустимые ticket/prior IDs, полные canonical prior findings
+и заранее зарезервированные DLS replacement IDs. Runner собирает все безопасно
+классифицируемые межполевые ошибки до model call, чтобы не открывать их по одной
+в нескольких repair-циклах. Временный Git workspace не содержит
 product source, native output, specialist results, sibling semantic drafts или
 пользовательскую конфигурацию. Общий repair bundle ограничен 256 KiB.
 

@@ -32,6 +32,7 @@ from dls_core.operations import (
 from dls_core.review_runner import (
     ReviewDecisionReferenceError,
     _codex_failure_reason,
+    _collect_decision_reference_errors,
     _derive_review_verdict,
     _derive_ticket_verdicts,
     _normalize_structured_payload,
@@ -147,6 +148,46 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 payload_kind="decision",
                 lens_id=None,
             )
+
+    def test_repair_collects_all_missing_replacements_in_one_pass(self) -> None:
+        pack = {
+            "change_id": "EPIC-01",
+            "tickets": {"EPIC-01-T02": {}, "EPIC-01-T03": {}},
+            "required_prior_findings": [
+                {"finding_id": "EPIC01-R049"},
+                {"finding_id": "EPIC01-R050"},
+            ],
+        }
+        payload = {
+            "verdict": "not-clear",
+            "summary": "Both prior findings remain open.",
+            "findings": [],
+            "prior_finding_verdicts": [
+                {
+                    "finding_id": "EPIC01-R049",
+                    "verdict": "still-open",
+                    "replacement_finding_id": None,
+                    "evidence": ["first finding evidence"],
+                },
+                {
+                    "finding_id": "EPIC01-R050",
+                    "verdict": "regressed",
+                    "replacement_finding_id": None,
+                    "evidence": ["second finding evidence"],
+                },
+            ],
+        }
+
+        errors = _collect_decision_reference_errors(payload, pack=pack)
+
+        self.assertEqual(
+            [item.prior_finding_id for item in errors],
+            ["EPIC01-R049", "EPIC01-R050"],
+        )
+        self.assertEqual(
+            [item.code for item in errors],
+            ["missing-replacement-finding", "missing-replacement-finding"],
+        )
 
     def test_new_reviewpacks_declare_identifier_contract(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

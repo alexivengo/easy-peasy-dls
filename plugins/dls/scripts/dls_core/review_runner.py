@@ -121,6 +121,7 @@ def _normalize_structured_payload(
     pack: dict[str, Any],
     payload_kind: str,
     lens_id: str | None,
+    reference_errors: list[ReviewDecisionReferenceError] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     """Validate model-owned references and return a canonical DLS projection.
 
@@ -182,21 +183,29 @@ def _normalize_structured_payload(
             targets = aliases.get(source, set())
             if len(targets) != 1:
                 reason = "unknown" if not targets else "ambiguous"
-                raise ReviewDecisionReferenceError(
+                error = ReviewDecisionReferenceError(
                     f"Finding {finding_id} references {reason} ticket: {source}",
                     code=f"{reason}-ticket-id",
                     path=f"$.findings[{finding_index}].ticket_ids",
                     invalid_value=source,
                 )
+                if reference_errors is None:
+                    raise error
+                reference_errors.append(error)
+                continue
             canonical = next(iter(targets))
             if canonical in canonical_values:
-                raise ReviewDecisionReferenceError(
+                error = ReviewDecisionReferenceError(
                     f"Finding {finding_id} has duplicate ticket after normalization: "
                     f"{canonical}",
                     code="duplicate-ticket-id",
                     path=f"$.findings[{finding_index}].ticket_ids",
                     invalid_value=canonical,
                 )
+                if reference_errors is None:
+                    raise error
+                reference_errors.append(error)
+                continue
             canonical_values.append(canonical)
             if source != canonical:
                 normalizations.append(
@@ -246,7 +255,7 @@ def _normalize_structured_payload(
         replacement = item.get("replacement_finding_id")
         if verdict in {"still-open", "regressed"}:
             if replacement == finding_id:
-                raise ReviewDecisionReferenceError(
+                error = ReviewDecisionReferenceError(
                     f"Prior finding {finding_id} cannot replace itself",
                     code="replacement-reuses-prior-id",
                     path=(
@@ -256,8 +265,11 @@ def _normalize_structured_payload(
                     prior_finding_id=finding_id,
                     invalid_value=replacement,
                 )
-            if not isinstance(replacement, str):
-                raise ReviewDecisionReferenceError(
+                if reference_errors is None:
+                    raise error
+                reference_errors.append(error)
+            elif not isinstance(replacement, str):
+                error = ReviewDecisionReferenceError(
                     f"Prior finding {finding_id} requires a replacement finding",
                     code="missing-replacement-finding",
                     path=(
@@ -267,8 +279,11 @@ def _normalize_structured_payload(
                     prior_finding_id=finding_id,
                     invalid_value=replacement,
                 )
-            if replacement not in finding_ids:
-                raise ReviewDecisionReferenceError(
+                if reference_errors is None:
+                    raise error
+                reference_errors.append(error)
+            elif replacement not in finding_ids:
+                error = ReviewDecisionReferenceError(
                     f"Prior finding {finding_id} references an unknown replacement: "
                     f"{replacement}",
                     code="unknown-replacement-finding",
@@ -279,8 +294,11 @@ def _normalize_structured_payload(
                     prior_finding_id=finding_id,
                     invalid_value=replacement,
                 )
+                if reference_errors is None:
+                    raise error
+                reference_errors.append(error)
         elif replacement is not None:
-            raise ReviewDecisionReferenceError(
+            error = ReviewDecisionReferenceError(
                 f"Prior finding {finding_id} cannot declare a replacement",
                 code="unexpected-replacement-finding",
                 path=(
@@ -290,6 +308,9 @@ def _normalize_structured_payload(
                 prior_finding_id=finding_id,
                 invalid_value=replacement,
             )
+            if reference_errors is None:
+                raise error
+            reference_errors.append(error)
         if verdict == "waived":
             disposition = required_prior[finding_id].get("disposition")
             if not isinstance(disposition, dict) or disposition.get("status") != "waived":
@@ -313,6 +334,30 @@ def _normalize_structured_payload(
             repairable=False,
         )
     return normalized, normalizations
+
+
+def _collect_decision_reference_errors(
+    payload: dict[str, Any],
+    *,
+    pack: dict[str, Any],
+) -> list[ReviewDecisionReferenceError]:
+    """Return every safely classifiable reference error in one pass.
+
+    Normal review validation still fails on its first invalid reference. Repair
+    uses this collector so one compact call sees every independent cross-field
+    error instead of discovering them through repeated model calls. Structural
+    or unsafe errors still raise immediately and are never auto-repaired.
+    """
+
+    errors: list[ReviewDecisionReferenceError] = []
+    _normalize_structured_payload(
+        payload,
+        pack=pack,
+        payload_kind="decision",
+        lens_id=None,
+        reference_errors=errors,
+    )
+    return errors
 
 
 def _validate_strict_output_schema(value: Any, *, location: str = "$") -> None:
@@ -1763,7 +1808,12 @@ def _repair_bundle(
     original_entry: dict[str, Any],
     raw_decision: dict[str, Any],
     error: ReviewDecisionReferenceError,
-) -> tuple[bytes, dict[str, str], str]:
+) -> tuple[
+    bytes,
+    dict[str, str],
+    str,
+    list[ReviewDecisionReferenceError],
+]:
     if not error.repairable:
         raise IntegrityError(
             f"Decision reference error is not safely repairable: {error}"
@@ -1775,12 +1825,24 @@ def _repair_bundle(
         pack=pack,
         raw_decision=raw_decision,
     )
+    errors = _collect_decision_reference_errors(raw_decision, pack=pack)
+    if not errors:
+        # A terminal projection can surface an exact reference error after the
+        # cached decision itself has normalized successfully. Preserve that
+        # state-owned error as the bounded repair contract in this recovery
+        # path; normal semantic failures still produce the complete list above.
+        errors = [error]
+    if any(not item.repairable for item in errors):
+        unsafe = next(item for item in errors if not item.repairable)
+        raise IntegrityError(
+            f"Decision reference error is not safely repairable: {unsafe}"
+        )
     bundle = {
         "contract": REVIEW_DECISION_REPAIR_CONTRACT,
         "review_id": pack["review_id"],
         "original_attempt_id": original_entry["attempt_id"],
         "original_output_digest": original_entry["output_digest"],
-        "validation_errors": [error.as_dict()],
+        "validation_errors": [item.as_dict() for item in errors],
         "allowed_ticket_ids": list(pack["tickets"]),
         "required_prior_finding_ids": list(prior_findings),
         "canonical_prior_findings": prior_findings,
@@ -1797,20 +1859,20 @@ def _repair_bundle(
         raise IntegrityError("Decision repair bundle exceeds the 256 KiB limit")
     error_digest = sha256_bytes(
         json.dumps(
-            error.as_dict(),
+            [item.as_dict() for item in errors],
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
     )
-    return encoded, reservations, error_digest
+    return encoded, reservations, error_digest, errors
 
 
 def _validate_repaired_decision(
     *,
     original: dict[str, Any],
     repaired: dict[str, Any],
-    error: ReviewDecisionReferenceError,
+    errors: list[ReviewDecisionReferenceError],
     reservations: dict[str, str],
     prior_findings: dict[str, dict[str, Any]],
 ) -> None:
@@ -1871,10 +1933,12 @@ def _validate_repaired_decision(
                 repairable=False,
             )
         expected_existing_link = source.get("replacement_finding_id")
-        if (
-            error.code == "unexpected-replacement-finding"
-            and error.prior_finding_id == finding_id
-        ):
+        unexpected_replacements = {
+            item.prior_finding_id
+            for item in errors
+            if item.code == "unexpected-replacement-finding"
+        }
+        if finding_id in unexpected_replacements:
             expected_existing_link = None
         if expected_replacement is None and candidate.get(
             "replacement_finding_id"
@@ -1902,11 +1966,15 @@ def _validate_repaired_decision(
     }
     reference_repair_fields = (
         {"ticket_ids"}
-        if error.code in {
-            "unknown-ticket-id",
-            "ambiguous-ticket-id",
-            "duplicate-ticket-id",
-        }
+        if any(
+            item.code
+            in {
+                "unknown-ticket-id",
+                "ambiguous-ticket-id",
+                "duplicate-ticket-id",
+            }
+            for item in errors
+        )
         else set()
     )
     for finding_id, finding in original_findings.items():
@@ -1968,7 +2036,7 @@ def _execute_decision_repair(
     error: ReviewDecisionReferenceError,
     effort: str,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    repair_bytes, reservations, error_digest = _repair_bundle(
+    repair_bytes, reservations, error_digest, errors = _repair_bundle(
         owner,
         state=state,
         pack=pack,
@@ -2010,7 +2078,9 @@ def _execute_decision_repair(
             "repair_source_lane_key": source_lane_key,
             "repair_original_attempt_id": original_entry["attempt_id"],
             "repair_original_output_digest": original_entry["output_digest"],
-            "repair_error_code": error.code,
+            "repair_error_code": (
+                error.code if len(errors) == 1 else "multiple-reference-errors"
+            ),
             "repair_error_digest": error_digest,
             "repair_reserved_ids": reservations,
         },
@@ -2035,7 +2105,7 @@ def _execute_decision_repair(
     _validate_repaired_decision(
         original=raw_decision,
         repaired=repaired,
-        error=error,
+        errors=errors,
         reservations=reservations,
         prior_findings=prior_findings,
     )

@@ -3,9 +3,10 @@
 Repair the JSON decision described by `.dls-review-input/repair.json` without
 reviewing code or changing its semantic conclusions. Preserve the original
 verdict, summary, prior verdicts, evidence, and existing findings except where
-the supplied validation error requires a reference repair.
+the supplied `validation_errors` require reference repairs. Resolve every
+listed error in this one output; do not stop after the first error.
 
-Use only the reserved replacement IDs provided in the repair input. For a
+Use every entry in `reserved_replacement_ids`, and use no other new ID. For a
 `still-open` or `regressed` prior finding, add one complete replacement finding
 and point `replacement_finding_id` to it. Copy its `severity`, `kind`,
 `ticket_ids`, `requirement_ids`, and `blocks` exactly from the corresponding
