@@ -150,6 +150,47 @@ ReviewPack. `candidate-status` читает phase, active/completed/remaining co
 и typed next action, но не запускает процесс и не возвращает логи. Только
 отдельная read-only review-задача запускает `review-run`.
 
+### Известное ограничение v0.4.3: resume candidate после нового commit
+
+Наблюдаемый сценарий зафиксирован 27 июля 2026 года на remediation EPIC-01
+`R066–R073`. Первый `candidate-ready` выполнился на committed candidate, но
+trusted `swift-test` обнаружил несовместимую integration fixture. После
+исправления и нового commit HEAD изменился. При возобновлении DLS отклонил
+вызов без повторной полной declaration и потребовал снова передать все восемь
+finding IDs как `addressed`, хотя canonical remediation manifest и смысл
+dispositions не изменились.
+
+Текущий результат не повреждается: validation для нового HEAD выполняется
+заново, dispositions и ReviewPack записываются атомарно, а пользователь не
+вводит IDs вручную. Но модель повторяет механический список в своём контексте,
+может пропустить или продублировать finding и использует прежний operation ID
+для уже другой Git-ревизии. Это лишний orchestration/context overhead и
+неудачная семантика resume.
+
+Целевой контракт исправления для `v0.4.4`:
+
+- exact-HEAD retry без изменения source продолжает прежний operation ID;
+- новый committed descendant HEAD создаёт новый детерминированный candidate run
+  и operation ID, а не маскируется под resume старой ревизии;
+- DLS наследует staged disposition declaration из последнего blocked/failed run
+  только при совпадении canonical remediation review/manifest digest,
+  definition digest и полного набора актуальных findings;
+- skill передаёт только явные изменения declaration, например перевод
+  `note → addressed`; неизменные dispositions повторно не перечисляются;
+- evidence прежнего HEAD не переиспользуется: весь обязательный command policy
+  выполняется заново и связывается только с новым candidate;
+- при изменившемся manifest, definition, divergence истории, неизвестном или
+  неполном finding set автоматическое наследование запрещено;
+- model-facing сообщение ограничивается failed command, короткой причиной и
+  фактом нового validation run; operation IDs и полный список findings не
+  пересказываются.
+
+Для исправления нужны regression-сценарии: validation failure на HEAD A → fix и
+commit HEAD B → автоматическое наследование declaration → полный повтор gates →
+exact-HEAD ReviewPack, а также отрицательные случаи manifest/definition drift,
+divergent HEAD и disposition override. До реализации это остаётся документированным
+ограничением, а не обещанием текущего поведения.
+
 ### End-to-end runner
 
 `review-run` использует фиксированный pipeline:
