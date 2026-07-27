@@ -199,28 +199,40 @@ contract.
 
 `review-run` использует фиксированный pipeline:
 
-1. native diff-review — `gpt-5.6-terra/high`;
-2. до трёх deterministic specialist lanes для critical review —
-   `gpt-5.6-terra/high`;
-3. независимый semantic pass — `gpt-5.6-sol`, `high` или `xhigh`;
-4. reconciliation на Sol;
-5. remediation final-full pass, только когда targeted result не содержит
-   review-blocking blocker;
-6. DLS-owned сборка и атомарный импорт ReviewIR.
+1. routine: один isolated Terra/high structured review;
+2. standard/critical: structured native Terra/high;
+3. critical: до трёх deterministic Terra/high specialist lanes;
+4. независимый Sol high/xhigh semantic pass;
+5. compact input-only Sol/high reconciliation только при findings или расхождении;
+6. remediation final-full только после clean native + targeted, без отдельной reconciliation;
+7. DLS-owned сборка и атомарный импорт ReviewIR.
 
 Model-runs выполняются через `codex exec` в read-only ephemeral режиме с
-игнорированием пользовательской model-конфигурации. Native lane использует
-встроенный prompt официального `codex exec review --base` и сохраняет его
-bounded text result; текущий Codex CLI не применяет structured output schema к
-этому subcommand. Все DLS-owned semantic decisions используют repository-owned
+игнорированием пользовательской model-конфигурации. Standard/critical native
+lane использует официальный `codex exec review --base`. Routine использует
+официальный `codex exec review` с одним DLS-owned custom target: текущий Codex
+CLI запрещает сочетать positional review instructions и `--base`, поэтому
+точные base/head SHA находятся в immutable prompt contract и отдельно
+проверяются DLS до и после вызова.
+
+Во всех случаях DLS передаёт `--output-schema`. Некоторые текущие сборки Codex
+принимают этот флаг, но встроенный review presentation всё равно записывает
+человекочитаемый итог. Для routine DLS сохраняет такой raw output неизменным и
+строит отдельную bounded projection: P0-P3 review comments становятся findings,
+а успешное сообщение без review comments — `review-clear`. Нераспознанный,
+заблокированный или неоднозначный текст не импортируется. Повторный вызов после
+обновления DLS может построить projection из уже завершённого raw output без
+нового model call.
+
+Все DLS-owned semantic decisions используют repository-owned
 prompt templates и schemas. Перед модельным вызовом DLS локально проверяет
 strict Structured Outputs contract: каждый object запрещает дополнительные
 поля, а `required` точно совпадает с `properties`. Механически некорректная
 schema поэтому останавливается до API-вызова. Native, semantic и specialist
 lanes получают disposable detached worktree exact HEAD, поэтому локальные DLS
 metadata не попадают в анализ candidate. Independent lanes не видят native
-output или drafts соседних lanes; reconciliation получает их как digest-bound
-inputs.
+output или drafts соседних lanes; reconciliation получает только digest-bound
+inputs в input-only workspace без product checkout.
 
 До запуска модели `StateStore` атомарно записывает attempt со статусом `running`.
 Для сочетания `review ID + lane + pass` возможна только одна активная попытка.
@@ -238,17 +250,17 @@ Review-задача останавливается, а implementation/remediatio
 
 ### Наблюдаемость и финализация
 
-`review-status` по умолчанию возвращает компактный `progress`: текущий pipeline
+`review-run --stream` является обычным каналом прогресса: `started`, переходы
+lanes, heartbeat не чаще минуты, budget warning и `completed`. Он не запускает
+второй runner. `review-status` по умолчанию возвращает компактный `progress`: текущий pipeline
 stage, активную lane, количество completed/projected lanes, elapsed time,
 последний переход, размер model-facing context и локально извлечённые Codex token
 counters. Полные argv, cache paths и provenance доступны только с `--verbose`,
 чтобы обычный heartbeat сам не расходовал контекст агента.
 
-Skill не ждёт появления текста в stdout `review-run`: stdout зарезервирован для
-единственного финального JSON. Пока исходный shell/session продолжает работать,
-skill читает `review-status` отдельной read-only командой раз в 60–90 секунд и
-сообщает только переход этапа или один короткий heartbeat. Сырые transcripts и
-предварительные findings пользователю не транслируются.
+Skill ждёт исходный streamed process и вызывает `review-status` только если
+shell/session потерян. Сырые transcripts и предварительные findings не
+транслируются.
 
 Pipeline отдельно фиксирует `running`, `finalizing`, `failed-finalize` и
 `completed`. Ошибка lane переводит pipeline в `failed` и сохраняет извлечённую
@@ -331,21 +343,37 @@ release/production-only note сохраняется в ReviewIR, но не де�
 ticket `not-clear`. Общий review verdict выводится из тех же stage-correct
 relations.
 
-Token counters являются локальной диагностической телеметрией. Они включают
-cached context и повторные tool turns, поэтому не трактуются как точная стоимость
-API. DLS не отправляет эти данные во внешний analytics service.
+`review-metrics` возвращает `dls-review-metrics/v1`: child lanes, retries,
+repairs, elapsed, command events и input/cached/output/reasoning tokens.
+`processed_tokens = input + output`; cached tokens уже входят в input и повторно
+не суммируются. Нулевой или отсутствующий native usage имеет статус
+`unavailable`, а не ноль. Локальный Codex adapter читает только lifecycle и
+usage events текущей задачи; ID остаётся в ignored cache, наружу выходит hash.
+Активная задача даёт lower bound, завершённая после `--refresh` — exact total,
+если все child lanes также измерены. Prompts, сообщения, reasoning и raw outputs
+в metrics не попадают, внешний analytics service не используется.
 
-Подтверждённые `orphan`, `timeout`, `api-failure`, `output-cap` или missing output
+`delivery-status` возвращает один typed next action и не более 2 KiB.
+`cache-prune` по умолчанию dry-run. Canonical state/ReviewPack/ReviewIR,
+remediation manifests и evidence не удаляются; raw cache хранит active,
+failed/recoverable runs, два последних completed reviews и всё моложе 14 дней.
+
+Подтверждённые `orphan`, `api-failure`, `output-cap` или missing output
 получают не более одной автоматической транспортной попытки. `invalid-output`
 никогда не повторяет исходный semantic-анализ: безопасная межполевая ошибка идёт
 в compact repair, остальные случаи получают `inspect-review-output`. Drift HEAD,
-source, definition или pack не запускает модель. Timeout одной попытки — 30
-минут; final output ограничен 256 KiB, JSONL transcript — 1 MiB с явным признаком
-truncation. Model, effort, prompt, schema, context, pack, HEAD и repair input
+source, definition или pack не запускает модель. Duration timeout является
+`budget-exceeded` и не получает дорогой retry. Risk budget ограничивает
+processed child tokens, одну lane, command events, duration и transcript:
+routine 750k/10m, standard 3m/15m, critical 5m/20m с меньшими per-lane caps.
+Budget failure не создаёт ReviewIR и возвращает `inspect-review-budget`.
+Model, effort, prompt, schema, context, pack, HEAD и repair input
 входят в digest lane contract. Completed lane переиспользуется только при точном
 совпадении этого digest.
 
-Новые packs помечаются `runner_contract: dls-review-runner/v1`. Для них import
+Новые packs помечаются `runner_contract: dls-review-runner/v2`,
+`context_contract: dls-review-context/v2`, `economy_contract:
+dls-review-economy/v1` и `native_output_contract: dls-native-review/v2`. Для них import
 доверяет provenance только completed attempts из DLS state: модель возвращает
 semantic decision, но не может сама объявить lane завершённым. Исторические
 ReviewPack/ReviewIR v1 и v2 без marker остаются читаемыми как
@@ -371,6 +399,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.4.4`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.5.0`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

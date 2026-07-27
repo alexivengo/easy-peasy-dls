@@ -13,7 +13,7 @@ Invoke exactly one orchestration command:
 
 ```text
 python3 <plugin-root>/scripts/dls.py --root <current-project> --json \
-  review-run CHANGE_ID --operation-id <stable-id>
+  review-run CHANGE_ID --operation-id <stable-id> --stream
 ```
 
 The current project may be the main checkout. DLS may route only through its
@@ -23,38 +23,34 @@ sibling folders or infers branches.
 `review-run` owns:
 
 1. exact-HEAD ReviewPack selection prepared by `candidate-ready`;
-2. native Terra/high review;
+2. native Terra/high structured review;
 3. at most three deterministic critical specialist lanes;
 4. independent Sol high/xhigh semantic review;
-5. reconciliation and conditional remediation final-full review;
-6. state-owned provenance, ReviewIR creation, validation, and import.
+5. compact input-only reconciliation only when sources disagree or find issues;
+6. for a clean remediation only, one conditional whole-change final-full pass;
+7. state-owned provenance, ReviewIR creation, validation, and import.
 
 Do not create subagents, semantic drafts, specialist prompts, ReviewIR, or
 provenance manually. Do not invoke `review-start` as the normal workflow.
 
 ## Wait without restarting
 
-The command can run for up to 30 minutes per model attempt. If the shell tool
-returns a running cell or session, wait on that same execution until it exits.
-Never start a second `review-run`.
+The command emits bounded NDJSON transitions and at most one heartbeat per
+minute. If the shell tool returns a running cell or session, wait on that same
+execution until it exits. Never start a second `review-run`.
 
-Do not wait for `review-run` to print `status: running`: its stdout is reserved
-for the final machine-readable payload. After 20–30 seconds without completion,
-keep the original shell/session alive and read progress from a separate shell
-command:
+Do not poll `review-status` while the original streamed process is available.
+Use it only after the shell/session was lost or for explicit diagnostics:
 
 ```text
 python3 <plugin-root>/scripts/dls.py --root <current-project> --json \
   review-status CHANGE_ID
 ```
 
-`review-status` is read-only and never launches a model. Continue checking status
-at a bounded interval regardless of whether the primary command has emitted any
-stdout; do not replace the active review. Use its compact `progress` object and
-do not request `--verbose` unless diagnosing an integrity failure. Report only a
-lane/status transition or one compact unchanged heartbeat every 60–90 seconds,
-for example `3/4 · semantic:final-full · Sol/xhigh · 8m`. Never stream raw model
-transcripts or provisional findings.
+`review-status` is read-only and never launches a model. The normal stream never
+contains raw transcripts or provisional findings. Report only its transitions,
+budget warning, final result, or one compact heartbeat. `inspect-review-budget`
+is a bounded execution failure: do not retry expensive lanes or invent a verdict.
 
 If all lanes completed but final assembly/import failed, `review-status` returns
 `failed-finalize` and `next_action: resume-review`. If a semantic decision is

@@ -78,6 +78,18 @@ def start_review_with_fake_codex(
     pack_path: str | None = None,
     output: str = '{"summary":"No findings.","findings":[]}\n',
 ) -> dict:
+    if (
+        StateStore(root).load(change_id).get("control_level") == "routine"
+        and output == '{"summary":"No findings.","findings":[]}\n'
+    ):
+        output = json.dumps(
+            {
+                "verdict": "review-clear",
+                "summary": "No findings.",
+                "findings": [],
+                "prior_finding_verdicts": [],
+            }
+        )
     fake_bin = root / ".dls" / "cache" / "fake-bin"
     fake_bin.mkdir(parents=True, exist_ok=True)
     executable = fake_bin / "codex"
@@ -484,6 +496,15 @@ def build_review_report(
             if isinstance(pack.get("identifier_contract"), str)
             else {}
         ),
+        **{
+            field: pack[field]
+            for field in (
+                "context_contract",
+                "economy_contract",
+                "native_output_contract",
+            )
+            if isinstance(pack.get(field), str)
+        },
         "review_id": pack["review_id"],
         "change_id": pack["change_id"],
         "base_sha": pack["base_sha"],

@@ -2,7 +2,7 @@
 
 Срез: 27 июля 2026 года
 
-Текущая линия: `v0.4.4`
+Текущая линия: `v0.5.0`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
@@ -22,11 +22,12 @@ Must-be ядро реализовано и защищается regression-те�
 - одна implementation-команда `candidate-ready` и одна review-команда
   `review-run`;
 - read-only disposable review workspaces, single-flight и bounded recovery.
+- bounded review execution: risk budgets, compact context и ранняя остановка.
 
 Ранее открытые gaps launcher/PATH, semantic write prevention, remediation
 launcher и единого review-ready handoff закрыты текущим CLI и skills.
 
-## Сейчас: v0.4.4
+## Реализовано в v0.4.4
 
 | ID | KANO | Возможность | Результат |
 |---|---|---|---|
@@ -42,15 +43,23 @@ Exit criteria v0.4.4:
   автоматическое наследование;
 - пользователь по-прежнему не вводит SHA, operation ID или evidence paths.
 
-## Следующая волна: измерить эффективность
+## Сейчас: v0.5.0 — экономичный review
 
-| ID | KANO | Возможность | Условие |
+| ID | KANO | Возможность | Результат |
 |---|---|---|---|
-| P02 | Performance / P1 | Routine fast-path pilot | Реальный bug/chore должен пройти дешевле standard-пути без расширения пакета документов |
-| P08 | Performance / P1 | Runtime telemetry | Использовать доступные token, latency и retry metrics без сохранения приватного prompt content |
-| P09 | Performance / P1 | Legacy vs DLS baseline | Сравнить handoffs, model calls, документы, elapsed time и escaped findings; не обещать неподтверждённый процент экономии |
-| P27 | Performance / P1 | Evidence/cache retention | Ввести измеримые cleanup-правила после анализа размера и повторного использования локальных artifacts |
-| P33 | Performance / P1 | Краткий delivery status | Показывать ближайшее действие без чтения state, ReviewIR и transcript |
+| M53 | Must-be / P0 | Bounded review execution | Token/lane/event/time/transcript budgets останавливают runaway review без ложного verdict |
+| P02 | Performance / P1 | Routine fast-path | Validation и ровно один isolated Terra/high review без Sol и отдельной review-задачи |
+| P08 | Performance / P1 | Runtime telemetry | Child и controller usage с privacy filtering и явной полнотой измерения |
+| P09 | Performance / P1 | Legacy vs DLS baseline | Локальная абсолютная baseline-методика; публичные проценты не заявляются по одному проекту |
+| P27 | Performance / P1 | Cache retention | Canonical artifacts сохраняются, raw cache очищается по безопасному 14-day/two-review правилу |
+| P33 | Performance / P1 | Краткий delivery status | Один compact typed next action без чтения state и transcripts |
+
+## Следующая волна: platform pilots и настройка budgets
+
+- собрать несколько routine/standard/critical запусков на разных стеках;
+- настраивать default budgets только по накопленным абсолютным данным;
+- проверить второй platform adapter на web, backend или Android;
+- не публиковать процент экономии до сопоставимых повторяемых pilots.
 
 ## Позже, только по данным
 

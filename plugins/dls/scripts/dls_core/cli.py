@@ -34,6 +34,7 @@ from .operations import (
 )
 from .repo import find_repo_root
 from .review_runner import review_run, review_status
+from .telemetry import cache_prune, cache_status, delivery_status, review_metrics
 from .worktrees import (
     worktree_list,
     worktree_register,
@@ -335,6 +336,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _operation_id(review_run_parser)
     _dry_run(review_run_parser)
+    review_run_parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="Emit bounded NDJSON progress while keeping one review owner process.",
+    )
 
     review_status_parser = subparsers.add_parser(
         "review-status",
@@ -347,6 +353,32 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include full lane attempts, argv, paths, and provenance details.",
     )
+
+    review_metrics_parser = subparsers.add_parser(
+        "review-metrics",
+        help="Read privacy-preserving child and controller usage for one review.",
+    )
+    review_metrics_parser.add_argument("change_id")
+    review_metrics_parser.add_argument("--review-id")
+    review_metrics_parser.add_argument("--refresh", action="store_true")
+    review_metrics_parser.add_argument("--verbose", action="store_true")
+
+    delivery_status_parser = subparsers.add_parser(
+        "delivery-status",
+        help="Read one compact delivery state and typed next action.",
+    )
+    delivery_status_parser.add_argument("change_id")
+
+    cache_status_parser = subparsers.add_parser(
+        "cache-status", help="Read local ignored DLS cache size."
+    )
+    cache_status_parser.add_argument("change_id", nargs="?")
+
+    cache_prune_parser = subparsers.add_parser(
+        "cache-prune", help="Preview or apply safe local cache retention."
+    )
+    cache_prune_parser.add_argument("change_id", nargs="?")
+    cache_prune_parser.add_argument("--apply", action="store_true")
 
     review_import_parser = subparsers.add_parser(
         "review-import",
@@ -406,9 +438,25 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     root = (arguments.root or find_repo_root(Path.cwd())).resolve()
+    stream_enabled = arguments.command == "review-run" and arguments.stream
+
+    def emit_stream(event: dict[str, Any]) -> None:
+        if not stream_enabled:
+            return
+        print(json.dumps(event, sort_keys=True, ensure_ascii=False), flush=True)
+
     try:
-        result = dispatch(root, arguments)
+        result = dispatch(root, arguments, stream_callback=emit_stream)
     except DLSError as exc:
+        if stream_enabled:
+            emit_stream(
+                {
+                    "event": "completed",
+                    "status": "failed",
+                    "error": exc.__class__.__name__,
+                    "next_action": "inspect-review-failure",
+                }
+            )
         if arguments.as_json:
             print(
                 json.dumps(
@@ -421,6 +469,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
         return 3
     except OSError as exc:
+        if stream_enabled:
+            emit_stream(
+                {
+                    "event": "completed",
+                    "status": "failed",
+                    "error": "OSError",
+                    "next_action": "inspect-review-failure",
+                }
+            )
         if arguments.as_json:
             print(
                 json.dumps(
@@ -432,6 +489,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"error: {exc}", file=sys.stderr)
         return 3
+    if stream_enabled:
+        return 0 if result.get("ok", False) else 1
     if arguments.as_json:
         print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
     else:
@@ -439,7 +498,12 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if result.get("ok", False) else 1
 
 
-def dispatch(root: Path, args: argparse.Namespace) -> dict[str, Any]:
+def dispatch(
+    root: Path,
+    args: argparse.Namespace,
+    *,
+    stream_callback: Any | None = None,
+) -> dict[str, Any]:
     command = args.command
     if command == "init":
         return init_repository(root, dry_run=args.dry_run)
@@ -628,6 +692,7 @@ def dispatch(root: Path, args: argparse.Namespace) -> dict[str, Any]:
             pack_path=args.pack,
             operation_id=args.operation_id,
             dry_run=args.dry_run,
+            stream_callback=stream_callback if args.stream else None,
         )
     if command == "review-status":
         return review_status(
@@ -636,6 +701,20 @@ def dispatch(root: Path, args: argparse.Namespace) -> dict[str, Any]:
             review_id=args.review_id,
             verbose=args.verbose,
         )
+    if command == "review-metrics":
+        return review_metrics(
+            root,
+            change_id=args.change_id,
+            review_id=args.review_id,
+            refresh=args.refresh,
+            verbose=args.verbose,
+        )
+    if command == "delivery-status":
+        return delivery_status(root, change_id=args.change_id)
+    if command == "cache-status":
+        return cache_status(root, change_id=args.change_id)
+    if command == "cache-prune":
+        return cache_prune(root, change_id=args.change_id, apply=args.apply)
     if command == "review-import":
         return review_import(
             root,
@@ -857,6 +936,25 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             f"verdict={result.get('verdict') or 'pending'}; "
             f"result={result.get('review_result_path') or 'none'}; "
             f"next={result['next_action']['id']}"
+        )
+    if command == "review-metrics":
+        processed = (result.get("child_usage") or {}).get("processed_tokens")
+        return (
+            f"review metrics {result.get('review_id') or 'none'}; "
+            f"usage={result['usage_status']}; child={processed if processed is not None else 'unavailable'}; "
+            f"all-in={result['all_in']['kind']}"
+        )
+    if command == "delivery-status":
+        return (
+            f"delivery {result['change_id']}; candidate={result['candidate']['status']}; "
+            f"review={result['review']['status']}; next={result['next_action']['id']}"
+        )
+    if command == "cache-status":
+        return f"cache files={result['files']}; bytes={result['bytes']}"
+    if command == "cache-prune":
+        return prefix + (
+            f"cache prune files={result['files']}; bytes={result['bytes']}; "
+            f"{'applied' if not result['dry_run'] else 'dry-run'}"
         )
     if command == "review-import":
         return prefix + (

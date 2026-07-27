@@ -239,7 +239,21 @@ class ReviewRecoveryV021Tests(unittest.TestCase):
                 (root / started["review_context_path"]).read_text(encoding="utf-8")
             )
             context_paths = {item["path"] for item in context["inputs"]}
-            self.assertIn(started["review_pack_path"], context_paths)
+            projected_pack_paths = {
+                item["path"]
+                for item in context["inputs"]
+                if item.get("reason") == "active-review-pack"
+            }
+            self.assertEqual(len(projected_pack_paths), 1)
+            self.assertNotIn(started["review_pack_path"], context_paths)
+            projected_pack = json.loads(
+                (root / next(iter(projected_pack_paths))).read_text(encoding="utf-8")
+            )
+            canonical_pack = json.loads(
+                (root / started["review_pack_path"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(projected_pack["pack_digest"], canonical_pack["pack_digest"])
+            self.assertNotIn("artifacts", projected_pack)
             self.assertNotIn(zombie_relative, context_paths)
             self.assertEqual(replayed["review_id"], started["review_id"])
             self.assertFalse(replayed["pack_created"])

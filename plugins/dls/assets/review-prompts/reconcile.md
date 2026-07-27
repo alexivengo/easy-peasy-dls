@@ -1,6 +1,9 @@
 # DLS review reconciliation
 
-Reconcile review `{{REVIEW_ID}}` for change `{{CHANGE_ID}}`.
+Reconcile review `{{REVIEW_ID}}` for change `{{CHANGE_ID}}` using only the
+bounded input files in `.dls-review-input`. Do not inspect a product checkout,
+search the repository, or expand the scope beyond disagreements and actionable
+findings already present in those inputs.
 
 Use ticket IDs exactly as listed here: `{{CANONICAL_TICKET_IDS}}`. Required
 prior finding IDs are `{{REQUIRED_PRIOR_FINDING_IDS}}`. Do not abbreviate or
@@ -19,9 +22,11 @@ Read the bound context and ReviewPack, then read:
 - `.dls-review-input/semantic-independent.json`;
 - every specialist result under `.dls-review-input/specialists/`.
 
-Verify every observation against the exact source at `{{HEAD_SHA}}`. Reject false
-positives, merge duplicates, preserve independently supported omissions, and
-produce one internally consistent decision. Every required prior finding needs
-exactly one verdict. DLS derives canonical ticket verdicts from finding links,
-severity, and stage blockers. Do not modify files. Return only JSON matching
-`.dls-review-input/output.schema.json`.
+Adjudicate only the observations already supported by the independent inputs
+bound to exact source `{{HEAD_SHA}}`; this input-only pass does not independently
+re-read product source and must not invent new source claims. Merge duplicates,
+resolve conflicts conservatively, preserve independently supported omissions,
+and produce one internally consistent decision. Every required prior finding
+needs exactly one verdict. DLS derives canonical ticket verdicts from finding
+links, severity, and stage blockers. Do not modify files. Return only JSON
+matching `.dls-review-input/output.schema.json`.

@@ -102,7 +102,7 @@ codex plugin add dls@easy-peasy-dls
 Разберись, почему это не работает, и исправь причину.
 ```
 
-Для независимого review снова выберите **Easy Peasy DLS: процесс**:
+Для `standard` и `critical` review снова выберите **Easy Peasy DLS: процесс**:
 
 ```text
 Проведи code review EPIC-01.
@@ -111,7 +111,7 @@ codex plugin add dls@easy-peasy-dls
 После committed candidate handoff короткой команды достаточно. DLS найдёт
 зарегистрированный worktree и выберет exact-HEAD pack, подготовленный
 `candidate-ready`. Затем один
-single-flight runner выполнит native, specialist и semantic passes, соберёт
+single-flight runner выполнит только нужные native, specialist и semantic passes, соберёт
 ReviewIR и импортирует его. Переносить пути, запускать subagents или вручную
 собирать provenance не нужно. Human approval DLS всё равно не запишет без вашего
 прямого подтверждения.
@@ -121,17 +121,20 @@ ReviewIR и импортирует его. Переносить пути, зап
 `candidate-ready`: DLS последовательно выполняет доверенные проверки из
 `.dls/config.toml`, сохраняет компактное evidence, связывает его с findings и
 создаёт ReviewPack. Пользователь видит итоговый handoff в отдельную
-review-задачу, а не цепочку SHA, revision и evidence-команд.
+review-задачу, а не цепочку SHA, revision и evidence-команд. Для `routine`
+отдельная задача не нужна: `candidate-ready` запускает ровно один изолированный
+Terra/high review и возвращает обычный канонический ReviewIR.
 
 Если HEAD изменился после handoff или candidate ещё не подготовлен, review не
 запускает ручные проверки и не показывает старый результат как текущий. Он
 возвращает `prepare-candidate`, после чего implementation-задача завершает один
 автоматический `candidate-ready`.
 
-Во время длинного review навык показывает компактный прогресс по этапам, не
-вываливая сырые model transcripts и предварительные findings. Техническая
-телеметрия хранится локально: длительность, retries, размер контекста и token
-counters. Если финальная механическая сборка прервётся, DLS возобновит её из
+Во время длинного review один процесс отдаёт компактный поток переходов и не
+вываливает сырые model transcripts или предварительные findings. Техническая
+телеметрия хранится локально: длительность, retries, размер контекста и доступные
+token counters. Недоступные токены показываются как `unavailable`, активная
+управляющая задача — как lower bound. Если финальная сборка прервётся, DLS возобновит её из
 завершённых lanes без повторной оплаты model-review.
 
 Если semantic-модель вернула логически противоречивый JSON — например, оставила
@@ -149,7 +152,7 @@ HEAD; они не становятся отдельным источником �
 Если review находит проблемы, DLS в той же атомарной операции сохраняет
 канонический remediation-контекст. Исправления выполняются в implementation-
 задаче, которая заканчивается готовым candidate и handoff. Следующий независимый
-review всегда запускается в отдельной задаче.
+review запускается в отдельной задаче только для `standard` и `critical`.
 
 ## Что читать дальше
 

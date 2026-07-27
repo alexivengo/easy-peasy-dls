@@ -1,7 +1,8 @@
 # DLS remediation final-full review
 
-The targeted reconciliation for review `{{REVIEW_ID}}` found no blocker. Perform
-one final whole-epic semantic pass over `{{EPIC_BASE_SHA}}..{{HEAD_SHA}}`.
+The independent targeted review and native delta for review `{{REVIEW_ID}}`
+are clean. Perform one final whole-epic semantic pass over
+`{{EPIC_BASE_SHA}}..{{HEAD_SHA}}`.
 
 Use ticket IDs exactly as listed here: `{{CANONICAL_TICKET_IDS}}`. Required
 prior finding IDs are `{{REQUIRED_PRIOR_FINDING_IDS}}`. Do not abbreviate or

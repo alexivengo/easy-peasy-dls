@@ -39,11 +39,11 @@ Read [gates.md](references/gates.md) when architecture, UI/UX, approvals, except
 
 Routine work remains in this task. For standard, roadmap, or critical work, use a clean implementation task with the generated implementation context manifest; do not replay the definition transcript.
 
-Implement one coherent slice at a time. Keep ticket definitions in Markdown and execution status in DLS state. Use normal repository tooling and focused tests while developing. After the candidate is committed, invoke only `candidate-ready`; it runs trusted review commands, records bounded evidence, and creates the ReviewPack. Do not inspect state revisions or evidence files on the success path.
+Implement one coherent slice at a time. Keep ticket definitions in Markdown and execution status in DLS state. Use normal repository tooling and focused tests while developing. After the candidate is committed, invoke only `candidate-ready`; it runs trusted review commands, records bounded evidence, and creates the ReviewPack. For `routine`, that same command also runs one isolated Terra/high review and imports ReviewIR in this task. Do not inspect state revisions or evidence files on the success path.
 
 When implementation runs in a linked Git worktree, register its change ID and absolute root with `dls worktree register` after DLS state exists. This is local routing metadata, not a new Codex project or repository artifact.
 
-Before the first standard or critical review handoff, run `candidate-ready` with the explicit epic base. Handoff only the short review request; never make the user copy a pack path or generated command.
+Before the first standard or critical review handoff, run `candidate-ready` with the explicit epic base. Handoff only the short review request; never make the user copy a pack path or generated command. Routine work does not create a separate review task.
 
 If accepted behavior, architecture, or acceptance criteria change, pause affected work, edit the canonical contract and tickets, regenerate context, and request a new definition approval. Do not create a separate change-request document.
 
@@ -53,7 +53,7 @@ For any code-review request, read and follow [review.md](references/review.md). 
 
 For a remediation request, read and follow [remediation.md](references/remediation.md). Start from the latest-only canonical manifest. Pass the complete `addressed` and `note` declaration only for the first candidate attempt. If validation requires a new commit, invoke `candidate-ready` again without repeating unchanged findings; pass only explicit status overrides. DLS binds the new SHA, reruns exact-HEAD evidence, and creates the next ReviewPack. Neither status creates `verified`.
 
-Never finish a review without the non-null `review_result_path` returned by `review-run`. A completed `not-clear` or actionable `blocked` review must also return a non-null canonical `remediation_manifest_path`. After implementation or remediation, the task must wait for the single `candidate-ready` process, stop at `open-review-task`, and never invoke `review-run`. Use compact `candidate-status` only when the original process is lost or long-running; add `--diagnostic` once when the bounded validation failure itself was lost. Never pass an old candidate operation ID after HEAD changes. A `review-clear` verdict is not final acceptance.
+Never finish a review without the non-null `review_result_path` returned by `review-run`. A completed `not-clear` or actionable `blocked` review must also return a non-null canonical `remediation_manifest_path`. After standard or critical implementation/remediation, the task must wait for the single `candidate-ready` process, stop at `open-review-task`, and never invoke `review-run`. For routine, `candidate-ready` owns its single Terra review and returns the canonical result directly. Use compact `candidate-status` only when the original process is lost or long-running; add `--diagnostic` once when the bounded validation failure itself was lost. Never pass an old candidate operation ID after HEAD changes. A `review-clear` verdict is not final acceptance.
 
 On `failed-finalize` or `resume-review-repair`, invoke the same `review-run` with the same operation ID and let DLS reuse completed lanes. A logically invalid semantic decision is repaired by one DLS-owned compact Sol pass; never read its raw output, create a correction agent, expose provisional findings, or start a replacement whole-epic review. Stop on `inspect-review-output` or `inspect-review-integrity`.
 

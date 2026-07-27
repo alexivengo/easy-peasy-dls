@@ -19,6 +19,7 @@ from typing import Any
 
 from . import SCHEMA_VERSION, VERSION
 from .errors import ConfigError, IntegrityError, UsageError
+from .economy import processed_tokens, review_budget, token_budget_failure
 from .io import (
     atomic_write_json,
     atomic_write_text,
@@ -125,7 +126,11 @@ NATIVE_REVIEW_REASONING_EFFORT = "high"
 NATIVE_REVIEW_TIMEOUT_SECONDS = 1800
 NATIVE_REVIEW_MAX_OUTPUT_BYTES = 262144
 NATIVE_REVIEW_TRANSCRIPT_MAX_BYTES = 1048576
-REVIEW_RUNNER_CONTRACT = "dls-review-runner/v1"
+LEGACY_REVIEW_RUNNER_CONTRACT = "dls-review-runner/v1"
+REVIEW_RUNNER_CONTRACT = "dls-review-runner/v2"
+REVIEW_CONTEXT_CONTRACT = "dls-review-context/v2"
+REVIEW_ECONOMY_CONTRACT = "dls-review-economy/v1"
+NATIVE_OUTPUT_CONTRACT = "dls-native-review/v2"
 REVIEW_IDENTIFIER_CONTRACT = "canonical-ticket-ids/v1"
 REVIEW_DECISION_REPAIR_CONTRACT = "dls-decision-repair/v1"
 REVIEW_LANE_MAX_ATTEMPTS = 2
@@ -1522,6 +1527,157 @@ def build_context(
     }
 
 
+def _review_context_v2(
+    root: Path,
+    *,
+    change_id: str,
+    pack: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a compact digest-bound review projection without full pack replay."""
+    legacy = build_context(
+        root,
+        change_id=change_id,
+        phase="review",
+        include=[],
+        exclude=[],
+        dry_run=True,
+    )["manifest"]
+    context_root = root / ".dls" / "cache" / "context" / change_id
+    context_root.mkdir(parents=True, exist_ok=True)
+    projection_relative = (
+        f".dls/cache/context/{change_id}/"
+        f"review-pack-{pack['review_id']}-v2.json"
+    )
+    evidence: list[dict[str, Any]] = []
+    for relative in pack.get("evidence", []):
+        record = read_json(safe_resolve(root, relative, must_exist=True))
+        evidence.append(
+            {
+                "path": relative,
+                "command_id": record.get("command_id"),
+                "git_sha": record.get("git_sha"),
+                "source_digest": record.get("source_digest"),
+                "exit_code": record.get("exit_code"),
+                "record_digest": sha256_file(safe_resolve(root, relative, must_exist=True)),
+            }
+        )
+    projection = {
+        "contract": REVIEW_CONTEXT_CONTRACT,
+        "review_id": pack["review_id"],
+        "change_id": pack["change_id"],
+        "review_mode": pack["review_mode"],
+        "control_level": pack["control_level"],
+        "epic_base_sha": pack["epic_base_sha"],
+        "comparison_base_sha": pack["comparison_base_sha"],
+        "head_sha": pack["head_sha"],
+        "pack_digest": pack["pack_digest"],
+        "definition_digest": pack["definition_digest"],
+        "tickets": pack["tickets"],
+        "required_prior_findings": pack.get("required_prior_findings", []),
+        "finding_dispositions": pack.get("finding_dispositions", []),
+        "changed_files": pack.get("changed_files", []),
+        "full_changed_files": pack.get("full_changed_files", []),
+        "risk_lenses": pack.get("risk_lenses", []),
+        "evidence": evidence,
+    }
+    atomic_write_json(safe_resolve(root, projection_relative), projection, backup=False)
+    prior_requirement_ids = {
+        requirement_id
+        for finding in pack.get("required_prior_findings", [])
+        for requirement_id in finding.get("requirement_ids", [])
+        if isinstance(requirement_id, str)
+    }
+    ticket_ids = set(pack.get("tickets", {}))
+    inputs: list[dict[str, Any]] = []
+    for item in legacy["inputs"]:
+        if item.get("reason") == "active-review-pack":
+            continue
+        relative = item["path"]
+        if "requirement" in relative.lower():
+            source = safe_resolve(root, relative, must_exist=True)
+            text = source.read_text(encoding="utf-8", errors="replace")
+            matched = [
+                line
+                for line in text.splitlines()
+                if any(identifier in line for identifier in ticket_ids | prior_requirement_ids)
+            ]
+            snippet_relative = (
+                f".dls/cache/context/{change_id}/"
+                f"requirements-{pack['review_id']}-v2.json"
+            )
+            atomic_write_json(
+                safe_resolve(root, snippet_relative),
+                {
+                    "contract": REVIEW_CONTEXT_CONTRACT,
+                    "source_path": relative,
+                    "source_digest": sha256_file(source),
+                    "ticket_ids": sorted(ticket_ids),
+                    "requirement_ids": sorted(prior_requirement_ids),
+                    "matched_lines": matched,
+                },
+                backup=False,
+            )
+            snippet = safe_resolve(root, snippet_relative, must_exist=True)
+            inputs.append(
+                {
+                    "path": snippet_relative,
+                    "reason": "filtered-requirements-projection",
+                    "sha256": sha256_file(snippet),
+                    "bytes": snippet.stat().st_size,
+                    "words": len(snippet.read_text(encoding="utf-8").split()),
+                    "estimated_tokens": {"low": 0, "high": 0},
+                }
+            )
+            continue
+        inputs.append(item)
+    projection_path = safe_resolve(root, projection_relative, must_exist=True)
+    inputs.append(
+        {
+            "path": projection_relative,
+            "reason": "active-review-pack",
+            "projection_contract": REVIEW_CONTEXT_CONTRACT,
+            "sha256": sha256_file(projection_path),
+            "bytes": projection_path.stat().st_size,
+            "words": len(projection_path.read_text(encoding="utf-8").split()),
+            "estimated_tokens": {"low": 0, "high": 0},
+        }
+    )
+    total_bytes = sum(int(item.get("bytes", 0)) for item in inputs)
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "contract": REVIEW_CONTEXT_CONTRACT,
+        "dls_version": VERSION,
+        "profile": legacy["profile"],
+        "change_id": change_id,
+        "phase": "review",
+        "generated_at": utc_now(),
+        "manifest_digest": "",
+        "state_revision": legacy["state_revision"],
+        "git_head": pack["head_sha"],
+        "inputs": inputs,
+        "exclusions": [],
+        "context_mode": "large-context" if total_bytes > 512 * 1024 else "compact",
+        "totals": {
+            "bytes": total_bytes,
+            "words": sum(int(item.get("words", 0)) for item in inputs),
+            "estimated_tokens_low": sum(
+                int(item.get("estimated_tokens", {}).get("low", 0)) for item in inputs
+            ),
+            "estimated_tokens_high": sum(
+                int(item.get("estimated_tokens", {}).get("high", 0)) for item in inputs
+            ),
+        },
+    }
+    digest = _context_manifest_content_digest(manifest)
+    manifest["manifest_digest"] = digest
+    output = context_root / f"review-{digest[:12]}.json"
+    atomic_write_json(output, manifest, backup=False)
+    return {
+        "manifest_path": str(output.relative_to(root)),
+        "manifest": manifest,
+    }
+
+
 def _change_owner_root(root: Path, change_id: str) -> tuple[Path, str]:
     candidate = root.resolve()
     if (
@@ -2286,6 +2442,12 @@ def _validate_review_pack(pack: dict[str, Any], change_id: str) -> None:
         control_level=pack["control_level"],
         mode=pack["mode"],
     )
+    if (
+        pack.get("runner_contract") == REVIEW_RUNNER_CONTRACT
+        and pack["control_level"] == "routine"
+        and pack["mode"] == "acceptance-grade"
+    ):
+        expected_lanes = ["native-diff", "semantic-dls"]
     if lanes != expected_lanes:
         raise IntegrityError(
             f"ReviewPack lanes mismatch: expected {expected_lanes}, got {lanes!r}"
@@ -2574,6 +2736,10 @@ def _review_pack_state_entry(
     return {
         "review_id": pack["review_id"],
         "kind": "pack",
+        "runner_contract": pack.get("runner_contract"),
+        "context_contract": pack.get("context_contract"),
+        "economy_contract": pack.get("economy_contract"),
+        "native_output_contract": pack.get("native_output_contract"),
         "identifier_contract": pack.get("identifier_contract"),
         "decision_repair_contract": pack.get("decision_repair_contract"),
         "pack_path": relative_path,
@@ -2711,6 +2877,9 @@ def review_pack(
     pack = {
         "schema_version": REVIEW_PACK_SCHEMA_VERSION,
         "runner_contract": REVIEW_RUNNER_CONTRACT,
+        "context_contract": REVIEW_CONTEXT_CONTRACT,
+        "economy_contract": REVIEW_ECONOMY_CONTRACT,
+        "native_output_contract": NATIVE_OUTPUT_CONTRACT,
         "identifier_contract": REVIEW_IDENTIFIER_CONTRACT,
         "decision_repair_contract": REVIEW_DECISION_REPAIR_CONTRACT,
         "review_id": review_id,
@@ -2727,9 +2896,13 @@ def review_pack(
         "epic_merge_base": epic_merge_base,
         "definition_digest": definition_approval["object_digest"],
         "source_snapshot_digest": source_snapshot_digest,
-        "required_lanes": _review_pack_required_lanes(
-            control_level=state["control_level"],
-            mode=mode,
+        "required_lanes": (
+            ["native-diff", "semantic-dls"]
+            if state["control_level"] == "routine" and mode == "acceptance-grade"
+            else _review_pack_required_lanes(
+                control_level=state["control_level"],
+                mode=mode,
+            )
         ),
         "previous_pack": _previous_pack_link(root, state),
         "prior_review": _prior_review,
@@ -3197,11 +3370,225 @@ def _validate_review_pack_current(
             raise IntegrityError(f"Evidence is not current and successful: {evidence_path}")
 
 
+def _routine_review_prompt(pack: dict[str, Any]) -> str:
+    prompt = (PLUGIN_ROOT / "assets/review-prompts/routine.md").read_text(
+        encoding="utf-8"
+    )
+    values = {
+        "CHANGE_ID": pack["change_id"],
+        "HEAD_SHA": pack["head_sha"],
+        "COMPARISON_BASE_SHA": pack.get(
+            "comparison_base_sha", pack["merge_base"]
+        ),
+        "CANONICAL_TICKET_IDS": json.dumps(
+            list(pack.get("tickets", {})), ensure_ascii=False
+        ),
+        "REQUIRED_PRIOR_FINDING_IDS": json.dumps(
+            [
+                item["finding_id"]
+                for item in pack.get("required_prior_findings", [])
+            ],
+            ensure_ascii=False,
+        ),
+        "CANONICAL_PRIOR_FINDINGS": json.dumps(
+            pack.get("required_prior_findings", []),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    }
+    for key, value in values.items():
+        prompt = prompt.replace(f"{{{{{key}}}}}", value)
+    if "{{" in prompt or "}}" in prompt:
+        raise IntegrityError("Routine review prompt has unresolved placeholders")
+    return prompt
+
+
+def _routine_plaintext_decision(
+    text: str,
+    *,
+    pack: dict[str, Any],
+) -> dict[str, Any]:
+    """Convert Codex review's documented presentation into a DLS decision.
+
+    Some Codex CLI builds accept `--output-schema` on `exec review` but still
+    render the built-in human review presentation. DLS preserves that raw
+    output and derives this deliberately small, auditable projection without a
+    second model call.
+    """
+
+    stripped = text.strip()
+    clear_match = re.match(
+        r"^(?:review-clear|no findings(?: found)?)\s*[:.\-—]?\s*(.*)$",
+        stripped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    prior_findings = {
+        item["finding_id"]: item
+        for item in pack.get("required_prior_findings", [])
+        if isinstance(item, dict) and isinstance(item.get("finding_id"), str)
+    }
+    if clear_match:
+        summary = clear_match.group(1).strip() or "No review findings."
+        return {
+            "verdict": "review-clear",
+            "summary": summary,
+            "findings": [],
+            "prior_finding_verdicts": [
+                {
+                    "finding_id": finding_id,
+                    "verdict": "verified",
+                    "replacement_finding_id": None,
+                    "evidence": [
+                        "The independent routine review reported no remaining finding."
+                    ],
+                }
+                for finding_id in prior_findings
+            ],
+        }
+    blocked_match = re.match(
+        r"^blocked\s*[:.\-—]?\s*(.*)$",
+        stripped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if blocked_match and "\n- [P" not in stripped:
+        return {
+            "verdict": "blocked",
+            "summary": blocked_match.group(1).strip() or "Review was blocked.",
+            "findings": [],
+            "prior_finding_verdicts": [],
+        }
+
+    lines = stripped.splitlines()
+    comment_starts: list[tuple[int, re.Match[str]]] = []
+    comment_pattern = re.compile(
+        r"^-\s+\[P([0-3])\]\s+(.+?)\s+(?:—|-)\s+(.+?)\s*$"
+    )
+    for index, line in enumerate(lines):
+        if match := comment_pattern.match(line):
+            comment_starts.append((index, match))
+    if not comment_starts:
+        unsafe_markers = (
+            "unable to review",
+            "could not review",
+            "review was blocked",
+            "review is blocked",
+            "not reviewed",
+        )
+        if any(marker in stripped.casefold() for marker in unsafe_markers):
+            raise IntegrityError("routine review plaintext reports an incomplete review")
+        # The built-in Codex review presentation emits actionable findings as
+        # P0-P3 review comments. A non-empty successful final message with no
+        # such comments is its native clean result.
+        return {
+            "verdict": "review-clear",
+            "summary": stripped,
+            "findings": [],
+            "prior_finding_verdicts": [
+                {
+                    "finding_id": finding_id,
+                    "verdict": "verified",
+                    "replacement_finding_id": None,
+                    "evidence": [
+                        "The independent routine review emitted no review comment."
+                    ],
+                }
+                for finding_id in prior_findings
+            ],
+        }
+
+    used_ids = set(prior_findings)
+    findings: list[dict[str, Any]] = []
+    replacements: dict[str, str] = {}
+    for ordinal, (line_index, match) in enumerate(comment_starts, start=1):
+        next_index = (
+            comment_starts[ordinal][0]
+            if ordinal < len(comment_starts)
+            else len(lines)
+        )
+        priority, title, location = match.groups()
+        body = " ".join(
+            item.strip()
+            for item in lines[line_index + 1 : next_index]
+            if item.strip()
+        )
+        prior_id: str | None = None
+        if prior_match := re.match(r"^\[PRIOR:([^\]]+)\]\s*(.*)$", title):
+            prior_id = prior_match.group(1)
+            title = prior_match.group(2).strip()
+            if prior_id not in prior_findings:
+                raise IntegrityError(
+                    f"routine review references unknown prior finding: {prior_id}"
+                )
+            if prior_id in replacements:
+                raise IntegrityError(
+                    f"routine review repeats prior finding: {prior_id}"
+                )
+        if "/checkout/" in location:
+            location = location.split("/checkout/", 1)[1]
+        location = location.removeprefix("./")
+        digest = hashlib.sha256(
+            (
+                f"{pack['review_id']}\n{ordinal}\n{title}\n{location}\n{body}"
+            ).encode("utf-8")
+        ).hexdigest()[:10].upper()
+        finding_id = f"{pack['change_id'].replace('-', '')}-R{digest}"
+        if finding_id in used_ids:
+            raise IntegrityError("routine review produced a duplicate derived finding ID")
+        used_ids.add(finding_id)
+        if prior_id is not None:
+            replacements[prior_id] = finding_id
+        findings.append(
+            {
+                "id": finding_id,
+                "severity": "blocker" if priority in {"0", "1"} else "should-fix",
+                "kind": "defect",
+                "location": location,
+                "issue": title,
+                "impact": body or title,
+                "required_fix": body or "Address the reported review issue.",
+                "ticket_ids": [],
+                "requirement_ids": [],
+                "blocks": ["review", "acceptance"],
+                "provenance": ["codex-exec-review"],
+            }
+        )
+    first_comment = comment_starts[0][0]
+    summary = " ".join(item.strip() for item in lines[:first_comment] if item.strip())
+    summary = re.sub(r"^not-clear\s*[:.\-—]?\s*", "", summary, flags=re.IGNORECASE)
+    return {
+        "verdict": "not-clear",
+        "summary": summary or f"Routine review reported {len(findings)} finding(s).",
+        "findings": findings,
+        "prior_finding_verdicts": [
+            {
+                "finding_id": finding_id,
+                "verdict": "still-open" if finding_id in replacements else "verified",
+                "replacement_finding_id": replacements.get(finding_id),
+                "evidence": [
+                    (
+                        "The routine review reported a replacement finding."
+                        if finding_id in replacements
+                        else "The routine review did not report the prior finding as remaining."
+                    )
+                ],
+            }
+            for finding_id in prior_findings
+        ],
+    }
+
+
 def _native_review_argv(
     pack: dict[str, Any],
     final_output_path: str,
 ) -> list[str]:
-    return [
+    routine = pack.get("control_level") == "routine"
+    schema_path = (
+        SCHEMAS_ROOT / "review-decision.schema.json"
+        if routine
+        else SCHEMAS_ROOT / "native-review.schema.json"
+    )
+    argv = [
         "codex",
         "exec",
         "--strict-config",
@@ -3216,12 +3603,29 @@ def _native_review_argv(
         "--json",
         "--color",
         "never",
-        "--output-last-message",
-        final_output_path,
-        "review",
-        "--base",
-        pack.get("comparison_base_sha", pack["merge_base"]),
     ]
+    if pack.get("native_output_contract") == NATIVE_OUTPUT_CONTRACT:
+        argv.extend(
+            [
+                "--output-schema",
+                str(schema_path),
+            ]
+        )
+    argv.extend(["--output-last-message", final_output_path, "review"])
+    if routine:
+        # The official review CLI treats a custom prompt as one complete review
+        # target and rejects combining it with `--base`. The DLS-owned prompt
+        # binds the immutable base/head SHAs, while review-start independently
+        # verifies both revisions before and after the isolated model call.
+        argv.append(_routine_review_prompt(pack))
+    else:
+        argv.extend(
+            [
+                "--base",
+                pack.get("comparison_base_sha", pack["merge_base"]),
+            ]
+        )
+    return argv
 
 
 def _successful_native_entry(
@@ -3262,6 +3666,51 @@ def _successful_native_entry(
                 "Native review diagnostic transcript digest mismatch"
             )
     return entry
+
+
+def _recover_routine_native_projection(
+    root: Path,
+    *,
+    state_store: StateStore,
+    change_id: str,
+    pack: dict[str, Any],
+    entry: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    output_relative = entry.get("output_path")
+    attempt_id = entry.get("attempt_id")
+    if not isinstance(output_relative, str) or not isinstance(attempt_id, str):
+        raise IntegrityError("Routine native recovery metadata is incomplete")
+    output_path = safe_resolve(root, output_relative, must_exist=True)
+    if sha256_file(output_path) != entry.get("output_digest"):
+        raise IntegrityError("Routine native recovery raw output digest mismatch")
+    decision = _routine_plaintext_decision(
+        output_path.read_text(encoding="utf-8"),
+        pack=pack,
+    )
+    normalized_relative = (
+        f".dls/cache/reviews/{change_id}/{pack['review_id']}/"
+        f"native-normalized-{attempt_id}.json"
+    )
+    normalized_path = safe_resolve(root, normalized_relative)
+    atomic_write_json(normalized_path, decision, backup=False)
+    try:
+        updated, recovered, changed = state_store.finish_review_lane(
+            change_id,
+            attempt_id=attempt_id,
+            expected_status="invalid-output",
+            updates={
+                "status": "completed",
+                "normalized_output_path": normalized_relative,
+                "normalized_output_digest": sha256_file(normalized_path),
+                "native_output_format": "codex-review-plaintext",
+                "failure_reason": None,
+                "completed_at": utc_now(),
+            },
+        )
+    except Exception:
+        normalized_path.unlink(missing_ok=True)
+        raise
+    return updated, recovered, changed
 
 
 def _semantic_review_effort(state: dict[str, Any]) -> str:
@@ -3338,6 +3787,7 @@ def _lane_wait_response(
         "review_pack_path": relative_pack_path,
         "pack_created": pack_created,
         "review_mode": pack.get("review_mode", "full"),
+        "control_level": pack.get("control_level"),
         "risk_lenses": pack.get("risk_lenses", []),
         "required_prior_findings": pack.get("required_prior_findings", []),
         "native_required": True,
@@ -3347,8 +3797,16 @@ def _lane_wait_response(
         "native_coverage": list(pack.get("prior_native_coverage", [])),
         "review_context_path": None,
         "review_context_digest": None,
-        "semantic_model": "gpt-5.6-sol",
-        "semantic_reasoning_effort": _semantic_review_effort(state),
+        "semantic_model": (
+            NATIVE_REVIEW_MODEL
+            if pack.get("control_level") == "routine"
+            else "gpt-5.6-sol"
+        ),
+        "semantic_reasoning_effort": (
+            "high"
+            if pack.get("control_level") == "routine"
+            else _semantic_review_effort(state)
+        ),
         "next_action": {
             "id": "wait-review",
             "detail": (
@@ -3372,6 +3830,7 @@ def _review_start_ready_response(
     native_reused: bool,
     native_entry: dict[str, Any] | None,
     changed: bool,
+    prepared_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     completed_semantic = next(
         (
@@ -3397,14 +3856,20 @@ def _review_start_ready_response(
             "manifest_path": completed_semantic["context_manifest_path"],
             "manifest": read_json(context_path),
         }
+    elif prepared_context is not None:
+        context = prepared_context
     else:
-        context = build_context(
-            owner,
-            change_id=change_id,
-            phase="review",
-            include=[],
-            exclude=[],
-            dry_run=False,
+        context = (
+            _review_context_v2(owner, change_id=change_id, pack=pack)
+            if pack.get("context_contract") == REVIEW_CONTEXT_CONTRACT
+            else build_context(
+                owner,
+                change_id=change_id,
+                phase="review",
+                include=[],
+                exclude=[],
+                dry_run=False,
+            )
         )
     native_coverage = list(pack.get("prior_native_coverage", []))
     if native_entry:
@@ -3430,6 +3895,7 @@ def _review_start_ready_response(
         "review_pack_path": relative_pack_path,
         "pack_created": pack_created,
         "review_mode": pack.get("review_mode", "full"),
+        "control_level": pack.get("control_level"),
         "risk_lenses": pack.get("risk_lenses", []),
         "required_prior_findings": pack.get("required_prior_findings", []),
         "native_required": native_required,
@@ -3439,8 +3905,16 @@ def _review_start_ready_response(
         "native_coverage": native_coverage,
         "review_context_path": context["manifest_path"],
         "review_context_digest": context["manifest"]["manifest_digest"],
-        "semantic_model": "gpt-5.6-sol",
-        "semantic_reasoning_effort": _semantic_review_effort(state),
+        "semantic_model": (
+            NATIVE_REVIEW_MODEL
+            if pack.get("control_level") == "routine"
+            else "gpt-5.6-sol"
+        ),
+        "semantic_reasoning_effort": (
+            "high"
+            if pack.get("control_level") == "routine"
+            else _semantic_review_effort(state)
+        ),
         "next_action": {
             "id": "run-semantic-review",
             "detail": context["manifest_path"],
@@ -3455,6 +3929,7 @@ def review_start(
     pack_path: str | None,
     operation_id: str | None,
     dry_run: bool = False,
+    stream_callback: Any | None = None,
 ) -> dict[str, Any]:
     effective_operation_id = operation_id or str(uuid.uuid4())
     owner, state, pack, relative_pack_path, owner_selection = _resolve_review_pack(
@@ -3529,6 +4004,7 @@ def review_start(
     lane_operation_root = f"{effective_operation_id}:{pack['review_id']}"
     _validate_review_pack_current(owner, state=state, pack=pack)
     native_required = "native-diff" in pack["required_lanes"]
+    budget = review_budget(owner, pack["control_level"])
     native_entry = _successful_native_entry(
         owner,
         state=state,
@@ -3570,6 +4046,7 @@ def review_start(
             "review_pack_path": relative_pack_path,
             "pack_created": pack_created,
             "review_mode": pack.get("review_mode", "full"),
+            "control_level": pack.get("control_level"),
             "risk_lenses": pack.get("risk_lenses", []),
             "required_prior_findings": pack.get("required_prior_findings", []),
             "native_required": native_required,
@@ -3578,13 +4055,56 @@ def review_start(
             "native": native_entry,
             "review_context_path": None,
             "review_context_digest": context["manifest"]["manifest_digest"],
-            "semantic_model": "gpt-5.6-sol",
-            "semantic_reasoning_effort": _semantic_review_effort(state),
+            "semantic_model": (
+                NATIVE_REVIEW_MODEL
+                if pack.get("control_level") == "routine"
+                else "gpt-5.6-sol"
+            ),
+            "semantic_reasoning_effort": (
+                "high"
+                if pack.get("control_level") == "routine"
+                else _semantic_review_effort(state)
+            ),
             "next_action": {
                 "id": "start-review",
                 "detail": "dry-run review preflight is ready",
             },
         }
+    prepared_context: dict[str, Any] | None = None
+    if pack.get("control_level") == "routine":
+        context_entry = native_entry
+        if context_entry is None:
+            context_entry = next(
+                (
+                    item
+                    for item in reversed(
+                        _review_lane_entries(
+                            state,
+                            review_id=pack["review_id"],
+                            lane_key="native",
+                        )
+                    )
+                    if isinstance(item.get("context_manifest_path"), str)
+                ),
+                None,
+            )
+        existing_context_path = (
+            context_entry.get("context_manifest_path") if context_entry else None
+        )
+        if isinstance(existing_context_path, str) and "context/" in existing_context_path:
+            resolved_context = safe_resolve(
+                owner, existing_context_path, must_exist=True
+            )
+            if sha256_file(resolved_context) != context_entry.get("context_digest"):
+                raise IntegrityError("Routine review context digest mismatch")
+            prepared_context = {
+                "manifest_path": existing_context_path,
+                "manifest": read_json(resolved_context),
+            }
+        else:
+            prepared_context = _review_context_v2(
+                owner, change_id=change_id, pack=pack
+            )
     changed = pack_created
     if native_required and native_entry is None:
         state_store = StateStore(owner)
@@ -3658,8 +4178,60 @@ def review_start(
                     native_reused=native_was_reused,
                     native_entry=native_entry,
                     changed=changed,
+                    prepared_context=prepared_context,
                 )
             terminal = attempts[-1] if attempts else None
+            if terminal is not None and terminal.get("status") == "budget-exceeded":
+                return {
+                    "ok": True,
+                    "dry_run": False,
+                    "changed": changed,
+                    "status": "failed",
+                    "change_id": change_id,
+                    "state_revision": state["state_revision"],
+                    "operation_id": effective_operation_id,
+                    "owner_root": str(owner),
+                    "owner_selection": owner_selection,
+                    "review_id": pack["review_id"],
+                    "review_pack_path": relative_pack_path,
+                    "pack_created": pack_created,
+                    "review_result_path": None,
+                    "native": terminal,
+                    "next_action": {
+                        "id": "inspect-review-budget",
+                        "detail": terminal.get("failure_reason")
+                        or "native lane exceeded its budget",
+                    },
+                }
+            if (
+                terminal is not None
+                and terminal.get("status") == "invalid-output"
+                and pack.get("control_level") == "routine"
+            ):
+                state, native_entry, recovered = _recover_routine_native_projection(
+                    owner,
+                    state_store=state_store,
+                    change_id=change_id,
+                    pack=pack,
+                    entry=terminal,
+                )
+                changed = changed or recovered
+                native_was_reused = True
+                return _review_start_ready_response(
+                    owner=owner,
+                    state=state,
+                    change_id=change_id,
+                    operation_id=effective_operation_id,
+                    owner_selection=owner_selection,
+                    pack=pack,
+                    relative_pack_path=relative_pack_path,
+                    pack_created=pack_created,
+                    native_required=native_required,
+                    native_reused=native_was_reused,
+                    native_entry=native_entry,
+                    changed=changed,
+                    prepared_context=prepared_context,
+                )
             if terminal is not None and terminal.get("status") not in (
                 RETRYABLE_REVIEW_LANE_STATUSES
             ):
@@ -3699,6 +4271,17 @@ def review_start(
                 pack,
                 str(safe_resolve(owner, relative_output_path)),
             )
+            routine_review = pack.get("control_level") == "routine"
+            native_schema_path = (
+                SCHEMAS_ROOT / "review-decision.schema.json"
+                if routine_review
+                else SCHEMAS_ROOT / "native-review.schema.json"
+            )
+            attempt_context_path = relative_pack_path
+            if routine_review:
+                if prepared_context is None:
+                    raise IntegrityError("Routine review context was not prepared")
+                attempt_context_path = prepared_context["manifest_path"]
             snapshot_before = git_source_snapshot_digest(owner)
             proposed_attempt = {
                 "review_id": pack["review_id"],
@@ -3708,27 +4291,45 @@ def review_start(
                 "attempt_ordinal": ordinal,
                 "operation_id": lane_operation_id,
                 "runner_pid": os.getpid(),
-                "runner_contract": REVIEW_RUNNER_CONTRACT,
+                "runner_contract": pack.get("runner_contract", REVIEW_RUNNER_CONTRACT),
                 "base_sha": pack.get("comparison_base_sha", pack["base_sha"]),
                 "head_sha": pack["head_sha"],
                 "pack_digest": pack["pack_digest"],
                 "model": NATIVE_REVIEW_MODEL,
                 "reasoning_effort": NATIVE_REVIEW_REASONING_EFFORT,
                 "argv": argv,
-                "prompt_path": "builtin:codex-exec-review",
+                "prompt_path": (
+                    "assets/review-prompts/routine.md"
+                    if routine_review
+                    else "builtin:codex-exec-review"
+                ),
                 "prompt_digest": sha256_bytes(
                     (
-                        "codex-exec-review/builtin-v1\n"
-                        f"base={pack.get('comparison_base_sha', pack['base_sha'])}\n"
+                        _routine_review_prompt(pack)
+                        if routine_review
+                        else (
+                            "codex-exec-review/builtin-v1\n"
+                            f"base={pack.get('comparison_base_sha', pack['base_sha'])}\n"
+                        )
                     ).encode("utf-8")
                 ),
-                "schema_path": "builtin:codex-review-bounded-text",
-                "schema_digest": sha256_bytes(
-                    b"codex-exec-review/bounded-text-v1\n"
+                "schema_path": (
+                    (
+                        "assets/schemas/review-decision.schema.json"
+                        if routine_review
+                        else "assets/schemas/native-review.schema.json"
+                    )
+                    if pack.get("native_output_contract") == NATIVE_OUTPUT_CONTRACT
+                    else "builtin:codex-review-bounded-text"
                 ),
-                "context_manifest_path": relative_pack_path,
+                "schema_digest": (
+                    sha256_file(native_schema_path)
+                    if pack.get("native_output_contract") == NATIVE_OUTPUT_CONTRACT
+                    else sha256_bytes(b"codex-exec-review/bounded-text-v1\n")
+                ),
+                "context_manifest_path": attempt_context_path,
                 "context_digest": sha256_file(
-                    safe_resolve(owner, relative_pack_path, must_exist=True)
+                    safe_resolve(owner, attempt_context_path, must_exist=True)
                 ),
                 "output_path": relative_output_path,
                 "transcript_path": relative_transcript_path,
@@ -3756,10 +4357,24 @@ def review_start(
                         attempt=claimed_attempt,
                     )
                 continue
+            if stream_callback is not None:
+                stream_callback(
+                    {
+                        "event": "lane-transition",
+                        "change_id": change_id,
+                        "review_id": pack["review_id"],
+                        "lane": "native",
+                    }
+                )
             break
 
         output_path = safe_resolve(owner, relative_output_path)
         transcript_path = safe_resolve(owner, relative_transcript_path)
+        normalized_output_relative = (
+            f".dls/cache/reviews/{change_id}/{pack['review_id']}/"
+            f"native-normalized-{attempt_id}.json"
+        )
+        normalized_output_path = safe_resolve(owner, normalized_output_relative)
         if output_path.exists() or transcript_path.exists():
             raise IntegrityError(
                 "Native review cache already exists without matching state; "
@@ -3785,9 +4400,27 @@ def review_start(
                 argv,
                 cwd=native_workspace,
                 environment=allowed_environment(["HOME", "CODEX_HOME"]),
-                timeout_seconds=NATIVE_REVIEW_TIMEOUT_SECONDS,
-                max_output_bytes=NATIVE_REVIEW_TRANSCRIPT_MAX_BYTES,
-                terminate_on_overflow=False,
+                timeout_seconds=budget.timeout_seconds,
+                max_output_bytes=budget.transcript_bytes,
+                terminate_on_overflow=True,
+                max_command_events=budget.command_events,
+                heartbeat_callback=(
+                    (
+                        lambda elapsed, output_bytes, command_events: stream_callback(
+                            {
+                                "event": "heartbeat",
+                                "change_id": change_id,
+                                "review_id": pack["review_id"],
+                                "lane": "native",
+                                "elapsed_seconds": round(elapsed, 1),
+                                "output_bytes": output_bytes,
+                                "command_events": command_events,
+                            }
+                        )
+                    )
+                    if stream_callback is not None
+                    else None
+                ),
             )
             workspace_snapshot_after = git_source_snapshot_digest(native_workspace)
         except Exception as exc:
@@ -3831,26 +4464,108 @@ def review_start(
         snapshot_after = git_source_snapshot_digest(owner)
         status_value = "completed"
         failure_reason: str | None = native_failure_reason
+        native_output_format: str | None = None
         if native_failure_reason is not None:
             status_value = "failed"
         elif execution["timed_out"]:
-            status_value = "timeout"
+            status_value = "budget-exceeded"
+            failure_reason = (
+                f"native lane exceeded duration budget={budget.timeout_seconds}s"
+            )
         elif execution["exit_code"] != 0:
-            status_value = "failed"
+            status_value = (
+                "budget-exceeded"
+                if execution.get("budget_exceeded") or execution.get("overflow")
+                else "failed"
+            )
         elif not output_exists or output_bytes == 0:
             status_value = "missing-output"
         elif output_overflow:
             status_value = "output-cap"
-        elif (
+        elif pack.get("native_output_contract") == NATIVE_OUTPUT_CONTRACT:
+            try:
+                native_payload = read_json(output_path)
+            except (OSError, json.JSONDecodeError, IntegrityError) as exc:
+                if routine_review:
+                    try:
+                        native_payload = _routine_plaintext_decision(
+                            output_path.read_text(encoding="utf-8"),
+                            pack=pack,
+                        )
+                        atomic_write_json(
+                            normalized_output_path,
+                            native_payload,
+                            backup=False,
+                        )
+                        native_output_format = "codex-review-plaintext"
+                    except (OSError, UnicodeError, IntegrityError) as parse_exc:
+                        status_value = "invalid-output"
+                        failure_reason = (
+                            "native structured output is invalid and plaintext "
+                            f"fallback is unsafe: {parse_exc}"
+                        )
+                else:
+                    status_value = "invalid-output"
+                    failure_reason = f"native structured output is invalid JSON: {exc}"
+            else:
+                if routine_review and (
+                    not isinstance(native_payload, dict)
+                    or native_payload.get("verdict")
+                    not in {"review-clear", "not-clear", "blocked"}
+                    or not isinstance(native_payload.get("summary"), str)
+                    or not isinstance(native_payload.get("findings"), list)
+                    or not isinstance(
+                        native_payload.get("prior_finding_verdicts"), list
+                    )
+                ):
+                    status_value = "invalid-output"
+                    failure_reason = (
+                        "routine native output requires a complete review decision"
+                    )
+                elif not routine_review and (
+                    not isinstance(native_payload, dict)
+                    or not isinstance(native_payload.get("summary"), str)
+                    or not isinstance(native_payload.get("findings"), list)
+                ):
+                    status_value = "invalid-output"
+                    failure_reason = "native structured output requires summary and findings"
+                elif routine_review:
+                    atomic_write_json(
+                        normalized_output_path,
+                        native_payload,
+                        backup=False,
+                    )
+                    native_output_format = "structured-json"
+        if status_value == "completed" and (
             snapshot_after != snapshot_before
             or workspace_snapshot_after != workspace_snapshot_before
         ):
             status_value = "source-changed"
+        usage = _codex_usage_from_output(execution["output"])
+        budget_failure = token_budget_failure(
+            usage,
+            aggregate_before=0,
+            budget=budget,
+        )
+        if status_value == "completed" and budget_failure is not None:
+            status_value = "budget-exceeded"
+            failure_reason = f"native {budget_failure}"
         final_updates = {
             "status": status_value,
             "output_path": relative_output_path if output_exists else None,
             "output_digest": output_digest,
             "output_bytes": output_bytes,
+            "normalized_output_path": (
+                normalized_output_relative
+                if status_value == "completed" and normalized_output_path.is_file()
+                else None
+            ),
+            "normalized_output_digest": (
+                sha256_file(normalized_output_path)
+                if status_value == "completed" and normalized_output_path.is_file()
+                else None
+            ),
+            "native_output_format": native_output_format,
             "exit_code": execution["exit_code"],
             "timed_out": execution["timed_out"],
             "overflow": output_overflow,
@@ -3859,7 +4574,15 @@ def review_start(
             "transcript_output_bytes": execution["output_bytes"],
             "transcript_retained_bytes": len(execution["output"]),
             "transcript_truncated": execution["overflow"],
-            "usage": _codex_usage_from_output(execution["output"]),
+            "usage": usage,
+            "command_events": execution.get("command_events", 0),
+            "budget": {
+                "aggregate_tokens": budget.aggregate_tokens,
+                "lane_tokens": budget.lane_tokens,
+                "command_events": budget.command_events,
+                "timeout_seconds": budget.timeout_seconds,
+                "transcript_bytes": budget.transcript_bytes,
+            },
             "duration_seconds": execution["duration_seconds"],
             "source_snapshot_digest": snapshot_after,
             "failure_reason": failure_reason,
@@ -3876,6 +4599,7 @@ def review_start(
         except Exception:
             output_path.unlink(missing_ok=True)
             transcript_path.unlink(missing_ok=True)
+            normalized_output_path.unlink(missing_ok=True)
             raise
         state = updated
         if status_value in RETRYABLE_REVIEW_LANE_STATUSES:
@@ -3885,6 +4609,7 @@ def review_start(
                 pack_path=str(safe_resolve(owner, relative_pack_path, must_exist=True)),
                 operation_id=effective_operation_id,
                 dry_run=False,
+                stream_callback=stream_callback,
             )
             retried["pack_created"] = pack_created or retried.get(
                 "pack_created",
@@ -3893,6 +4618,27 @@ def review_start(
             retried["changed"] = changed or retried.get("changed", False)
             return retried
         if status_value != "completed":
+            if status_value == "budget-exceeded":
+                return {
+                    "ok": True,
+                    "dry_run": False,
+                    "changed": changed,
+                    "status": "failed",
+                    "change_id": change_id,
+                    "state_revision": state["state_revision"],
+                    "operation_id": effective_operation_id,
+                    "owner_root": str(owner),
+                    "owner_selection": owner_selection,
+                    "review_id": pack["review_id"],
+                    "review_pack_path": relative_pack_path,
+                    "pack_created": pack_created,
+                    "review_result_path": None,
+                    "native": native_entry,
+                    "next_action": {
+                        "id": "inspect-review-budget",
+                        "detail": failure_reason or "native lane exceeded its budget",
+                    },
+                }
             raise IntegrityError(
                 f"Native review did not complete: status={status_value}; "
                 f"transcript={relative_transcript_path}"
@@ -3911,6 +4657,7 @@ def review_start(
         native_reused=native_was_reused,
         native_entry=native_entry,
         changed=changed,
+        prepared_context=prepared_context,
     )
 
 
@@ -3938,6 +4685,7 @@ def _state_lane_attempt(
         )
     if attempt.get("runner_contract") not in {
         None,
+        LEGACY_REVIEW_RUNNER_CONTRACT,
         REVIEW_RUNNER_CONTRACT,
     }:
         raise IntegrityError("Review lane runner contract mismatch")
@@ -4073,32 +4821,38 @@ def _validate_state_owned_review_provenance(
         ):
             raise IntegrityError("Semantic pass provenance is not state-owned")
     reconciliation = lanes.get("reconciliation")
-    if not isinstance(reconciliation, dict):
+    if not isinstance(reconciliation, dict) and pack.get("runner_contract") == LEGACY_REVIEW_RUNNER_CONTRACT:
         raise IntegrityError("ReviewIR is missing reconciliation provenance")
-    reconciliation_attempt = _state_lane_attempt(
-        state,
-        review_id=review_id,
-        attempt_id=reconciliation.get("attempt_id"),
-    )
-    _assert_lane_matches_state(
-        reconciliation,
-        reconciliation_attempt,
-        fields=(
-            "operation_id",
-            "model",
-            "reasoning_effort",
-            "prompt_path",
-            "prompt_digest",
-            "schema_path",
-            "schema_digest",
-            "output_path",
-            "output_digest",
-            "transcript_path",
-            "transcript_digest",
-            "source_snapshot_digest",
-        ),
-    )
-    expected_lenses = [item["id"] for item in pack.get("risk_lenses", [])]
+    if isinstance(reconciliation, dict):
+        reconciliation_attempt = _state_lane_attempt(
+            state,
+            review_id=review_id,
+            attempt_id=reconciliation.get("attempt_id"),
+        )
+        _assert_lane_matches_state(
+            reconciliation,
+            reconciliation_attempt,
+            fields=(
+                "operation_id",
+                "model",
+                "reasoning_effort",
+                "prompt_path",
+                "prompt_digest",
+                "schema_path",
+                "schema_digest",
+                "output_path",
+                "output_digest",
+                "transcript_path",
+                "transcript_digest",
+                "source_snapshot_digest",
+            ),
+        )
+    expected_lenses = [
+        item["id"]
+        for item in pack.get("risk_lenses", [])
+        if pack.get("runner_contract") == LEGACY_REVIEW_RUNNER_CONTRACT
+        or pack.get("review_mode") == "full"
+    ]
     specialists = lanes.get("specialists", [])
     if [item.get("lens_id") for item in specialists] != expected_lenses:
         raise IntegrityError("State-owned specialist lanes do not match ReviewPack")
@@ -4120,6 +4874,8 @@ def _validate_state_owned_review_provenance(
         reconciliation,
         *specialists,
     ):
+        if not isinstance(lane, dict):
+            continue
         for path_key, digest_key in (
             ("transcript_path", "transcript_digest"),
             ("output_path", "output_digest"),
@@ -4188,7 +4944,10 @@ def review_import(
         raise IntegrityError("Review report definition digest mismatch")
     runner_contract = pack.get("runner_contract")
     if runner_contract is not None:
-        if runner_contract != REVIEW_RUNNER_CONTRACT:
+        if runner_contract not in {
+            LEGACY_REVIEW_RUNNER_CONTRACT,
+            REVIEW_RUNNER_CONTRACT,
+        }:
             raise IntegrityError(
                 f"Unsupported ReviewPack runner contract: {runner_contract}"
             )
@@ -4222,7 +4981,10 @@ def review_import(
                 raise IntegrityError(
                     f"ReviewIR native provenance mismatch: {report_key}"
                 )
-        if runner_contract == REVIEW_RUNNER_CONTRACT:
+        if runner_contract in {
+            LEGACY_REVIEW_RUNNER_CONTRACT,
+            REVIEW_RUNNER_CONTRACT,
+        }:
             for field in (
                 "operation_id",
                 "prompt_path",
@@ -4272,7 +5034,10 @@ def review_import(
     semantic_lane = report["lanes"]["semantic"]
     if semantic_lane["reasoning_effort"] != _semantic_review_effort(state):
         raise IntegrityError("ReviewIR semantic reasoning effort does not match change risk")
-    if runner_contract == REVIEW_RUNNER_CONTRACT:
+    if runner_contract in {
+        LEGACY_REVIEW_RUNNER_CONTRACT,
+        REVIEW_RUNNER_CONTRACT,
+    }:
         _validate_state_owned_review_provenance(
             root,
             state=state,
@@ -4299,7 +5064,27 @@ def review_import(
         != _context_manifest_content_digest(context_manifest)
     ):
         raise IntegrityError("ReviewIR semantic context provenance mismatch")
-    if not any(
+    if context_manifest.get("contract") == REVIEW_CONTEXT_CONTRACT:
+        projection_entry = next(
+            (
+                item
+                for item in context_manifest.get("inputs", [])
+                if isinstance(item, dict)
+                and item.get("reason") == "active-review-pack"
+            ),
+            None,
+        )
+        if not projection_entry:
+            raise IntegrityError("Semantic review context has no compact pack projection")
+        projection_path = safe_resolve(
+            root, projection_entry["path"], must_exist=True
+        )
+        if (
+            sha256_file(projection_path) != projection_entry.get("sha256")
+            or read_json(projection_path).get("pack_digest") != pack["pack_digest"]
+        ):
+            raise IntegrityError("Compact ReviewPack projection digest mismatch")
+    elif not any(
         item.get("path") == pack_path
         and item.get("sha256")
         == sha256_file(safe_resolve(root, pack_path, must_exist=True))
@@ -4970,6 +5755,13 @@ def _validate_review_report(
     identifier_contract = pack.get("identifier_contract")
     if identifier_contract is not None and report.get("identifier_contract") != identifier_contract:
         raise IntegrityError("ReviewIR identifier contract does not match ReviewPack")
+    for field in (
+        "context_contract",
+        "economy_contract",
+        "native_output_contract",
+    ):
+        if pack.get(field) is not None and report.get(field) != pack.get(field):
+            raise IntegrityError(f"ReviewIR {field} does not match ReviewPack")
     pack_repair_contract = pack.get("decision_repair_contract")
     report_repair_contract = report.get("decision_repair_contract")
     if pack_repair_contract is not None and pack_repair_contract != REVIEW_DECISION_REPAIR_CONTRACT:
@@ -5003,8 +5795,13 @@ def _validate_review_report(
         )
     if semantic_lane["status"] != "completed":
         raise IntegrityError("ReviewIR semantic lane must be completed")
-    if semantic_lane["model"] != "gpt-5.6-sol":
-        raise IntegrityError("ReviewIR semantic lane must use gpt-5.6-sol")
+    expected_semantic_model = (
+        "gpt-5.6-terra" if pack.get("control_level") == "routine" else "gpt-5.6-sol"
+    )
+    if semantic_lane["model"] != expected_semantic_model:
+        raise IntegrityError(
+            f"ReviewIR semantic lane must use {expected_semantic_model}"
+        )
     if semantic_lane["reasoning_effort"] not in {"high", "xhigh"}:
         raise IntegrityError("ReviewIR semantic reasoning effort must be high or xhigh")
     repairs = semantic_lane.get("repairs", [])
@@ -5068,10 +5865,16 @@ def _validate_review_report(
         if pack["review_mode"] == "remediation":
             if not pass_kinds or pass_kinds[0] != "targeted":
                 raise IntegrityError("Remediation review must start with targeted semantic pass")
-            if report["verdict"] == "review-clear" and pass_kinds != [
-                "targeted",
-                "final-full",
-            ]:
+            routine_clear = (
+                pack.get("control_level") == "routine"
+                and pack.get("runner_contract") == REVIEW_RUNNER_CONTRACT
+                and pass_kinds == ["targeted"]
+            )
+            if (
+                report["verdict"] == "review-clear"
+                and not routine_clear
+                and pass_kinds != ["targeted", "final-full"]
+            ):
                 raise IntegrityError(
                     "Remediation review-clear requires targeted then final-full semantic passes"
                 )
@@ -5083,7 +5886,12 @@ def _validate_review_report(
         specialists = lanes.get("specialists", [])
         if not isinstance(specialists, list):
             raise IntegrityError("ReviewIR specialist lanes must be an array")
-        expected_lenses = [item["id"] for item in pack["risk_lenses"]]
+        expected_lenses = [
+            item["id"]
+            for item in pack["risk_lenses"]
+            if pack.get("runner_contract") == LEGACY_REVIEW_RUNNER_CONTRACT
+            or pack.get("review_mode") == "full"
+        ]
         actual_lenses: list[str] = []
         for specialist in specialists:
             if not isinstance(specialist, dict):
@@ -5566,6 +6374,8 @@ def _run_bounded_command(
     timeout_seconds: int,
     max_output_bytes: int,
     terminate_on_overflow: bool = True,
+    max_command_events: int | None = None,
+    heartbeat_callback: Any | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     try:
@@ -5599,6 +6409,35 @@ def _run_bounded_command(
     output_hasher = hashlib.sha256()
     timed_out = False
     overflow = False
+    budget_exceeded = False
+    command_events = 0
+    line_buffer = bytearray()
+    last_heartbeat = started
+
+    def inspect_line(raw_line: bytes) -> None:
+        nonlocal command_events, budget_exceeded
+        line = raw_line.strip()
+        if not line.startswith(b"{"):
+            return
+        try:
+            event = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(event, dict):
+            return
+        item = event.get("item")
+        item_type = item.get("type") if isinstance(item, dict) else None
+        event_type = event.get("type")
+        if item_type in {"command_execution", "mcp_tool_call", "tool_call"} or event_type in {
+            "command.started",
+            "command.completed",
+            "tool.started",
+            "tool.completed",
+        }:
+            command_events += 1
+            if max_command_events is not None and command_events > max_command_events:
+                budget_exceeded = True
+                stop_process()
 
     def stop_process() -> None:
         if process.poll() is not None:
@@ -5611,6 +6450,12 @@ def _run_bounded_command(
     try:
         while selector.get_map():
             elapsed = time.monotonic() - started
+            if (
+                heartbeat_callback is not None
+                and time.monotonic() - last_heartbeat >= 60.0
+            ):
+                heartbeat_callback(elapsed, total, command_events)
+                last_heartbeat = time.monotonic()
             if elapsed >= timeout_seconds and not timed_out:
                 timed_out = True
                 stop_process()
@@ -5627,6 +6472,11 @@ def _run_bounded_command(
                     continue
                 total += len(chunk)
                 output_hasher.update(chunk)
+                line_buffer.extend(chunk)
+                while b"\n" in line_buffer:
+                    raw_line, _, remainder = line_buffer.partition(b"\n")
+                    line_buffer[:] = remainder
+                    inspect_line(raw_line)
                 remaining = max_output_bytes - len(retained)
                 if remaining > 0:
                     retained.extend(chunk[:remaining])
@@ -5644,6 +6494,8 @@ def _run_bounded_command(
         exit_code = 124
     elif overflow and terminate_on_overflow:
         exit_code = 125
+    elif budget_exceeded:
+        exit_code = 126
     return {
         "exit_code": exit_code,
         "timed_out": timed_out,
@@ -5653,4 +6505,6 @@ def _run_bounded_command(
         "output_bytes": total,
         "output_sha256": output_hasher.hexdigest(),
         "duration_seconds": time.monotonic() - started,
+        "command_events": command_events,
+        "budget_exceeded": budget_exceeded,
     }

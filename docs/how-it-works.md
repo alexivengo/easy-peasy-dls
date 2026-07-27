@@ -86,12 +86,22 @@ ReviewPack фиксирует:
 - режим полного или remediation-review;
 - непрерывную цепочку предыдущих review.
 
-Первый acceptance-grade review объединяет native diff-review и независимый
+Routine review — один изолированный Terra/high pass в implementation-задаче,
+без Sol, specialists и отдельной review-задачи. Первый standard/critical
+acceptance-grade review объединяет structured native diff-review и независимый
 semantic review. Для critical-изменений DLS может выбрать до трёх specialist
 lenses по фактическим risk tags. Эти проходы запускает DLS, а не текущая задача
 и не обязательные subagents.
 
-Повторный review сначала проверяет delta и каждый предыдущий finding. Дорогой финальный whole-change pass запускается только если delta больше не содержит blocker. Каноническим становится один импортированный ReviewIR, а не любой сырой отчёт модели.
+DLS запрашивает structured output и одновременно понимает bounded встроенное
+представление `codex exec review`: raw response остаётся неизменным в cache, а
+обычный ReviewIR строится из отдельной проверяемой проекции. Второй модельный
+вызов для форматирования routine-result не нужен.
+
+Повторный review сначала проверяет delta и каждый предыдущий finding. Если
+подтверждён хотя бы один `blocker` или `should-fix`, compact reconciliation
+сразу импортирует `not-clear`: final-full не запускается. Только clean delta
+получает один whole-change pass без предварительной reconciliation.
 
 Короткая review-команда вызывает один end-to-end runner. До каждого model-run он
 атомарно записывает `running`, поэтому повторный запуск не создаёт вторую
@@ -130,6 +140,7 @@ Runner выбирает только pack текущего HEAD. Для повт
 ## Где экономится контекст
 
 - mechanics вынесены в Python CLI и JSON schemas;
+- model-facing review context использует компактную проекцию pack и evidence metadata;
 - повторный review получает только последний актуальный ReviewIR и remediation manifest;
 - evidence дедуплицируется по command ID;
 - successful validation output заменяется компактным результатом и digest;

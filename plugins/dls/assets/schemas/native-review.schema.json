@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dls://schemas/native-review/v2",
+  "title": "DLS native review decision",
+  "type": "object",
+  "required": ["summary", "findings"],
+  "properties": {
+    "summary": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "severity", "location", "issue", "impact", "required_fix"
+        ],
+        "properties": {
+          "severity": { "enum": ["blocker", "should-fix", "note"] },
+          "location": { "type": "string" },
+          "issue": { "type": "string" },
+          "impact": { "type": "string" },
+          "required_fix": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

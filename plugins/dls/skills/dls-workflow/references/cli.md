@@ -29,6 +29,10 @@ dls review-ready
 dls review-start
 dls review-run
 dls review-status
+dls review-metrics
+dls delivery-status
+dls cache-status
+dls cache-prune
 dls review-import
 dls finding set
 dls validate
@@ -54,7 +58,9 @@ Rules:
 - `dls candidate-ready CHANGE_ID [--base BASE] [--address ID] [--note ID] [--extra-command ID]` is the implementation-side orchestration command. It requires explicit `policy.review_required_commands`, reuses only exact-contract evidence, runs trusted commands sequentially, records dispositions, and atomically creates the ReviewPack. The first review requires `--base`; remediation infers it. The first remediation attempt declares every actionable finding. A later descendant candidate inherits that declaration only when ReviewIR, manifest, definition, policy, finding set, and Git ancestry still match; supplied finding flags then act as explicit overrides. The skill invokes it after the candidate commit; the user does not.
 - `dls candidate-status CHANGE_ID [--diagnostic]` is read-only telemetry and never runs a command. Default output remains compact and log-free. `--diagnostic` adds only the last bounded redacted validation failure when the original command payload was lost.
 - `dls review-ready CHANGE_ID [--base BASE]` is the candidate gateway. The first review requires `--base`; remediation infers it from the latest ReviewIR. It either creates a full/remediation ReviewPack v2 and returns `open-review-task`, or returns one typed `next_action`. Repeat review must not call raw `review-pack`.
-- `dls review-run CHANGE_ID` is the public review orchestration command. It selects or prepares the exact-HEAD pack, runs every mandatory lane with single-flight protection, creates ReviewIR, and imports it. A completed `not-clear` verdict exits successfully; nonzero exit is reserved for infrastructure or integrity failure.
+- `dls review-run CHANGE_ID --stream` is the public standard/critical review orchestration command. It selects the exact-HEAD pack, runs the risk-adaptive bounded pipeline with single-flight protection, creates ReviewIR, and imports it. The stream replaces status polling. A completed `not-clear` verdict exits successfully.
+- `dls review-metrics CHANGE_ID [--refresh] [--verbose]` reads sanitized child and controller usage. Active controller totals are lower bounds; unavailable native usage is never reported as zero.
+- `dls delivery-status CHANGE_ID` returns one compact typed next action. `cache-status` is read-only; `cache-prune` previews retention unless `--apply` is explicit.
 - `dls review-status CHANGE_ID [--review-id ID]` is read-only and compact by
   default. It never launches a model. `--verbose` adds full argv, paths, and
   provenance only for diagnostics.

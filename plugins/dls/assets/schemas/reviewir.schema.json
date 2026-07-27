@@ -21,7 +21,10 @@
   ],
   "properties": {
     "schema_version": { "const": 2 },
-    "runner_contract": { "const": "dls-review-runner/v1" },
+    "runner_contract": { "enum": ["dls-review-runner/v1", "dls-review-runner/v2"] },
+    "context_contract": { "const": "dls-review-context/v2" },
+    "economy_contract": { "const": "dls-review-economy/v1" },
+    "native_output_contract": { "const": "dls-native-review/v2" },
     "identifier_contract": { "const": "canonical-ticket-ids/v1" },
     "decision_repair_contract": { "const": "dls-decision-repair/v1" },
     "review_id": { "type": "string", "minLength": 1 },
@@ -86,7 +89,7 @@
           ],
           "properties": {
             "status": { "const": "completed" },
-            "model": { "const": "gpt-5.6-sol" },
+            "model": { "enum": ["gpt-5.6-sol", "gpt-5.6-terra"] },
             "reasoning_effort": { "enum": ["high", "xhigh"] },
             "context_manifest_path": { "type": "string", "minLength": 1 },
             "context_manifest_digest": { "type": "string", "minLength": 1 },

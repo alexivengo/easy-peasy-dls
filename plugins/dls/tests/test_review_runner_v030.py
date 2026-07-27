@@ -17,6 +17,7 @@ from dls_core.operations import (
     REVIEW_RUNNER_CONTRACT,
     _codex_usage_from_output,
     _review_pack_digest,
+    _routine_plaintext_decision,
     _validate_state_owned_review_provenance,
     _validate_review_pack,
     _validate_review_report,
@@ -199,6 +200,136 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertEqual(
                 pack["review_pack"]["decision_repair_contract"],
                 REVIEW_DECISION_REPAIR_CONTRACT,
+            )
+
+    def test_routine_review_uses_one_terra_lane_without_sol_or_reconciliation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base_sha = initialize_git(root)
+            initialize(root)
+            create_change(root, control="routine")
+            approve(
+                root,
+                change_id="C001",
+                decision="definition",
+                expected_revision=1,
+                actor="user",
+                prompt=None,
+                response=None,
+                git_sha=None,
+                conditions=None,
+                operation_id="routine-definition",
+            )
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "routine candidate")
+            head_sha = git(root, "rev-parse", "HEAD")
+            evidence_add(
+                root,
+                change_id="C001",
+                command_id="test",
+                exit_code=0,
+                summary="PASS",
+                expected_revision=2,
+                git_sha=head_sha,
+                artifacts=[],
+                environment="fixture",
+                duration_seconds=0.1,
+                operation_id="routine-evidence",
+            )
+            review_pack(
+                root,
+                change_id="C001",
+                base_ref=base_sha,
+                head_ref=None,
+                expected_revision=3,
+                advisory_dirty=False,
+                operation_id="routine-pack",
+            )
+            original, counter, _ = self._install_fake_codex(root)
+            events = []
+            try:
+                result = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="routine-review",
+                    stream_callback=events.append,
+                )
+            finally:
+                self._restore_path(original)
+            self.assertEqual(counter.read_text().splitlines(), ["native"])
+            report = json.loads((root / result["review_result_path"]).read_text())
+            self.assertEqual(report["lanes"]["semantic"]["model"], "gpt-5.6-terra")
+            self.assertEqual(
+                report["lanes"]["semantic"]["attempt_id"],
+                report["lanes"]["native"]["attempt_id"],
+            )
+            native_attempt = next(
+                item
+                for item in StateStore(root).load("C001")["reviews"]
+                if item.get("review_id") == result["review_id"]
+                and item.get("lane_key") == "native"
+            )
+            argv = native_attempt["argv"]
+            review_index = argv.index("review")
+            self.assertEqual(len(argv[review_index:]), 2)
+            self.assertNotIn("--base", argv[review_index:])
+            self.assertIn("DLS routine review", argv[review_index + 1])
+            self.assertIn(base_sha, argv[review_index + 1])
+            self.assertNotIn("reconciliation", report["lanes"])
+            self.assertEqual(events[0]["event"], "started")
+            self.assertEqual(events[-1]["event"], "completed")
+            self.assertEqual(
+                [item["lane"] for item in events if item["event"] == "lane-transition"],
+                ["native"],
+            )
+
+    def test_routine_plaintext_fallback_is_bounded_and_auditable(self) -> None:
+        pack = {
+            "change_id": "C001",
+            "review_id": "routine-review",
+            "required_prior_findings": [
+                {"finding_id": "C001-R001", "issue": "prior issue"}
+            ],
+        }
+        clear = _routine_plaintext_decision(
+            "review-clear: focused behavior and tests are correct.",
+            pack=pack,
+        )
+        self.assertEqual(clear["verdict"], "review-clear")
+        self.assertEqual(
+            clear["prior_finding_verdicts"][0]["verdict"], "verified"
+        )
+        native_clear = _routine_plaintext_decision(
+            "The bounded behavior is implemented as specified and the tests pass.",
+            pack=pack,
+        )
+        self.assertEqual(native_clear["verdict"], "review-clear")
+
+        not_clear = _routine_plaintext_decision(
+            "The patch still has one issue.\n\n"
+            "- [P1] [PRIOR:C001-R001] Preserve empty names — "
+            "/tmp/dls/checkout/greeting.py:3-3\n"
+            "  Empty names collapse to punctuation; add an explicit guard.",
+            pack=pack,
+        )
+        self.assertEqual(not_clear["verdict"], "not-clear")
+        self.assertEqual(not_clear["findings"][0]["severity"], "blocker")
+        self.assertEqual(not_clear["findings"][0]["location"], "greeting.py:3-3")
+        self.assertEqual(
+            not_clear["prior_finding_verdicts"][0]["replacement_finding_id"],
+            not_clear["findings"][0]["id"],
+        )
+        with self.assertRaisesRegex(IntegrityError, "unknown prior finding"):
+            _routine_plaintext_decision(
+                "- [P2] [PRIOR:C001-R999] Unknown — greeting.py:3\n"
+                "  This must be rejected.",
+                pack=pack,
+            )
+        with self.assertRaisesRegex(IntegrityError, "incomplete review"):
+            _routine_plaintext_decision(
+                "Unable to review because the diff is unavailable.",
+                pack=pack,
             )
 
     def test_prior_finding_links_are_checked_before_the_next_lane(self) -> None:
@@ -576,8 +707,13 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             "        with counter.open('a') as handle: handle.write(kind + '\\n')\n"
             f"        raise SystemExit({native_exit!r})\n"
             "    output.parent.mkdir(parents=True, exist_ok=True)\n"
-            "    output.write_text(json.dumps({'summary': 'No findings.', "
-            "'findings': []}))\n"
+            "    schema = args[args.index('--output-schema') + 1] "
+            "if '--output-schema' in args else ''\n"
+            "    payload = ({'verdict': 'review-clear', 'summary': 'clear', "
+            "'findings': [], 'prior_finding_verdicts': []} "
+            "if schema.endswith('review-decision.schema.json') else "
+            "{'summary': 'No findings.', 'findings': []})\n"
+            "    output.write_text(json.dumps(payload))\n"
             "else:\n"
             "    prompt = Path('.dls-review-input/prompt.md').read_text()\n"
             "    if prompt.startswith('# DLS decision-reference repair'):\n"
@@ -651,6 +787,8 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             "                kind = 'reconciliation'\n"
             "                if not Path('.dls-review-input/native.txt').exists():\n"
             "                    raise SystemExit(69)\n"
+            "                if Path('README.md').exists():\n"
+            "                    raise SystemExit(70)\n"
             "            elif prompt.startswith('# DLS remediation final-full review'):\n"
             "                kind = 'final-full'\n"
             "            payload = {'verdict': 'review-clear', 'summary': 'clear', "
@@ -666,6 +804,15 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             "'required_fix': 'use a canonical ticket ID', "
             "'ticket_ids': ['T-99'], 'requirement_ids': [], "
             "'blocks': ['review'], 'provenance': ['fixture']}]\n"
+            f"            if {reconciliation_blocker!r} and kind == 'semantic-independent':\n"
+            "                payload['verdict'] = 'not-clear'\n"
+            "                payload['findings'] = [{'id': 'RPRE', "
+            "'severity': 'should-fix', 'kind': 'defect', "
+            "'location': 'README.md', 'issue': 'Potential defect.', "
+            "'impact': 'Requires reconciliation.', "
+            "'required_fix': 'Adjudicate the defect.', 'ticket_ids': [], "
+            "'requirement_ids': [], 'blocks': ['review'], "
+            "'provenance': ['semantic']}]\n"
             f"            if {reconciliation_blocker!r} and kind == 'reconciliation':\n"
             "                payload['verdict'] = 'not-clear'\n"
             "                payload['summary'] = 'blocker remains'\n"
@@ -702,6 +849,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 root,
                 native_sleep=0.5,
             )
+            events: list[dict] = []
             try:
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     first = executor.submit(
@@ -710,6 +858,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                         change_id="C001",
                         pack_path=None,
                         operation_id="review-root",
+                        stream_callback=events.append,
                     )
                     deadline = time.monotonic() + 5
                     while not marker.exists() and time.monotonic() < deadline:
@@ -745,7 +894,17 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertEqual(calls.count("native"), 1)
             self.assertEqual(
                 calls,
-                ["native", "semantic-independent", "reconciliation"],
+                ["native", "semantic-independent"],
+            )
+            self.assertEqual(events[0]["event"], "started")
+            self.assertEqual(events[-1]["event"], "completed")
+            self.assertEqual(
+                [
+                    item["lane"]
+                    for item in events
+                    if item["event"] == "lane-transition"
+                ],
+                ["native", "semantic:full"],
             )
             result = json.loads(
                 (root / completed["review_result_path"]).read_text(encoding="utf-8")
@@ -757,7 +916,17 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             )
             self.assertEqual(result["identifier_normalizations"], [])
             self.assertEqual(result["review_id"], pack["review_id"])
-            self.assertIn("reconciliation", result["lanes"])
+            self.assertNotIn("reconciliation", result["lanes"])
+            context = json.loads(
+                (root / result["lanes"]["semantic"]["context_manifest_path"]).read_text()
+            )
+            self.assertEqual(context["contract"], "dls-review-context/v2")
+            active = next(
+                item for item in context["inputs"] if item.get("reason") == "active-review-pack"
+            )
+            self.assertNotEqual(active["path"], pack["review_pack_path"])
+            projection = json.loads((root / active["path"]).read_text())
+            self.assertNotIn("artifacts", projection)
             status = review_status(root, change_id="C001")
             self.assertEqual(status["status"], "completed")
             self.assertEqual(
@@ -1206,7 +1375,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertEqual(completed["status"], "completed")
             self.assertEqual(
                 counter.read_text(encoding="utf-8").splitlines(),
-                ["semantic-independent", "reconciliation"],
+                ["semantic-independent"],
             )
             state = StateStore(root).load("C001")
             semantic = [
@@ -1352,7 +1521,6 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                     "specialist",
                     "specialist",
                     "semantic-independent",
-                    "reconciliation",
                 ],
             )
             result = json.loads(
@@ -1466,7 +1634,6 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 [
                     "native",
                     "semantic-independent",
-                    "reconciliation",
                     "final-full",
                 ],
             )
@@ -1613,7 +1780,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 original_loader = runner_module._completed_lane_payload
 
                 def reject_terminal_alias(owner, entry, **kwargs):
-                    if entry.get("lane_key") == "reconciliation":
+                    if entry.get("lane_key") == "semantic:full":
                         raise ReviewDecisionReferenceError(
                             "Finding R001 references unknown ticket: T-99"
                         )
@@ -1640,7 +1807,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 item
                 for item in StateStore(root).load("C001")["reviews"]
                 if item.get("lane_key")
-                == "reconciliation:repair"
+                == "semantic:full:repair"
             ]
             self.assertEqual(len(attempts), 1)
             self.assertEqual(attempts[0]["max_attempts"], 2)
@@ -1766,12 +1933,41 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 response=None,
                 operation_id="address-finding",
             )
-            review_ready(
+            remediation_pack = review_ready(
                 root,
                 change_id="C001",
                 base_ref=base_sha,
                 expected_revision=StateStore(root).load("C001")["state_revision"],
                 operation_id="remediation-ready",
+            )
+            pack_path = root / remediation_pack["review_pack_path"]
+            pack_payload = json.loads(pack_path.read_text(encoding="utf-8"))
+            pack_payload["risk_lenses"] = [
+                {
+                    "id": "concurrency-reliability",
+                    "impact_tags": ["concurrency"],
+                    "focus": "Synthetic critical remediation lens.",
+                }
+            ]
+            pack_payload["pack_digest"] = _review_pack_digest(pack_payload)
+            pack_path.write_text(json.dumps(pack_payload), encoding="utf-8")
+            state_before_pack_update = StateStore(root).load("C001")
+
+            def update_pack_digest(state: dict) -> None:
+                latest_pack = next(
+                    item
+                    for item in reversed(state["reviews"])
+                    if item.get("kind") == "pack"
+                    and item.get("review_id") == pack_payload["review_id"]
+                )
+                latest_pack["pack_digest"] = pack_payload["pack_digest"]
+
+            StateStore(root).mutate(
+                "C001",
+                expected_revision=state_before_pack_update["state_revision"],
+                operation_id="inject-remediation-risk-lens",
+                operation_kind="fixture",
+                mutator=update_pack_digest,
             )
             original, counter, _ = self._install_fake_codex(
                 root,
@@ -1805,6 +2001,12 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertNotIn(
                 "final-full",
                 counter.read_text(encoding="utf-8").splitlines(),
+            )
+            self.assertFalse(
+                any(
+                    item.startswith("specialist")
+                    for item in counter.read_text(encoding="utf-8").splitlines()
+                )
             )
 
     def test_import_rejects_self_declared_runner_provenance(self) -> None:
@@ -1930,8 +2132,8 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         self.assertNotIn("review-import CHANGE_ID", review)
         self.assertIn("presentation.comments[].directive", review)
         self.assertIn("::code-comment", combined)
-        self.assertIn("one compact unchanged heartbeat every 60–90 seconds", review)
-        self.assertIn("regardless of whether the primary command has emitted", review)
+        self.assertIn("at most one heartbeat per", review)
+        self.assertIn("Do not poll `review-status`", review)
         self.assertIn("failed-finalize", review)
         self.assertIn("same stable operation ID", review)
         self.assertIn("prepare-candidate", review)

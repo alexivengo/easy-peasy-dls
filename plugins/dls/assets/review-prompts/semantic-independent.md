@@ -1,8 +1,8 @@
 # DLS independent semantic review
 
 Review change `{{CHANGE_ID}}`, review ID `{{REVIEW_ID}}`, using the `{{PASS_KIND}}`
-pass. Read `.dls-review-input/context.json`, the bound ReviewPack, and every input
-named by the context. Inspect the exact Git range
+pass. Read `.dls-review-input/context.json`, its compact ReviewPack projection,
+and every input named by the context. Inspect the exact Git range
 `{{COMPARISON_BASE_SHA}}..{{HEAD_SHA}}`.
 
 Use ticket IDs exactly as listed here: `{{CANONICAL_TICKET_IDS}}`. Required

@@ -426,6 +426,45 @@ def _run_response(
     return result
 
 
+def _run_routine_review(
+    owner: Path,
+    *,
+    change_id: str,
+    run: dict[str, Any],
+    finding_counts: dict[str, int] | None = None,
+    declaration_source: str | None = None,
+) -> dict[str, Any]:
+    review_pack_path = run.get("review_pack_path")
+    run_id = run.get("run_id")
+    if not isinstance(review_pack_path, str) or not isinstance(run_id, str):
+        raise IntegrityError("Completed routine candidate is missing its ReviewPack")
+    from .review_runner import review_run
+
+    reviewed = review_run(
+        owner,
+        change_id=change_id,
+        pack_path=str(safe_resolve(owner, review_pack_path, must_exist=True)),
+        operation_id=f"candidate:{run_id}:routine-review",
+    )
+    reviewed["candidate_run_id"] = run_id
+    dispositions = run.get("finding_dispositions", {})
+    reviewed["candidate_ready"] = {
+        "review_pack_path": review_pack_path,
+        "finding_counts": finding_counts
+        if finding_counts is not None
+        else {
+            "addressed": sum(
+                value == "addressed" for value in dispositions.values()
+            ),
+            "note": sum(value == "note" for value in dispositions.values()),
+        },
+        "declaration_source": declaration_source
+        if declaration_source is not None
+        else run.get("declaration_source"),
+    }
+    return reviewed
+
+
 def _claim_with_retry(
     store: StateStore,
     change_id: str,
@@ -714,6 +753,15 @@ def _candidate_ready_impl(
                 },
             )
         if not claimed:
+            if (
+                state.get("control_level") == "routine"
+                and claimed_run.get("status") == "completed"
+            ):
+                return _run_routine_review(
+                    owner,
+                    change_id=change_id,
+                    run=claimed_run,
+                )
             return _run_response(
                 change_id=change_id,
                 owner=owner,
@@ -988,6 +1036,22 @@ def _candidate_ready_impl(
         "note": sum(value == "note" for value in statuses.values()),
     }
     result["declaration_source"] = declaration_source
+    try:
+        from .telemetry import cache_prune
+
+        cache_prune(owner, change_id=change_id, apply=True)
+    except Exception as exc:  # cleanup must never break delivery
+        result["cleanup_warning"] = str(exc)
+    if updated.get("control_level") == "routine":
+        # Routine delivery deliberately keeps one independent Terra review in
+        # this implementation task. Import lazily to avoid a module cycle.
+        return _run_routine_review(
+            owner,
+            change_id=change_id,
+            run=completed_run,
+            finding_counts=result["finding_counts"],
+            declaration_source=declaration_source,
+        )
     return result
 
 

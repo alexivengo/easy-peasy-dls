@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from dls_core.economy import ReviewBudget
 from dls_core.errors import IntegrityError, UsageError
 from dls_core.operations import (
     approve,
@@ -384,33 +385,34 @@ class ReviewPipelineTests(unittest.TestCase):
             original = self._install_fake_codex(timeout_root, "sleep 2\n")
             try:
                 with mock.patch(
-                    "dls_core.operations.NATIVE_REVIEW_TIMEOUT_SECONDS",
-                    1,
+                    "dls_core.operations.review_budget",
+                    return_value=ReviewBudget(
+                        aggregate_tokens=3_000_000,
+                        lane_tokens=1_500_000,
+                        command_events=24,
+                        timeout_seconds=1,
+                        transcript_bytes=768 * 1024,
+                    ),
                 ):
-                    with self.assertRaisesRegex(
-                        IntegrityError,
-                        "exhausted automatic attempts",
-                    ):
-                        review_start(
-                            timeout_root,
-                            change_id="C001",
-                            pack_path=None,
-                            operation_id="native-timeout",
-                        )
-                    with self.assertRaisesRegex(
-                        IntegrityError,
-                        "exhausted automatic attempts",
-                    ):
-                        review_start(
-                            timeout_root,
-                            change_id="C001",
-                            pack_path=None,
-                            operation_id="native-timeout",
-                        )
+                    timed_out = review_start(
+                        timeout_root,
+                        change_id="C001",
+                        pack_path=None,
+                        operation_id="native-timeout",
+                    )
+                    repeated = review_start(
+                        timeout_root,
+                        change_id="C001",
+                        pack_path=None,
+                        operation_id="native-timeout",
+                    )
             finally:
                 self._restore_path(original)
+            self.assertEqual(timed_out["next_action"]["id"], "inspect-review-budget")
+            self.assertEqual(repeated["next_action"]["id"], "inspect-review-budget")
             timeout_state = StateStore(timeout_root).load("C001")
-            self.assertEqual(timeout_state["reviews"][-1]["status"], "timeout")
+            self.assertEqual(timeout_state["reviews"][-1]["status"], "budget-exceeded")
+            self.assertTrue(timeout_state["reviews"][-1]["timed_out"])
             self.assertEqual(
                 len(
                     [
@@ -419,7 +421,7 @@ class ReviewPipelineTests(unittest.TestCase):
                         if item.get("lane_key") == "native"
                     ]
                 ),
-                2,
+                1,
             )
 
             transcript_root = sandbox / "transcript"
@@ -431,8 +433,14 @@ class ReviewPipelineTests(unittest.TestCase):
             )
             try:
                 with mock.patch(
-                    "dls_core.operations.NATIVE_REVIEW_TRANSCRIPT_MAX_BYTES",
-                    1024,
+                    "dls_core.operations.review_budget",
+                    return_value=ReviewBudget(
+                        aggregate_tokens=3_000_000,
+                        lane_tokens=1_500_000,
+                        command_events=24,
+                        timeout_seconds=900,
+                        transcript_bytes=1024,
+                    ),
                 ):
                     transcript_result = review_start(
                         transcript_root,
@@ -443,17 +451,18 @@ class ReviewPipelineTests(unittest.TestCase):
             finally:
                 self._restore_path(original)
             transcript_entry = transcript_result["native"]
-            self.assertEqual(transcript_entry["status"], "completed")
+            self.assertEqual(transcript_entry["status"], "budget-exceeded")
+            self.assertEqual(
+                transcript_result["next_action"]["id"],
+                "inspect-review-budget",
+            )
             self.assertTrue(transcript_entry["transcript_truncated"])
             self.assertEqual(transcript_entry["transcript_output_bytes"], 4097)
             self.assertEqual(
                 (transcript_root / transcript_entry["transcript_path"]).stat().st_size,
                 1024,
             )
-            self.assertEqual(
-                (transcript_root / transcript_entry["output_path"]).read_text(),
-                '{"summary":"No findings.","findings":[]}\n',
-            )
+            self.assertIsNotNone(transcript_entry["output_path"])
 
             final_cap_root = sandbox / "final-cap"
             final_cap_root.mkdir()

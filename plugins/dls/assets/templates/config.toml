@@ -21,3 +21,11 @@ max_agent_depth = 1
 # timeout_seconds = 300
 # max_output_bytes = 131072
 # env_allow = ["CI"]
+
+# Optional risk-budget overrides. Omitted values use plugin-owned defaults.
+# [review_budgets.standard]
+# aggregate_tokens = 3000000
+# lane_tokens = 1500000
+# command_events = 24
+# timeout_seconds = 900
+# transcript_bytes = 786432
