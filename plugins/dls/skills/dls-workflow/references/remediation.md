@@ -47,9 +47,13 @@ dls --root OWNER_ROOT --json candidate-ready CHANGE_ID \
   --note ADJUDICATION_FINDING_ID ...
 ```
 
-List every current actionable finding exactly once as `--address` or `--note`; omit human-waived findings. DLS infers the epic base, runs `policy.review_required_commands`, records exact-HEAD evidence, attaches all required evidence to each addressed finding, and atomically creates the next ReviewPack. Do not pass SHA, evidence paths, state revision, or operation ID.
+For the first candidate attempt after a review, list every current actionable finding exactly once as `--address` or `--note`; omit human-waived findings. DLS infers the epic base, runs `policy.review_required_commands`, records exact-HEAD evidence, attaches all required evidence to each addressed finding, and atomically creates the next ReviewPack. Do not pass SHA, evidence paths, state revision, or operation ID.
 
-Wait for this original process. Do not start another. If host execution is lost or unusually long, read only compact `candidate-status` and report at most one heartbeat per minute. On a typed blocking action, perform that action in this implementation task and retry automatically; ask the user only when the action is an explicit human boundary such as definition approval.
+Wait for this original process. Do not start another. If host execution is lost or unusually long, read only compact `candidate-status` and report at most one heartbeat per minute. When a lost payload contained a validation failure, call `candidate-status --diagnostic` once and use its bounded redacted excerpt before opening the raw log.
+
+If validation requires a source fix, fix it and create a new commit. Invoke `candidate-ready` again without the previously declared finding list and without the prior operation ID. DLS creates a new deterministic run for the new HEAD and inherits unchanged dispositions from the nearest eligible ancestor. Pass only intentional overrides such as `--note ID` or `--address ID`. If DLS returns `declare-finding-disposition`, inheritance was safely rejected; rebuild the full declaration from the canonical remediation manifest instead of guessing. Exact-HEAD retries keep the same run and may reuse only evidence bound to that exact HEAD.
+
+On another typed blocking action, perform that action in this implementation task and retry automatically; ask the user only when the action is an explicit human boundary such as definition approval. Do not narrate operation IDs or the inherited finding list to the user.
 
 Handoff only the short review request. The reviewer resolves the registered worktree, ignores stale unfinished packs, and may create the current remediation pack automatically.
 

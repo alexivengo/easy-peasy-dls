@@ -563,6 +563,22 @@ class StateStore:
         with FileLock(lock_path):
             state = self.load(change_id)
             runs = state.get("candidate_runs", [])
+            operation_id = candidate_run.get("operation_id")
+            operation_conflict = next(
+                (
+                    item
+                    for item in runs
+                    if isinstance(item, dict)
+                    and isinstance(operation_id, str)
+                    and item.get("operation_id") == operation_id
+                    and item.get("run_id") != run_id
+                ),
+                None,
+            )
+            if operation_conflict is not None:
+                raise IntegrityError(
+                    "Candidate operation ID already belongs to another candidate contract"
+                )
             running = next(
                 (
                     item

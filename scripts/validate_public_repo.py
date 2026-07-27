@@ -24,6 +24,7 @@ REQUIRED_FILES = (
     ROOT / "LICENSE",
     ROOT / "CONTRIBUTING.md",
     ROOT / "SECURITY.md",
+    ROOT / "docs" / "roadmap.md",
     MARKETPLACE,
     MANIFEST,
     PLUGIN / "skills" / "dls-workflow" / "SKILL.md",

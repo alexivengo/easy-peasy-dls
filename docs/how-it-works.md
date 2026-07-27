@@ -60,6 +60,14 @@ DLS сначала определяет масштаб и риск:
 paths. Полные validation logs остаются в локальном cache; модель получает только
 компактный итог или ограниченный фрагмент ошибки.
 
+Если validation нашёл проблему, Codex исправляет её и коммитит новый candidate.
+DLS не требует снова перечислять все findings: при неизменных ReviewIR,
+definition, policy и finding set он наследует declaration из ближайшего
+предыдущего candidate run, повторяет все обязательные проверки для нового HEAD
+и принимает только явные изменения `addressed`/`note`. Потерянную краткую
+ошибку можно безопасно восстановить через bounded diagnostic status без чтения
+полного лога.
+
 Если review-задача открыта раньше этого handoff или HEAD изменился после него,
 DLS возвращает `prepare-candidate` и не запускает модели. Проверки и подготовка
 пакета остаются в implementation-задаче; review-задача не пытается чинить
@@ -126,6 +134,7 @@ Runner выбирает только pack текущего HEAD. Для повт
 - evidence дедуплицируется по command ID;
 - successful validation output заменяется компактным результатом и digest;
 - implementation handoff использует один deterministic `candidate-ready` вместо цикла CLI-команд;
+- повторный candidate после validation failure не повторяет неизменившийся список findings;
 - generated status не переписывает authored definition;
 - routine work не получает пакет документов для critical work;
 - новые сессии используют manifest вместо копирования старого диалога.

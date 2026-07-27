@@ -265,8 +265,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--base",
         help="Required for the first review; inferred from canonical ReviewIR for remediation.",
     )
-    candidate_ready_parser.add_argument("--address", action="append", default=[])
-    candidate_ready_parser.add_argument("--note", action="append", default=[])
+    candidate_ready_parser.add_argument(
+        "--address",
+        action="append",
+        default=[],
+        help="Declare or override a finding as addressed.",
+    )
+    candidate_ready_parser.add_argument(
+        "--note",
+        action="append",
+        default=[],
+        help="Declare or override a finding for independent adjudication.",
+    )
     candidate_ready_parser.add_argument("--extra-command", action="append", default=[])
     _operation_id(candidate_ready_parser)
     _dry_run(candidate_ready_parser)
@@ -277,6 +287,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     candidate_status_parser.add_argument("change_id")
     _operation_id(candidate_status_parser)
+    candidate_status_parser.add_argument(
+        "--diagnostic",
+        action="store_true",
+        help="Include the last bounded redacted validation failure.",
+    )
 
     review_ready_parser = subparsers.add_parser(
         "review-ready",
@@ -587,6 +602,7 @@ def dispatch(root: Path, args: argparse.Namespace) -> dict[str, Any]:
             root,
             change_id=args.change_id,
             operation_id=args.operation_id,
+            diagnostic=args.diagnostic,
         )
     if command == "review-ready":
         return review_ready(

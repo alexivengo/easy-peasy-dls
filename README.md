@@ -156,6 +156,7 @@ review всегда запускается в отдельной задаче.
 - [Как устроен рабочий процесс](docs/how-it-works.md)
 - [Чем DLS отличается от других подходов](docs/comparison.md)
 - [Технический справочник](docs/technical-reference.md)
+- [Roadmap и приоритеты KANO](docs/roadmap.md)
 - [Как внести вклад](CONTRIBUTING.md)
 - [Как сообщить об уязвимости](SECURITY.md)
 

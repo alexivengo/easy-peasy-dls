@@ -53,7 +53,7 @@ python3 plugins/dls/scripts/dls.py --root /path/to/project doctor
 | `remediation-start` | Проверить canonical manifest последнего actionable ReviewIR |
 | `remediation-recover` | Восстановить отсутствующий legacy manifest из exact Git objects |
 | `candidate-ready` | Выполнить trusted validation, записать dispositions и атомарно создать ReviewPack |
-| `candidate-status` | Прочитать компактный implementation progress без запуска команд |
+| `candidate-status [--diagnostic]` | Прочитать компактный implementation progress и при необходимости последний bounded validation failure без запуска команд |
 | `review-ready` | Проверить candidate и создать full/delta ReviewPack; base повторного review выводится из ReviewIR |
 | `review-run` | Выполнить exact-revision review целиком и импортировать ReviewIR |
 | `review-status` | Прочитать состояние review без запуска модели |
@@ -147,10 +147,11 @@ Pipeline использует optional `candidate_runs` в state schema v1, до
 активный exact-contract run, переиспользует PASS только при совпадении HEAD,
 source и command-contract digests и атомарно записывает dispositions вместе с
 ReviewPack. `candidate-status` читает phase, active/completed/remaining commands
-и typed next action, но не запускает процесс и не возвращает логи. Только
-отдельная read-only review-задача запускает `review-run`.
+и typed next action, но не запускает процесс. По умолчанию он не возвращает
+логи; `--diagnostic` добавляет только последний bounded redacted validation
+failure. Только отдельная read-only review-задача запускает `review-run`.
 
-### Известное ограничение v0.4.3: resume candidate после нового commit
+### Candidate continuation после нового commit
 
 Наблюдаемый сценарий зафиксирован 27 июля 2026 года на remediation EPIC-01
 `R066–R073`. Первый `candidate-ready` выполнился на committed candidate, но
@@ -167,14 +168,14 @@ dispositions не изменились.
 для уже другой Git-ревизии. Это лишний orchestration/context overhead и
 неудачная семантика resume.
 
-Целевой контракт исправления для `v0.4.4`:
+В v0.4.4 действует следующий контракт:
 
 - exact-HEAD retry без изменения source продолжает прежний operation ID;
 - новый committed descendant HEAD создаёт новый детерминированный candidate run
   и operation ID, а не маскируется под resume старой ревизии;
-- DLS наследует staged disposition declaration из последнего blocked/failed run
-  только при совпадении canonical remediation review/manifest digest,
-  definition digest и полного набора актуальных findings;
+- DLS выбирает ближайший по Git ancestry eligible blocked, failed или completed
+  run и наследует declaration только при совпадении canonical ReviewIR,
+  remediation manifest, definition, command policy и полного набора findings;
 - skill передаёт только явные изменения declaration, например перевод
   `note → addressed`; неизменные dispositions повторно не перечисляются;
 - evidence прежнего HEAD не переиспользуется: весь обязательный command policy
@@ -183,13 +184,16 @@ dispositions не изменились.
   неполном finding set автоматическое наследование запрещено;
 - model-facing сообщение ограничивается failed command, короткой причиной и
   фактом нового validation run; operation IDs и полный список findings не
-  пересказываются.
+  пересказываются;
+- `candidate-status --diagnostic` восстанавливает bounded redacted excerpt,
+  evidence path и локальный redacted log path, если исходный shell payload был
+  потерян. Raw output остаётся только в ignored cache.
 
-Для исправления нужны regression-сценарии: validation failure на HEAD A → fix и
-commit HEAD B → автоматическое наследование declaration → полный повтор gates →
-exact-HEAD ReviewPack, а также отрицательные случаи manifest/definition drift,
-divergent HEAD и disposition override. До реализации это остаётся документированным
-ограничением, а не обещанием текущего поведения.
+Новые candidate runs имеют optional marker `dls-candidate-run/v2`, lineage и
+digests ReviewIR, manifest, definition, policy и declaration. State schema
+остаётся v1. Legacy runs читаются, но не используются для автоматического
+наследования. Явный operation ID нельзя повторно связать с другим candidate
+contract.
 
 ### End-to-end runner
 
@@ -367,6 +371,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.4.3`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.4.4`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

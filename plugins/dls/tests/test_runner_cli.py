@@ -41,6 +41,11 @@ class RunnerAndCLITests(unittest.TestCase):
         self.assertEqual(arguments.note, ["R004"])
         self.assertEqual(arguments.extra_command, ["focused"])
 
+        status_arguments = build_parser().parse_args(
+            ["candidate-status", "EPIC-01", "--diagnostic"]
+        )
+        self.assertTrue(status_arguments.diagnostic)
+
     def test_finding_cli_normalizes_multiple_evidence_spellings(self) -> None:
         arguments = build_parser().parse_args(
             [

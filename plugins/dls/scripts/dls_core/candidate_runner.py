@@ -36,6 +36,11 @@ from .state import StateStore, current_definition_digest, derived_approval_statu
 from .worktrees import resolve_registered_worktree
 
 
+CANDIDATE_RUN_CONTRACT = "dls-candidate-run/v2"
+CANDIDATE_DIAGNOSTIC_LIMIT = 6 * 1024
+CANDIDATE_FAILURE_EXCERPT_LIMIT = 4 * 1024
+
+
 def _owner_root(root: Path, change_id: str) -> tuple[Path, str]:
     candidate = root.resolve()
     if (
@@ -148,13 +153,13 @@ def _current_definition_approval(root: Path, state: dict[str, Any]) -> dict[str,
     )
 
 
-def _finding_plan(
+def _finding_overrides(
     root: Path,
     state: dict[str, Any],
     *,
     addressed: list[str],
     noted: list[str],
-) -> dict[str, str]:
+) -> tuple[dict[str, str], list[str]]:
     if len(addressed) != len(set(addressed)) or len(noted) != len(set(noted)):
         raise UsageError("Candidate finding IDs must not contain duplicates")
     overlap = sorted(set(addressed) & set(noted))
@@ -171,14 +176,106 @@ def _finding_plan(
     }
     declared = set(addressed) | set(noted)
     unknown = sorted(declared - set(actionable))
-    missing = sorted(set(actionable) - declared)
     if unknown:
         raise UsageError("Candidate references non-actionable findings: " + ",".join(unknown))
-    if missing:
-        raise UsageError("Candidate must declare every actionable finding: " + ",".join(missing))
     statuses = {finding_id: "addressed" for finding_id in addressed}
     statuses.update({finding_id: "note" for finding_id in noted})
-    return statuses
+    return statuses, sorted(actionable)
+
+
+def _declaration_digest(statuses: dict[str, str]) -> str:
+    return sha256_bytes(
+        json.dumps(statuses, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+
+
+def _ancestor_distance(root: Path, ancestor: str, descendant: str) -> int | None:
+    exists = run_git(root, "cat-file", "-e", f"{ancestor}^{{commit}}", check=False)
+    if exists.returncode != 0:
+        return None
+    ancestry = run_git(
+        root,
+        "merge-base",
+        "--is-ancestor",
+        ancestor,
+        descendant,
+        check=False,
+    )
+    if ancestry.returncode != 0:
+        return None
+    value = run_git(root, "rev-list", "--count", f"{ancestor}..{descendant}").stdout.strip()
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise IntegrityError("Unable to measure candidate run ancestry") from exc
+
+
+def _eligible_declaration_run(
+    root: Path,
+    state: dict[str, Any],
+    *,
+    head_sha: str,
+    definition_digest: str,
+    prior_review_id: str,
+    prior_review_result_digest: str,
+    manifest_digest: str,
+    policy_digest: str,
+    active_finding_ids: list[str],
+) -> dict[str, Any] | None:
+    eligible: list[tuple[int, int, dict[str, Any]]] = []
+    for index, item in enumerate(state.get("candidate_runs", [])):
+        if not isinstance(item, dict):
+            continue
+        statuses = item.get("finding_dispositions")
+        run_head = item.get("head_sha")
+        if (
+            item.get("candidate_run_contract") != CANDIDATE_RUN_CONTRACT
+            or item.get("review_mode") != "remediation"
+            or item.get("status") not in {"blocked", "failed", "completed"}
+            or item.get("canonical_review_id") != prior_review_id
+            or item.get("canonical_review_result_digest")
+            != prior_review_result_digest
+            or item.get("remediation_manifest_digest") != manifest_digest
+            or item.get("definition_digest") != definition_digest
+            or item.get("policy_digest") != policy_digest
+            or item.get("active_finding_ids") != active_finding_ids
+            or not isinstance(run_head, str)
+            or not isinstance(statuses, dict)
+            or item.get("declaration_digest") != _declaration_digest(statuses)
+            or sorted(statuses) != active_finding_ids
+            or any(value not in {"addressed", "note"} for value in statuses.values())
+        ):
+            continue
+        distance = _ancestor_distance(root, run_head, head_sha)
+        if distance is not None:
+            eligible.append((distance, -index, item))
+    if not eligible:
+        return None
+    return copy.deepcopy(min(eligible, key=lambda value: (value[0], value[1]))[2])
+
+
+def _validation_failure(
+    *,
+    command_id: str,
+    evidence_path: str | None,
+    evidence: dict[str, Any],
+    excerpt: str,
+    log_path: str | None,
+) -> dict[str, Any]:
+    bounded_excerpt = excerpt[-CANDIDATE_FAILURE_EXCERPT_LIMIT:]
+    extra = evidence.get("extra")
+    extra = extra if isinstance(extra, dict) else {}
+    result: dict[str, Any] = {
+        "command_id": command_id,
+        "exit_code": evidence.get("exit_code"),
+        "evidence_path": evidence_path,
+        "redacted_log_path": log_path,
+        "excerpt": bounded_excerpt,
+        "excerpt_digest": sha256_bytes(bounded_excerpt.encode("utf-8")),
+        "output_sha256": extra.get("output_sha256"),
+        "recorded_at": utc_now(),
+    }
+    return result
 
 
 def _disposition_records(
@@ -256,6 +353,7 @@ def _run_response(
     owner: Path,
     owner_selection: str,
     run: dict[str, Any],
+    diagnostic: bool = False,
 ) -> dict[str, Any]:
     status = run.get("status", "running")
     if status == "completed":
@@ -291,7 +389,7 @@ def _run_response(
             elapsed_seconds = max(0.0, round((finished - started).total_seconds(), 3))
         except ValueError:
             elapsed_seconds = None
-    return {
+    result: dict[str, Any] = {
         "ok": True,
         "dry_run": False,
         "changed": False,
@@ -312,6 +410,20 @@ def _run_response(
         "failed_command": run.get("failed_command"),
         "next_action": action,
     }
+    if diagnostic and isinstance(run.get("validation_failure"), dict):
+        failure = copy.deepcopy(run["validation_failure"])
+        result["validation_failure"] = failure
+        encoded = json.dumps(result, ensure_ascii=False).encode("utf-8")
+        excerpt = failure.get("excerpt")
+        while len(encoded) > CANDIDATE_DIAGNOSTIC_LIMIT and isinstance(excerpt, str) and excerpt:
+            overflow = len(encoded) - CANDIDATE_DIAGNOSTIC_LIMIT
+            excerpt = excerpt[min(len(excerpt), max(64, overflow)) :]
+            failure["excerpt"] = excerpt
+            result["validation_failure"] = failure
+            encoded = json.dumps(result, ensure_ascii=False).encode("utf-8")
+        if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > CANDIDATE_DIAGNOSTIC_LIMIT:
+            raise IntegrityError("Candidate diagnostic response exceeds bounded limit")
+    return result
 
 
 def _claim_with_retry(
@@ -401,6 +513,9 @@ def _candidate_ready_impl(
     review_mode = "remediation" if prior_review is not None else "full"
     effective_base = base_ref
     remediation_manifest: tuple[str, dict[str, Any]] | None = None
+    parent_run: dict[str, Any] | None = None
+    declaration_source = "explicit"
+    active_finding_ids: list[str] = []
     if prior_review is None:
         if addressed or noted:
             raise UsageError("Initial candidate cannot declare review findings")
@@ -434,12 +549,43 @@ def _candidate_ready_impl(
             or prior_report.get("epic_base_sha")
             or prior_report.get("base_sha")
         )
-        statuses = _finding_plan(
+        overrides, active_finding_ids = _finding_overrides(
             owner,
             state,
             addressed=addressed,
             noted=noted,
         )
+        manifest_digest = remediation_manifest[1]["manifest_digest"]
+        parent_run = _eligible_declaration_run(
+            owner,
+            state,
+            head_sha=head_sha,
+            definition_digest=definition_digest,
+            prior_review_id=prior_review["review_id"],
+            prior_review_result_digest=prior_review["result_digest"],
+            manifest_digest=manifest_digest,
+            policy_digest=policy_digest,
+            active_finding_ids=active_finding_ids,
+        )
+        if set(overrides) == set(active_finding_ids):
+            statuses = overrides
+        elif parent_run is not None:
+            inherited = parent_run["finding_dispositions"]
+            statuses = {**inherited, **overrides}
+            declaration_source = "inherited" if not overrides else "mixed"
+        else:
+            missing_count = len(set(active_finding_ids) - set(overrides))
+            return _blocked(
+                change_id=change_id,
+                owner=owner,
+                owner_selection=owner_selection,
+                action="declare-finding-disposition",
+                detail=(
+                    f"missing_count={missing_count}; "
+                    f"remediation_manifest_path={remediation_manifest[0]}"
+                ),
+                dry_run=dry_run,
+            )
     if not isinstance(effective_base, str) or not effective_base:
         raise IntegrityError("Candidate review base is missing")
     effective_base = run_git(owner, "rev-parse", effective_base).stdout.strip()
@@ -460,6 +606,25 @@ def _candidate_ready_impl(
         statuses=statuses,
     )
     effective_operation_id = operation_id or f"candidate-ready:{run_id}"
+    if operation_id is not None:
+        conflict = next(
+            (
+                item
+                for item in state.get("candidate_runs", [])
+                if isinstance(item, dict)
+                and item.get("operation_id") == operation_id
+                and item.get("run_id") != run_id
+            ),
+            None,
+        )
+        if conflict is not None:
+            raise IntegrityError(
+                "Candidate operation ID already belongs to another candidate contract"
+            )
+    parent_run_id = parent_run.get("run_id") if parent_run is not None else None
+    if parent_run_id == run_id:
+        parent_run_id = parent_run.get("parent_run_id")
+    declaration_digest = _declaration_digest(statuses)
     command_records = [
         {
             "command_id": command_id,
@@ -484,9 +649,10 @@ def _candidate_ready_impl(
         "head_sha": head_sha,
         "commands": commands,
         "finding_counts": {
-            "addressed": len(addressed),
-            "note": len(noted),
+            "addressed": sum(value == "addressed" for value in statuses.values()),
+            "note": sum(value == "note" for value in statuses.values()),
         },
+        "declaration_source": declaration_source,
         "review_pack_path": None,
         "next_action": _next_action("run-candidate-ready", "execute trusted validation"),
     }
@@ -507,6 +673,17 @@ def _candidate_ready_impl(
             "source_digest": source_digest,
             "definition_digest": definition_digest,
             "review_mode": review_mode,
+            "candidate_run_contract": CANDIDATE_RUN_CONTRACT,
+            "parent_run_id": parent_run_id,
+            "canonical_review_id": prior_review.get("review_id") if prior_review else None,
+            "canonical_review_result_digest": (
+                prior_review.get("result_digest") if prior_review else None
+            ),
+            "remediation_manifest_digest": manifest_digest,
+            "policy_digest": policy_digest,
+            "active_finding_ids": active_finding_ids,
+            "declaration_digest": declaration_digest,
+            "declaration_source": declaration_source,
             "commands": command_records,
             "finding_dispositions": statuses,
             "started_at": utc_now(),
@@ -622,6 +799,13 @@ def _candidate_ready_impl(
             summary = evidence.get("summary", "") if isinstance(evidence, dict) else ""
             excerpt = summary.partition("\nexcerpt=")[2]
             log_path = validation.get("validation", {}).get("redacted_log_path")
+            diagnostic = _validation_failure(
+                command_id=command_id,
+                evidence_path=evidence_path if isinstance(evidence_path, str) else None,
+                evidence=evidence if isinstance(evidence, dict) else {},
+                excerpt=excerpt,
+                log_path=log_path if isinstance(log_path, str) else None,
+            )
             if validation.get("validation", {}).get("spawn_error"):
                 store.update_candidate_run(
                     change_id,
@@ -632,6 +816,7 @@ def _candidate_ready_impl(
                         "active_command": None,
                         "failed_command": command_id,
                         "failure_reason": f"unable to start validation command {command_id}",
+                        "validation_failure": diagnostic,
                         "completed_at": utc_now(),
                     },
                 )
@@ -659,6 +844,7 @@ def _candidate_ready_impl(
                     "commands": failed_commands,
                     "next_action": next_action,
                     "failed_command": command_id,
+                    "validation_failure": diagnostic,
                     "completed_at": utc_now(),
                 },
             )
@@ -798,9 +984,10 @@ def _candidate_ready_impl(
     )
     result["changed"] = changed
     result["finding_counts"] = {
-        "addressed": len(addressed),
-        "note": len(noted),
+        "addressed": sum(value == "addressed" for value in statuses.values()),
+        "note": sum(value == "note" for value in statuses.values()),
     }
+    result["declaration_source"] = declaration_source
     return result
 
 
@@ -865,6 +1052,7 @@ def candidate_status(
     *,
     change_id: str,
     operation_id: str | None = None,
+    diagnostic: bool = False,
 ) -> dict[str, Any]:
     owner, owner_selection = _owner_root(root, change_id)
     state = StateStore(owner).load(change_id)
@@ -892,4 +1080,5 @@ def candidate_status(
         owner=owner,
         owner_selection=owner_selection,
         run=runs[-1],
+        diagnostic=diagnostic,
     )
