@@ -10,12 +10,14 @@ from pathlib import Path
 from unittest import mock
 
 from dls_core.errors import IntegrityError
-from dls_core.io import utc_now
+from dls_core.io import sha256_file, utc_now
 from dls_core.operations import (
+    REVIEW_DECISION_REPAIR_CONTRACT,
     REVIEW_IDENTIFIER_CONTRACT,
     REVIEW_RUNNER_CONTRACT,
     _codex_usage_from_output,
     _review_pack_digest,
+    _validate_state_owned_review_provenance,
     _validate_review_pack,
     _validate_review_report,
     approve,
@@ -38,6 +40,7 @@ from dls_core.review_runner import (
     review_run,
     review_status,
 )
+from dls_core.repo import git_source_snapshot_digest
 from dls_core.state import StateStore
 
 from support import (
@@ -152,6 +155,10 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 pack["review_pack"]["identifier_contract"],
                 REVIEW_IDENTIFIER_CONTRACT,
             )
+            self.assertEqual(
+                pack["review_pack"]["decision_repair_contract"],
+                REVIEW_DECISION_REPAIR_CONTRACT,
+            )
 
     def test_prior_finding_links_are_checked_before_the_next_lane(self) -> None:
         pack = {
@@ -183,7 +190,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(
             ReviewDecisionReferenceError,
-            "requires a replacement finding",
+            "unknown replacement",
         ):
             _normalize_structured_payload(
                 invalid_replacement,
@@ -325,6 +332,161 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         )
         return base_sha, pack
 
+    def _prepared_remediation(self, root: Path) -> tuple[str, dict]:
+        base_sha, first_pack = self._prepared_standard(root)
+        started = start_review_with_fake_codex(
+            root,
+            change_id="C001",
+            operation_id="first-native",
+        )
+        finding = {
+            "id": "R001",
+            "severity": "should-fix",
+            "kind": "defect",
+            "location": "README.md:1",
+            "issue": "The fixture defect remains.",
+            "impact": "Review cannot clear.",
+            "required_fix": "Correct and independently verify the fixture.",
+            "ticket_ids": [],
+            "requirement_ids": ["REQ-001"],
+            "base_sha": first_pack["review_pack"]["base_sha"],
+            "head_sha": first_pack["review_pack"]["head_sha"],
+            "blocks": ["review", "acceptance"],
+        }
+        report = build_review_report(
+            root,
+            pack_result=first_pack,
+            start_result=started,
+            verdict="not-clear",
+            findings=[finding],
+        )
+        report_path = root / ".dls/cache/first-review-for-repair.json"
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        review_import(
+            root,
+            change_id="C001",
+            report_path=".dls/cache/first-review-for-repair.json",
+            expected_revision=StateStore(root).load("C001")["state_revision"],
+            operation_id="first-repair-import",
+        )
+        remediation_start(root, change_id="C001")
+        (root / "README.md").write_text("# Fixture\n\nRemediated.\n")
+        git(root, "add", "README.md")
+        git(root, "commit", "-m", "remediation candidate")
+        head_sha = git(root, "rev-parse", "HEAD")
+        evidence = evidence_add(
+            root,
+            change_id="C001",
+            command_id="test",
+            exit_code=0,
+            summary="PASS remediation",
+            expected_revision=StateStore(root).load("C001")["state_revision"],
+            git_sha=head_sha,
+            artifacts=[],
+            environment="fixture",
+            duration_seconds=0.1,
+            operation_id="repair-evidence",
+        )
+        finding_disposition(
+            root,
+            change_id="C001",
+            finding_id="R001",
+            disposition_status="addressed",
+            rationale="Candidate claims the fixture is addressed.",
+            expected_revision=StateStore(root).load("C001")["state_revision"],
+            git_sha=head_sha,
+            evidence=[evidence["evidence_path"]],
+            actor="codex",
+            prompt=None,
+            response=None,
+            operation_id="repair-address",
+        )
+        ready = review_ready(
+            root,
+            change_id="C001",
+            base_ref=base_sha,
+            expected_revision=StateStore(root).load("C001")["state_revision"],
+            operation_id="repair-ready",
+        )
+        return base_sha, ready
+
+    def _record_two_legacy_invalid_targeted_attempts(
+        self,
+        root: Path,
+        pack_result: dict,
+    ) -> tuple[dict, str]:
+        start_review_with_fake_codex(
+            root,
+            change_id="C001",
+            operation_id="current-native",
+        )
+        pack = pack_result["review_pack"]
+        raw = {
+            "verdict": "not-clear",
+            "summary": "R001 is still open.",
+            "findings": [],
+            "prior_finding_verdicts": [
+                {
+                    "finding_id": "R001",
+                    "verdict": "still-open",
+                    "replacement_finding_id": None,
+                    "evidence": ["The attempted fix is incomplete."],
+                }
+            ],
+        }
+        store = StateStore(root)
+        snapshot = git_source_snapshot_digest(root)
+        raw_digest = ""
+        for ordinal in (1, 2):
+            relative = (
+                f".dls/cache/reviews/C001/{pack['review_id']}/"
+                f"legacy-targeted-{ordinal}.json"
+            )
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            raw_digest = sha256_file(path)
+            attempt_id = f"legacy-targeted-invalid-{ordinal}"
+            _, _, claimed = store.claim_review_lane(
+                "C001",
+                attempt={
+                    "review_id": pack["review_id"],
+                    "kind": "semantic",
+                    "lane_key": "semantic:targeted",
+                    "attempt_id": attempt_id,
+                    "attempt_ordinal": ordinal,
+                    "max_attempts": 2,
+                    "operation_id": f"legacy-targeted-operation-{ordinal}",
+                    "runner_pid": os.getpid(),
+                    "runner_contract": REVIEW_RUNNER_CONTRACT,
+                    "lane_contract_digest": "legacy-v042-targeted-contract",
+                    "head_sha": pack["head_sha"],
+                    "pack_digest": pack["pack_digest"],
+                    "model": "gpt-5.6-sol",
+                    "reasoning_effort": "high",
+                    "output_path": relative,
+                    "source_snapshot_before": snapshot,
+                    "started_at": utc_now(),
+                },
+                operation_kind="review-run:semantic:targeted",
+                max_attempts=2,
+            )
+            self.assertTrue(claimed)
+            store.finish_review_lane(
+                "C001",
+                attempt_id=attempt_id,
+                expected_status="running",
+                updates={
+                    "status": "invalid-output",
+                    "output_path": relative,
+                    "output_digest": raw_digest,
+                    "source_snapshot_digest": snapshot,
+                    "failure_reason": "Prior finding R001 requires a replacement finding",
+                    "completed_at": utc_now(),
+                },
+            )
+        return raw, raw_digest
+
     def _install_fake_codex(
         self,
         root: Path,
@@ -335,6 +497,9 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         semantic_exit: int = 0,
         native_exit: int = 0,
         reconciliation_blocker: bool = False,
+        invalid_repair: bool = False,
+        repair_exit: int = 0,
+        repair_sleep: float = 0.0,
     ) -> tuple[str | None, Path, Path]:
         fake_bin = root / ".dls" / "cache" / "runner-fake-bin"
         fake_bin.mkdir(parents=True, exist_ok=True)
@@ -374,65 +539,96 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             "'findings': []}))\n"
             "else:\n"
             "    prompt = Path('.dls-review-input/prompt.md').read_text()\n"
-            "    context = json.loads(Path('.dls-review-input/context.json').read_text())\n"
-            "    pack_item = next(item for item in context['inputs'] "
+            "    if prompt.startswith('# DLS decision-reference repair'):\n"
+            "        kind = 'decision-repair'\n"
+            "        if Path('.dls-review-input/context.json').exists() or "
+            "Path('.dls-review-input/native.txt').exists() or Path('README.md').exists():\n"
+            "            raise SystemExit(79)\n"
+            "        bundle = json.loads(Path('.dls-review-input/repair.json').read_text())\n"
+            f"        time.sleep({repair_sleep!r})\n"
+            f"        if {repair_exit!r}:\n"
+            "            counter.parent.mkdir(parents=True, exist_ok=True)\n"
+            "            with counter.open('a') as handle: handle.write(kind + '\\n')\n"
+            f"            raise SystemExit({repair_exit!r})\n"
+            "        payload = bundle['raw_decision']\n"
+            "        allowed = bundle['allowed_ticket_ids']\n"
+            "        for finding in payload.get('findings', []):\n"
+            "            finding['ticket_ids'] = ([item if item in allowed else allowed[0] "
+            "for item in finding.get('ticket_ids', [])] if allowed else [])\n"
+            "        for prior in payload.get('prior_finding_verdicts', []):\n"
+            "            replacement = bundle['reserved_replacement_ids'].get(prior['finding_id'])\n"
+            "            if replacement:\n"
+            "                source = bundle['canonical_prior_findings'][prior['finding_id']]\n"
+            "                prior['replacement_finding_id'] = replacement\n"
+            "                payload['findings'].append({'id': replacement, "
+            "'severity': source['severity'], 'kind': source['kind'], "
+            "'location': source['location'], 'issue': source['issue'], "
+            "'impact': source['impact'], 'required_fix': source['required_fix'], "
+            "'ticket_ids': source['ticket_ids'], "
+            "'requirement_ids': source['requirement_ids'], "
+            "'blocks': source['blocks'], 'provenance': ['decision-repair']})\n"
+            f"        if {invalid_repair!r}:\n"
+            "            payload = {}\n"
+            "    else:\n"
+            "        context = json.loads(Path('.dls-review-input/context.json').read_text())\n"
+            "        pack_item = next(item for item in context['inputs'] "
             "if item.get('reason') == 'active-review-pack')\n"
-            "    pack = json.loads(Path(pack_item['path']).read_text())\n"
-            "    prior_verdicts = [{'finding_id': item['finding_id'], "
+            "        pack = json.loads(Path(pack_item['path']).read_text())\n"
+            "        prior_verdicts = [{'finding_id': item['finding_id'], "
             "'verdict': 'verified', 'replacement_finding_id': None, "
             "'evidence': ['verified by fake reviewer']} for item in "
             "pack.get('required_prior_findings', [])]\n"
-            "    if prompt.startswith('# DLS specialist review'):\n"
-            "        kind = 'specialist'\n"
-            "        if Path('.dls-review-input/native.txt').exists():\n"
-            "            raise SystemExit(67)\n"
-            "        lens = re.search(r'`([^`]+)`:', prompt).group(1)\n"
-            "        payload = {'lens_id': lens, 'summary': 'clear', "
-            "'findings': []}\n"
-            "    else:\n"
-            "        if prompt.startswith('# DLS independent semantic review'):\n"
-            "            kind = 'semantic-independent'\n"
+            "        if prompt.startswith('# DLS specialist review'):\n"
+            "            kind = 'specialist'\n"
             "            if Path('.dls-review-input/native.txt').exists():\n"
-            "                raise SystemExit(68)\n"
-            f"            if {semantic_exit!r}:\n"
-            "                counter.parent.mkdir(parents=True, exist_ok=True)\n"
-            "                with counter.open('a') as handle: "
+            "                raise SystemExit(67)\n"
+            "            lens = re.search(r'`([^`]+)`:', prompt).group(1)\n"
+            "            payload = {'lens_id': lens, 'summary': 'clear', "
+            "'findings': []}\n"
+            "        else:\n"
+            "            if prompt.startswith('# DLS independent semantic review'):\n"
+            "                kind = 'semantic-independent'\n"
+            "                if Path('.dls-review-input/native.txt').exists():\n"
+            "                    raise SystemExit(68)\n"
+            f"                if {semantic_exit!r}:\n"
+            "                    counter.parent.mkdir(parents=True, exist_ok=True)\n"
+            "                    with counter.open('a') as handle: "
             "handle.write(kind + '\\n')\n"
-            "                print(json.dumps({'type': 'turn.failed', "
+            "                    print(json.dumps({'type': 'turn.failed', "
             "'error': {'message': json.dumps({'error': {"
             "'code': 'synthetic_model_failure', "
             "'message': 'semantic lane failed'}})}}))\n"
-            f"                raise SystemExit({semantic_exit!r})\n"
-            f"            if {invalid_semantic_once!r} and not invalid_marker.exists():\n"
-            "                invalid_marker.write_text('used')\n"
-            "                output.write_text('{}')\n"
-            "                counter.parent.mkdir(parents=True, exist_ok=True)\n"
-            "                with counter.open('a') as handle: "
+            f"                    raise SystemExit({semantic_exit!r})\n"
+            f"                if {invalid_semantic_once!r} and not invalid_marker.exists():\n"
+            "                    invalid_marker.write_text('used')\n"
+            "                    output.write_text('{}')\n"
+            "                    counter.parent.mkdir(parents=True, exist_ok=True)\n"
+            "                    with counter.open('a') as handle: "
             "handle.write(kind + '\\n')\n"
-            "                raise SystemExit(0)\n"
-            "        elif prompt.startswith('# DLS review reconciliation'):\n"
-            "            kind = 'reconciliation'\n"
-            "            if not Path('.dls-review-input/native.txt').exists():\n"
-            "                raise SystemExit(69)\n"
-            "        elif prompt.startswith('# DLS remediation final-full review'):\n"
-            "            kind = 'final-full'\n"
-            "        payload = {'verdict': 'review-clear', 'summary': 'clear', "
+            "                    raise SystemExit(0)\n"
+            "            elif prompt.startswith('# DLS review reconciliation'):\n"
+            "                kind = 'reconciliation'\n"
+            "                if not Path('.dls-review-input/native.txt').exists():\n"
+            "                    raise SystemExit(69)\n"
+            "            elif prompt.startswith('# DLS remediation final-full review'):\n"
+            "                kind = 'final-full'\n"
+            "            payload = {'verdict': 'review-clear', 'summary': 'clear', "
             "'findings': [], 'prior_finding_verdicts': prior_verdicts}\n"
-            f"        if {invalid_ticket_once!r} and kind == 'semantic-independent' "
+            f"            if {invalid_ticket_once!r} and kind == 'semantic-independent' "
             "and not invalid_marker.exists():\n"
-            "            invalid_marker.write_text('used')\n"
-            "            payload['verdict'] = 'not-clear'\n"
-            "            payload['findings'] = [{'id': 'R-BAD-TICKET', "
+            "                invalid_marker.write_text('used')\n"
+            "                payload['verdict'] = 'not-clear'\n"
+            "                payload['findings'] = [{'id': 'R-BAD-TICKET', "
             "'severity': 'should-fix', 'kind': 'defect', "
             "'location': 'README.md:1', 'issue': 'bad ticket link', "
             "'impact': 'invalid review decision', "
             "'required_fix': 'use a canonical ticket ID', "
             "'ticket_ids': ['T-99'], 'requirement_ids': [], "
             "'blocks': ['review'], 'provenance': ['fixture']}]\n"
-            f"        if {reconciliation_blocker!r} and kind == 'reconciliation':\n"
-            "            payload['verdict'] = 'not-clear'\n"
-            "            payload['summary'] = 'blocker remains'\n"
-            "            payload['findings'] = [{'id': 'RNEW', "
+            f"            if {reconciliation_blocker!r} and kind == 'reconciliation':\n"
+            "                payload['verdict'] = 'not-clear'\n"
+            "                payload['summary'] = 'blocker remains'\n"
+            "                payload['findings'] = [{'id': 'RNEW', "
             "'severity': 'blocker', 'kind': 'defect', "
             "'location': 'README.md', 'issue': 'A defect remains.', "
             "'impact': 'Review cannot clear.', "
@@ -616,7 +812,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertIsNone(blocked["review_pack_path"])
             self.assertEqual(counter.read_text(encoding="utf-8"), calls_before)
 
-    def test_invalid_semantic_output_retries_once(self) -> None:
+    def test_structurally_invalid_semantic_output_is_not_blindly_retried(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._prepared_standard(root)
@@ -625,20 +821,25 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 invalid_semantic_once=True,
             )
             try:
-                completed = review_run(
-                    root,
-                    change_id="C001",
-                    pack_path=None,
-                    operation_id="retry-root",
-                )
+                with self.assertRaisesRegex(
+                    IntegrityError,
+                    "not eligible for bounded repair",
+                ):
+                    review_run(
+                        root,
+                        change_id="C001",
+                        pack_path=None,
+                        operation_id="retry-root",
+                    )
+                failed = review_status(root, change_id="C001")
             finally:
                 self._restore_path(original)
-            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(failed["next_action"]["id"], "inspect-review-output")
             self.assertEqual(
                 counter.read_text(encoding="utf-8").splitlines().count(
                     "semantic-independent"
                 ),
-                2,
+                1,
             )
             semantic = [
                 item
@@ -647,10 +848,10 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             ]
             self.assertEqual(
                 [item["status"] for item in semantic],
-                ["invalid-output", "completed"],
+                ["invalid-output"],
             )
 
-    def test_invalid_ticket_reference_retries_before_reconciliation(self) -> None:
+    def test_invalid_ticket_reference_uses_compact_repair_before_reconciliation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._prepared_standard(root)
@@ -673,7 +874,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 [
                     "native",
                     "semantic-independent",
-                    "semantic-independent",
+                    "decision-repair",
                     "reconciliation",
                 ],
             )
@@ -684,9 +885,226 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             ]
             self.assertEqual(
                 [item["status"] for item in attempts],
-                ["invalid-output", "completed"],
+                ["invalid-output"],
             )
             self.assertIn("unknown ticket", attempts[0]["failure_reason"])
+            repairs = [
+                item
+                for item in StateStore(root).load("C001")["reviews"]
+                if item.get("lane_key") == "semantic:full:repair"
+            ]
+            self.assertEqual([item["status"] for item in repairs], ["completed"])
+            report = json.loads(
+                (root / completed["review_result_path"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                report["decision_repair_contract"],
+                "dls-decision-repair/v1",
+            )
+            self.assertEqual(len(report["lanes"]["semantic"]["repairs"]), 1)
+
+    def test_v042_two_invalid_targeted_attempts_recover_with_only_repair_and_downstream(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, ready = self._prepared_remediation(root)
+            _, raw_digest = self._record_two_legacy_invalid_targeted_attempts(
+                root,
+                ready,
+            )
+            original, counter, _ = self._install_fake_codex(
+                root,
+                reconciliation_blocker=True,
+            )
+            try:
+                completed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="legacy-recovery-root",
+                )
+            finally:
+                self._restore_path(original)
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(completed["verdict"], "not-clear")
+            self.assertEqual(
+                counter.read_text(encoding="utf-8").splitlines(),
+                ["decision-repair", "reconciliation"],
+            )
+            state = StateStore(root).load("C001")
+            targeted = [
+                item
+                for item in state["reviews"]
+                if item.get("lane_key") == "semantic:targeted"
+            ]
+            self.assertEqual(len(targeted), 2)
+            self.assertEqual(
+                [item["status"] for item in targeted],
+                ["invalid-output", "invalid-output"],
+            )
+            self.assertEqual(targeted[-1]["output_digest"], raw_digest)
+            self.assertEqual(
+                sha256_file(root / targeted[-1]["output_path"]),
+                raw_digest,
+            )
+            repairs = [
+                item
+                for item in state["reviews"]
+                if item.get("lane_key") == "semantic:targeted:repair"
+            ]
+            self.assertEqual(len(repairs), 1)
+            self.assertEqual(repairs[0]["status"], "completed")
+            report = json.loads(
+                (root / completed["review_result_path"]).read_text(encoding="utf-8")
+            )
+            provenance = report["lanes"]["semantic"]["repairs"][0]
+            self.assertEqual(
+                provenance["original_attempt_id"],
+                "legacy-targeted-invalid-2",
+            )
+            self.assertEqual(provenance["original_output_digest"], raw_digest)
+            self.assertTrue(completed["remediation_manifest_path"])
+            tampered = json.loads(json.dumps(report))
+            tampered["lanes"]["semantic"]["repairs"][0]["error_digest"] = "tampered"
+            with self.assertRaisesRegex(
+                IntegrityError,
+                "repair provenance is not state-owned",
+            ):
+                _validate_state_owned_review_provenance(
+                    root,
+                    state=state,
+                    pack=ready["review_pack"],
+                    report=tampered,
+                )
+
+    def test_invalid_repair_is_not_retried_and_is_typed_for_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                invalid_ticket_once=True,
+                invalid_repair=True,
+            )
+            try:
+                with self.assertRaisesRegex(
+                    IntegrityError,
+                    "Decision repair failed without another model retry",
+                ):
+                    review_run(
+                        root,
+                        change_id="C001",
+                        pack_path=None,
+                        operation_id="invalid-repair-root",
+                    )
+                failed = review_status(root, change_id="C001")
+            finally:
+                self._restore_path(original)
+            calls = counter.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(calls.count("semantic-independent"), 1)
+            self.assertEqual(calls.count("decision-repair"), 1)
+            self.assertEqual(failed["next_action"]["id"], "inspect-review-output")
+
+    def test_repair_transport_failure_retries_once_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                invalid_ticket_once=True,
+                repair_exit=7,
+            )
+            try:
+                with self.assertRaisesRegex(
+                    IntegrityError,
+                    "exhausted automatic attempts",
+                ):
+                    review_run(
+                        root,
+                        change_id="C001",
+                        pack_path=None,
+                        operation_id="repair-transport-root",
+                    )
+            finally:
+                self._restore_path(original)
+            calls = counter.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(calls.count("semantic-independent"), 1)
+            self.assertEqual(calls.count("decision-repair"), 2)
+
+    def test_concurrent_recovery_claims_one_repair_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, ready = self._prepared_remediation(root)
+            self._record_two_legacy_invalid_targeted_attempts(root, ready)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                reconciliation_blocker=True,
+                repair_sleep=0.4,
+            )
+            try:
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [
+                        executor.submit(
+                            review_run,
+                            root,
+                            change_id="C001",
+                            pack_path=None,
+                            operation_id="concurrent-repair-root",
+                        )
+                        for _ in range(2)
+                    ]
+                    results = [future.result() for future in futures]
+            finally:
+                self._restore_path(original)
+            self.assertIn("completed", {item["status"] for item in results})
+            self.assertEqual(
+                counter.read_text(encoding="utf-8").splitlines().count(
+                    "decision-repair"
+                ),
+                1,
+            )
+            repairs = [
+                item
+                for item in StateStore(root).load("C001")["reviews"]
+                if item.get("lane_key") == "semantic:targeted:repair"
+            ]
+            self.assertEqual(len(repairs), 1)
+
+    def test_tampered_historical_invalid_output_never_starts_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, ready = self._prepared_remediation(root)
+            self._record_two_legacy_invalid_targeted_attempts(root, ready)
+            state = StateStore(root).load("C001")
+            terminal = next(
+                item
+                for item in reversed(state["reviews"])
+                if item.get("lane_key") == "semantic:targeted"
+            )
+            (root / terminal["output_path"]).write_text("{}", encoding="utf-8")
+            original, counter, _ = self._install_fake_codex(root)
+            try:
+                with self.assertRaisesRegex(
+                    IntegrityError,
+                    "output digest mismatch",
+                ):
+                    review_run(
+                        root,
+                        change_id="C001",
+                        pack_path=None,
+                        operation_id="tampered-repair-root",
+                    )
+            finally:
+                self._restore_path(original)
+            self.assertFalse(counter.exists())
+
+    def test_semantic_prompts_state_cross_field_replacement_contract(self) -> None:
+        prompts_root = Path(__file__).resolve().parents[1] / "assets" / "review-prompts"
+        for name in ("semantic-independent.md", "reconcile.md", "final-full.md"):
+            prompt = (prompts_root / name).read_text(encoding="utf-8")
+            self.assertIn("still-open", prompt)
+            self.assertIn("regressed", prompt)
+            self.assertIn("replacement_finding_id", prompt)
+            self.assertIn("must differ", prompt)
 
     def test_changed_lane_contract_retries_without_reusing_native_or_operation_id(
         self,
@@ -1080,7 +1498,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             )
             self.assertEqual(
                 counter.read_text(encoding="utf-8").splitlines(),
-                ["native", "semantic-independent"],
+                ["native", "semantic-independent", "semantic-independent"],
             )
 
     def test_finalize_failure_is_visible_and_resume_reuses_completed_lanes(self) -> None:
@@ -1175,16 +1593,16 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertEqual(completed["status"], "completed")
             self.assertEqual(
                 counter.read_text(encoding="utf-8").splitlines(),
-                calls_before + ["reconciliation"],
+                calls_before + ["decision-repair"],
             )
             attempts = [
                 item
                 for item in StateStore(root).load("C001")["reviews"]
                 if item.get("lane_key")
-                == "reconciliation:identifier-correction"
+                == "reconciliation:repair"
             ]
             self.assertEqual(len(attempts), 1)
-            self.assertEqual(attempts[0]["max_attempts"], 1)
+            self.assertEqual(attempts[0]["max_attempts"], 2)
             self.assertEqual(attempts[0]["status"], "completed")
 
     def test_orphaned_native_attempt_is_abandoned_then_retried_once(self) -> None:

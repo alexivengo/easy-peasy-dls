@@ -57,12 +57,16 @@ for example `3/4 · semantic:final-full · Sol/xhigh · 8m`. Never stream raw mo
 transcripts or provisional findings.
 
 If all lanes completed but final assembly/import failed, `review-status` returns
-`failed-finalize` and `next_action: resume-review`. Re-run the same public
-`review-run` with the same stable operation ID. DLS first verifies the exact
-HEAD, pack, context, and cached output digests, then retries deterministic
-assembly without recomputing lane contracts. A unique ticket alias may be
-normalized by DLS without a model call. An unsafe reference may retry only the
-terminal decision lane once; it must never restart native or whole-epic review.
+`failed-finalize` and `next_action: resume-review`. If a semantic decision is
+structurally valid but has an inconsistent reference, it returns
+`resume-review-repair`. Re-run the same public `review-run` with the same stable operation ID.
+DLS first verifies exact HEAD, source, definition, pack, context,
+and immutable raw-output digests. It then performs one compact Sol repair using
+only the raw decision, exact error, canonical references, and reserved finding
+IDs. The repair workspace contains no product source, native output, sibling
+drafts, or user-created correction prompt. Never read raw output or create a
+correction subagent. Native, specialists, and the original semantic analysis are
+not restarted.
 
 ## Present the canonical result
 
@@ -96,8 +100,10 @@ replace `review_result_path`, finding IDs, ticket verdicts, or remediation state
   from the independent review task.
 - `failed-finalize`: resume the same `review-run`; do not start an informal or
   replacement review.
-- `retry-review-decision`: let the same `review-run` retry only its terminal
-  decision lane; do not launch another review task.
+- `resume-review-repair`: call the same `review-run`; DLS resumes the single
+  compact repair and only the downstream lanes that have not completed.
+- `inspect-review-output`: stop. The bounded repair itself was invalid or the
+  original output was not safely repairable; do not run a manual semantic retry.
 - `inspect-review-integrity`: stop. Do not retry changed or tampered inputs.
 - a nonzero exit: report the integrity/infrastructure failure and its typed
   `next_action`; do not improvise a review.

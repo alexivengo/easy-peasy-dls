@@ -55,7 +55,7 @@ For a remediation request, read and follow [remediation.md](references/remediati
 
 Never finish a review without the non-null `review_result_path` returned by `review-run`. A completed `not-clear` or actionable `blocked` review must also return a non-null canonical `remediation_manifest_path`. After implementation or remediation, the task must wait for the single `candidate-ready` process, stop at `open-review-task`, and never invoke `review-run`. Use compact `candidate-status` only when the original process is lost or long-running. A `review-clear` verdict is not final acceptance.
 
-On `failed-finalize`, invoke the same `review-run` and let DLS reuse completed lanes. Never expose provisional findings or start a replacement whole-epic review; follow the typed `retry-review-decision` or `inspect-review-integrity` outcome when returned.
+On `failed-finalize` or `resume-review-repair`, invoke the same `review-run` with the same operation ID and let DLS reuse completed lanes. A logically invalid semantic decision is repaired by one DLS-owned compact Sol pass; never read its raw output, create a correction agent, expose provisional findings, or start a replacement whole-epic review. Stop on `inspect-review-output` or `inspect-review-integrity`.
 
 When a completed exact-HEAD review returns DLS-owned `presentation.comments`, emit their prepared `::code-comment` directives verbatim after the severity-first summary. Do not invent inline comments from model transcripts or emit them for stale locations. During a long unchanged runner wait, avoid repeated narration: use the longest host wait available and provide at most one compact heartbeat per minute.
 

@@ -127,13 +127,14 @@ NATIVE_REVIEW_MAX_OUTPUT_BYTES = 262144
 NATIVE_REVIEW_TRANSCRIPT_MAX_BYTES = 1048576
 REVIEW_RUNNER_CONTRACT = "dls-review-runner/v1"
 REVIEW_IDENTIFIER_CONTRACT = "canonical-ticket-ids/v1"
+REVIEW_DECISION_REPAIR_CONTRACT = "dls-decision-repair/v1"
 REVIEW_LANE_MAX_ATTEMPTS = 2
 RETRYABLE_REVIEW_LANE_STATUSES = {
     "abandoned",
+    "api-failure",
     "timeout",
     "output-cap",
     "missing-output",
-    "invalid-output",
 }
 
 RISK_LENS_DEFINITIONS = (
@@ -2302,6 +2303,15 @@ def _validate_review_pack(pack: dict[str, Any], change_id: str) -> None:
             raise IntegrityError(
                 f"Unsupported ReviewPack identifier contract: {identifier_contract}"
             )
+        decision_repair_contract = pack.get("decision_repair_contract")
+        if decision_repair_contract not in {
+            None,
+            REVIEW_DECISION_REPAIR_CONTRACT,
+        }:
+            raise IntegrityError(
+                "Unsupported ReviewPack decision repair contract: "
+                f"{decision_repair_contract}"
+            )
         v2_required = {
             "review_mode",
             "epic_base_sha",
@@ -2565,6 +2575,7 @@ def _review_pack_state_entry(
         "review_id": pack["review_id"],
         "kind": "pack",
         "identifier_contract": pack.get("identifier_contract"),
+        "decision_repair_contract": pack.get("decision_repair_contract"),
         "pack_path": relative_path,
         "base_sha": pack["base_sha"],
         "comparison_base_sha": pack["comparison_base_sha"],
@@ -2701,6 +2712,7 @@ def review_pack(
         "schema_version": REVIEW_PACK_SCHEMA_VERSION,
         "runner_contract": REVIEW_RUNNER_CONTRACT,
         "identifier_contract": REVIEW_IDENTIFIER_CONTRACT,
+        "decision_repair_contract": REVIEW_DECISION_REPAIR_CONTRACT,
         "review_id": review_id,
         "change_id": change_id,
         "mode": mode,
@@ -3988,6 +4000,62 @@ def _validate_state_owned_review_provenance(
         "independent_draft_digest"
     ):
         raise IntegrityError("Semantic independent draft is not state-owned")
+    for repair in semantic.get("repairs", []):
+        if not isinstance(repair, dict):
+            raise IntegrityError("ReviewIR decision repair provenance is invalid")
+        repair_attempt = _state_lane_attempt(
+            state,
+            review_id=review_id,
+            attempt_id=repair.get("repair_attempt_id"),
+        )
+        original_attempt = next(
+            (
+                item
+                for item in state["reviews"]
+                if isinstance(item, dict)
+                and item.get("review_id") == review_id
+                and item.get("attempt_id") == repair.get("original_attempt_id")
+            ),
+            None,
+        )
+        if not original_attempt or original_attempt.get("status") not in {
+            "invalid-output",
+            "completed",
+        }:
+            raise IntegrityError(
+                "ReviewIR repair has no immutable original decision attempt"
+            )
+        expected = {
+            "contract": repair_attempt.get("repair_contract"),
+            "source_lane_key": repair_attempt.get("repair_source_lane_key"),
+            "original_attempt_id": repair_attempt.get(
+                "repair_original_attempt_id"
+            ),
+            "original_output_digest": repair_attempt.get(
+                "repair_original_output_digest"
+            ),
+            "error_code": repair_attempt.get("repair_error_code"),
+            "error_digest": repair_attempt.get("repair_error_digest"),
+            "input_bundle_digest": repair_attempt.get("input_bundle_digest"),
+            "repair_attempt_id": repair_attempt.get("attempt_id"),
+            "repair_output_digest": repair_attempt.get("output_digest"),
+            "model": repair_attempt.get("model"),
+            "reasoning_effort": repair_attempt.get("reasoning_effort"),
+            "started_at": repair_attempt.get("started_at"),
+            "completed_at": repair_attempt.get("completed_at"),
+            "transcript_digest": repair_attempt.get("transcript_digest"),
+        }
+        if any(repair.get(key) != value for key, value in expected.items()):
+            raise IntegrityError("ReviewIR decision repair provenance is not state-owned")
+        original_path = original_attempt.get("output_path")
+        if (
+            original_attempt.get("output_digest")
+            != repair.get("original_output_digest")
+            or not isinstance(original_path, str)
+            or sha256_file(safe_resolve(root, original_path, must_exist=True))
+            != repair.get("original_output_digest")
+        ):
+            raise IntegrityError("ReviewIR repair original output digest mismatch")
     for semantic_pass in semantic.get("passes", []):
         pass_attempt = _state_lane_attempt(
             state,
@@ -4902,6 +4970,17 @@ def _validate_review_report(
     identifier_contract = pack.get("identifier_contract")
     if identifier_contract is not None and report.get("identifier_contract") != identifier_contract:
         raise IntegrityError("ReviewIR identifier contract does not match ReviewPack")
+    pack_repair_contract = pack.get("decision_repair_contract")
+    report_repair_contract = report.get("decision_repair_contract")
+    if pack_repair_contract is not None and pack_repair_contract != REVIEW_DECISION_REPAIR_CONTRACT:
+        raise IntegrityError("Unsupported ReviewPack decision repair contract")
+    if report_repair_contract not in {None, REVIEW_DECISION_REPAIR_CONTRACT}:
+        raise IntegrityError("Unsupported ReviewIR decision repair contract")
+    if pack_repair_contract is not None and report_repair_contract not in {
+        None,
+        pack_repair_contract,
+    }:
+        raise IntegrityError("ReviewIR decision repair contract mismatch")
     if report["verdict"] not in REVIEW_VERDICTS:
         raise IntegrityError(f"Invalid review verdict: {report['verdict']}")
     lanes = report["lanes"]
@@ -4928,6 +5007,33 @@ def _validate_review_report(
         raise IntegrityError("ReviewIR semantic lane must use gpt-5.6-sol")
     if semantic_lane["reasoning_effort"] not in {"high", "xhigh"}:
         raise IntegrityError("ReviewIR semantic reasoning effort must be high or xhigh")
+    repairs = semantic_lane.get("repairs", [])
+    if not isinstance(repairs, list):
+        raise IntegrityError("ReviewIR semantic repairs must be an array")
+    if repairs and report_repair_contract != REVIEW_DECISION_REPAIR_CONTRACT:
+        raise IntegrityError("ReviewIR repairs require the DLS repair contract")
+    required_repair_fields = {
+        "contract",
+        "original_attempt_id",
+        "original_output_digest",
+        "error_code",
+        "error_digest",
+        "input_bundle_digest",
+        "repair_attempt_id",
+        "repair_output_digest",
+        "model",
+        "reasoning_effort",
+        "transcript_digest",
+    }
+    for repair in repairs:
+        if not isinstance(repair, dict) or not required_repair_fields.issubset(repair):
+            raise IntegrityError("ReviewIR decision repair provenance is incomplete")
+        if (
+            repair.get("contract") != REVIEW_DECISION_REPAIR_CONTRACT
+            or repair.get("model") != "gpt-5.6-sol"
+            or repair.get("reasoning_effort") not in {"high", "xhigh"}
+        ):
+            raise IntegrityError("ReviewIR decision repair provenance is invalid")
     for field in (
         "context_manifest_path",
         "context_manifest_digest",

@@ -23,6 +23,7 @@
     "schema_version": { "const": 2 },
     "runner_contract": { "const": "dls-review-runner/v1" },
     "identifier_contract": { "const": "canonical-ticket-ids/v1" },
+    "decision_repair_contract": { "const": "dls-decision-repair/v1" },
     "review_id": { "type": "string", "minLength": 1 },
     "change_id": { "type": "string", "minLength": 1 },
     "base_sha": { "type": "string", "minLength": 1 },
@@ -94,7 +95,7 @@
             "passes": {
               "type": "array",
               "minItems": 1,
-              "maxItems": 2,
+          "maxItems": 3,
               "items": {
                 "type": "object",
                 "required": ["kind", "status", "draft_path", "draft_digest"],
@@ -109,6 +110,46 @@
                   "transcript_digest": { "type": "string", "minLength": 1 }
                 },
                 "additionalProperties": true
+              }
+            },
+            "repairs": {
+              "type": "array",
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "required": [
+                  "contract",
+                  "source_lane_key",
+                  "original_attempt_id",
+                  "original_output_digest",
+                  "error_code",
+                  "error_digest",
+                  "input_bundle_digest",
+                  "repair_attempt_id",
+                  "repair_output_digest",
+                  "model",
+                  "reasoning_effort",
+                  "started_at",
+                  "completed_at",
+                  "transcript_digest"
+                ],
+                "properties": {
+                  "contract": { "const": "dls-decision-repair/v1" },
+                  "source_lane_key": { "type": "string", "minLength": 1 },
+                  "original_attempt_id": { "type": "string", "minLength": 1 },
+                  "original_output_digest": { "type": "string", "minLength": 1 },
+                  "error_code": { "type": "string", "minLength": 1 },
+                  "error_digest": { "type": "string", "minLength": 1 },
+                  "input_bundle_digest": { "type": "string", "minLength": 1 },
+                  "repair_attempt_id": { "type": "string", "minLength": 1 },
+                  "repair_output_digest": { "type": "string", "minLength": 1 },
+                  "model": { "const": "gpt-5.6-sol" },
+                  "reasoning_effort": { "enum": ["high", "xhigh"] },
+                  "started_at": { "type": "string", "minLength": 1 },
+                  "completed_at": { "type": "string", "minLength": 1 },
+                  "transcript_digest": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
               }
             }
           },

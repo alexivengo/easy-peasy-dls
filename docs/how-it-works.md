@@ -87,8 +87,10 @@ lenses по фактическим risk tags. Эти проходы запуск
 
 Короткая review-команда вызывает один end-to-end runner. До каждого model-run он
 атомарно записывает `running`, поэтому повторный запуск не создаёт вторую
-проверку. При подтверждённом timeout, orphan или некорректном structured output
-допускается только одна автоматическая попытка восстановления.
+проверку. Timeout, orphan, API failure, missing output и output cap допускают не
+более одной инфраструктурной повторной попытки. Логически противоречивый, но
+структурно корректный decision не запускает semantic-анализ заново: его получает
+один компактный repair-pass без product source и outputs других lanes.
 
 Перед semantic-вызовом runner сам проверяет совместимость output schema со
 strict Codex contract. Если обновление DLS меняет prompt, schema или другой

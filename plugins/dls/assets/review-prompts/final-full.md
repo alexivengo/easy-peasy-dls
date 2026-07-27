@@ -8,6 +8,12 @@ prior finding IDs are `{{REQUIRED_PRIOR_FINDING_IDS}}`. Do not abbreviate or
 invent either kind of identifier. Copy requirement IDs exactly from bound
 authored inputs.
 
+For every required prior finding, return exactly one verdict. `verified` and
+`waived` require `replacement_finding_id: null`. `still-open` and `regressed`
+require a new complete finding with a different ID, and
+`replacement_finding_id` must equal that new finding ID and must differ from
+the prior finding ID.
+
 Read the bound context, ReviewPack, native output, independent targeted draft,
 specialist results, and `.dls-review-input/targeted-decision.json`. Re-check every
 ticket, cross-ticket integration, contract conformance, blast radius, and current

@@ -8,12 +8,13 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .errors import IntegrityError
+from .errors import IntegrityError, LockError
 from .io import (
     atomic_write_json,
     atomic_write_text,
@@ -30,7 +31,9 @@ from .operations import (
     RETRYABLE_REVIEW_LANE_STATUSES,
     REVIEW_LANE_MAX_ATTEMPTS,
     REVIEW_IDENTIFIER_CONTRACT,
+    REVIEW_DECISION_REPAIR_CONTRACT,
     REVIEW_RUNNER_CONTRACT,
+    _all_review_findings,
     _attempt_lease_expired,
     _codex_usage_from_output,
     _existing_remediation_manifest_path,
@@ -62,10 +65,38 @@ SEMANTIC_MODEL = "gpt-5.6-sol"
 SPECIALIST_MODEL = "gpt-5.6-terra"
 SPECIALIST_EFFORT = "high"
 REVIEW_PROMPTS_ROOT = PLUGIN_ROOT / "assets" / "review-prompts"
+DECISION_REPAIR_INPUT_MAX_BYTES = 262144
 
 
 class ReviewDecisionReferenceError(IntegrityError):
     """A model decision contains unsafe or inconsistent identifier links."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "invalid-reference",
+        path: str = "$",
+        prior_finding_id: str | None = None,
+        invalid_value: Any = None,
+        repairable: bool = True,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.path = path
+        self.prior_finding_id = prior_finding_id
+        self.invalid_value = invalid_value
+        self.repairable = repairable
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "path": self.path,
+            "message": str(self),
+            "prior_finding_id": self.prior_finding_id,
+            "invalid_value": self.invalid_value,
+            "repairable": self.repairable,
+        }
 
 
 def _ticket_alias_index(pack: dict[str, Any]) -> dict[str, set[str]]:
@@ -109,9 +140,15 @@ def _normalize_structured_payload(
     aliases = _ticket_alias_index(pack)
     normalizations: list[dict[str, str]] = []
     finding_ids: set[str] = set()
-    for finding in findings:
+    for finding_index, finding in enumerate(findings):
         if not isinstance(finding, dict):
-            raise ReviewDecisionReferenceError("Each review finding must be an object")
+            raise ReviewDecisionReferenceError(
+                "Each review finding must be an object",
+                code="invalid-finding",
+                path=f"$.findings[{finding_index}]",
+                invalid_value=finding,
+                repairable=False,
+            )
         finding_id = finding.get("id")
         if (
             not isinstance(finding_id, str)
@@ -119,7 +156,11 @@ def _normalize_structured_payload(
             or finding_id in finding_ids
         ):
             raise ReviewDecisionReferenceError(
-                f"Invalid or duplicate review finding ID: {finding_id!r}"
+                f"Invalid or duplicate review finding ID: {finding_id!r}",
+                code="invalid-finding-id",
+                path=f"$.findings[{finding_index}].id",
+                invalid_value=finding_id,
+                repairable=False,
             )
         finding_ids.add(finding_id)
         for field in ("ticket_ids", "requirement_ids"):
@@ -130,7 +171,11 @@ def _normalize_structured_payload(
                 or len(values) != len(set(values))
             ):
                 raise ReviewDecisionReferenceError(
-                    f"Finding {finding_id} has invalid {field}"
+                    f"Finding {finding_id} has invalid {field}",
+                    code="invalid-reference-list",
+                    path=f"$.findings[{finding_index}].{field}",
+                    invalid_value=values,
+                    repairable=False,
                 )
         canonical_values: list[str] = []
         for source in finding["ticket_ids"]:
@@ -138,13 +183,19 @@ def _normalize_structured_payload(
             if len(targets) != 1:
                 reason = "unknown" if not targets else "ambiguous"
                 raise ReviewDecisionReferenceError(
-                    f"Finding {finding_id} references {reason} ticket: {source}"
+                    f"Finding {finding_id} references {reason} ticket: {source}",
+                    code=f"{reason}-ticket-id",
+                    path=f"$.findings[{finding_index}].ticket_ids",
+                    invalid_value=source,
                 )
             canonical = next(iter(targets))
             if canonical in canonical_values:
                 raise ReviewDecisionReferenceError(
                     f"Finding {finding_id} has duplicate ticket after normalization: "
-                    f"{canonical}"
+                    f"{canonical}",
+                    code="duplicate-ticket-id",
+                    path=f"$.findings[{finding_index}].ticket_ids",
+                    invalid_value=canonical,
                 )
             canonical_values.append(canonical)
             if source != canonical:
@@ -168,10 +219,14 @@ def _normalize_structured_payload(
         if isinstance(item, dict) and isinstance(item.get("finding_id"), str)
     }
     actual_prior: dict[str, dict[str, Any]] = {}
-    for item in normalized["prior_finding_verdicts"]:
+    for prior_index, item in enumerate(normalized["prior_finding_verdicts"]):
         if not isinstance(item, dict):
             raise ReviewDecisionReferenceError(
-                "Prior finding verdict must be an object"
+                "Prior finding verdict must be an object",
+                code="invalid-prior-verdict",
+                path=f"$.prior_finding_verdicts[{prior_index}]",
+                invalid_value=item,
+                repairable=False,
             )
         finding_id = item.get("finding_id")
         if (
@@ -180,31 +235,82 @@ def _normalize_structured_payload(
             or finding_id in actual_prior
         ):
             raise ReviewDecisionReferenceError(
-                f"Invalid or duplicate prior finding verdict: {finding_id!r}"
+                f"Invalid or duplicate prior finding verdict: {finding_id!r}",
+                code="invalid-prior-finding-id",
+                path=f"$.prior_finding_verdicts[{prior_index}].finding_id",
+                prior_finding_id=finding_id if isinstance(finding_id, str) else None,
+                invalid_value=finding_id,
+                repairable=False,
             )
         verdict = item.get("verdict")
         replacement = item.get("replacement_finding_id")
         if verdict in {"still-open", "regressed"}:
-            if not isinstance(replacement, str) or replacement not in finding_ids:
+            if replacement == finding_id:
                 raise ReviewDecisionReferenceError(
-                    f"Prior finding {finding_id} requires a replacement finding"
+                    f"Prior finding {finding_id} cannot replace itself",
+                    code="replacement-reuses-prior-id",
+                    path=(
+                        f"$.prior_finding_verdicts[{prior_index}]"
+                        ".replacement_finding_id"
+                    ),
+                    prior_finding_id=finding_id,
+                    invalid_value=replacement,
+                )
+            if not isinstance(replacement, str):
+                raise ReviewDecisionReferenceError(
+                    f"Prior finding {finding_id} requires a replacement finding",
+                    code="missing-replacement-finding",
+                    path=(
+                        f"$.prior_finding_verdicts[{prior_index}]"
+                        ".replacement_finding_id"
+                    ),
+                    prior_finding_id=finding_id,
+                    invalid_value=replacement,
+                )
+            if replacement not in finding_ids:
+                raise ReviewDecisionReferenceError(
+                    f"Prior finding {finding_id} references an unknown replacement: "
+                    f"{replacement}",
+                    code="unknown-replacement-finding",
+                    path=(
+                        f"$.prior_finding_verdicts[{prior_index}]"
+                        ".replacement_finding_id"
+                    ),
+                    prior_finding_id=finding_id,
+                    invalid_value=replacement,
                 )
         elif replacement is not None:
             raise ReviewDecisionReferenceError(
-                f"Prior finding {finding_id} cannot declare a replacement"
+                f"Prior finding {finding_id} cannot declare a replacement",
+                code="unexpected-replacement-finding",
+                path=(
+                    f"$.prior_finding_verdicts[{prior_index}]"
+                    ".replacement_finding_id"
+                ),
+                prior_finding_id=finding_id,
+                invalid_value=replacement,
             )
         if verdict == "waived":
             disposition = required_prior[finding_id].get("disposition")
             if not isinstance(disposition, dict) or disposition.get("status") != "waived":
                 raise ReviewDecisionReferenceError(
-                    f"Prior finding {finding_id} has no current human waiver"
+                    f"Prior finding {finding_id} has no current human waiver",
+                    code="missing-human-waiver",
+                    path=f"$.prior_finding_verdicts[{prior_index}].verdict",
+                    prior_finding_id=finding_id,
+                    invalid_value=verdict,
+                    repairable=False,
                 )
         actual_prior[finding_id] = item
     missing_prior = sorted(set(required_prior) - set(actual_prior))
     if missing_prior:
         raise ReviewDecisionReferenceError(
             "Review decision is missing prior finding verdicts: "
-            + ", ".join(missing_prior)
+            + ", ".join(missing_prior),
+            code="missing-prior-verdicts",
+            path="$.prior_finding_verdicts",
+            invalid_value=missing_prior,
+            repairable=False,
         )
     return normalized, normalizations
 
@@ -254,6 +360,7 @@ def _lane_contract_digest(
     prompt_digest: str,
     schema_digest: str,
     context_digest: str,
+    input_bundle_digest: str | None = None,
 ) -> str:
     contract = {
         "runner_contract": REVIEW_RUNNER_CONTRACT,
@@ -266,6 +373,7 @@ def _lane_contract_digest(
         "prompt_digest": prompt_digest,
         "schema_digest": schema_digest,
         "context_digest": context_digest,
+        "input_bundle_digest": input_bundle_digest,
     }
     return sha256_bytes(
         json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -489,6 +597,30 @@ def _terminal_lane_next_action(
     lane_attempts: list[dict[str, Any]],
 ) -> dict[str, str]:
     lane_key = terminal.get("lane_key")
+    if terminal.get("status") == "invalid-output":
+        validation_error = terminal.get("validation_error")
+        if (
+            isinstance(lane_key, str)
+            and lane_key.endswith(":repair")
+        ) or (
+            isinstance(validation_error, dict)
+            and validation_error.get("repairable") is False
+        ):
+            return {
+                "id": "inspect-review-output",
+                "detail": terminal.get("failure_reason")
+                or "the bounded repair output is still invalid",
+            }
+        return {
+            "id": "resume-review-repair",
+            "detail": terminal.get("failure_reason")
+            or "a compact decision-reference repair is available",
+        }
+    if terminal.get("status") == "source-changed":
+        return {
+            "id": "inspect-review-integrity",
+            "detail": "the source snapshot changed during a review lane",
+        }
     current_schema_digest: str | None = None
     if isinstance(lane_key, str) and lane_key.startswith("specialist:"):
         current_schema_digest = sha256_file(
@@ -611,15 +743,18 @@ def review_status(
     remediation_manifest_path: str | None = None
     prior_review_id: str | None = None
     prior_review_result_path: str | None = None
+    active_lane = any(
+        item.get("status") == "running" for item in latest_by_lane.values()
+    )
     if result_entry:
         status_value = "completed"
         next_action = {"id": "review-complete", "detail": result_entry["result_path"]}
+    elif active_lane or pipeline_alive:
+        status_value = "running"
+        next_action = {"id": "wait-review", "detail": "review pipeline is active"}
     elif terminal_lane is not None:
         status_value = "failed"
         next_action = _terminal_lane_next_action(terminal_lane, lane_attempts)
-    elif any(item.get("status") == "running" for item in latest_by_lane.values()) or pipeline_alive:
-        status_value = "running"
-        next_action = {"id": "wait-review", "detail": "review pipeline is active"}
     elif pipeline is not None and pipeline.get("status") in {
         "failed",
         "failed-finalize",
@@ -627,7 +762,9 @@ def review_status(
         status_value = pipeline["status"]
         failure_kind = pipeline.get("failure_kind")
         if failure_kind == "model-output":
-            action_id = "retry-review-decision"
+            action_id = "resume-review-repair"
+        elif failure_kind == "invalid-repair-output":
+            action_id = "inspect-review-output"
         elif failure_kind == "integrity":
             action_id = "inspect-review-integrity"
         else:
@@ -642,7 +779,7 @@ def review_status(
         status_value = "failed"
         next_action = {
             "id": (
-                "retry-review-decision"
+                "resume-review-repair"
                 if pipeline.get("failure_kind") == "model-output"
                 else "resume-review"
             ),
@@ -841,36 +978,42 @@ def _prepare_isolated_workspace(
     prompt_text: str,
     schema_path: Path,
     extra_files: dict[str, Path | bytes],
+    input_only: bool = False,
 ) -> tuple[Path, Path]:
     temporary_parent = Path(tempfile.mkdtemp(prefix="dls-review-"))
     workspace = temporary_parent / "checkout"
     try:
-        run_git(
-            owner,
-            "worktree",
-            "add",
-            "--detach",
-            str(workspace),
-            pack["head_sha"],
-        )
         context_source = safe_resolve(owner, context_path, must_exist=True)
-        manifest = read_json(context_source)
-        for item in manifest.get("inputs", []):
-            relative = item.get("path")
-            if not isinstance(relative, str):
-                raise IntegrityError("Review context contains an invalid input path")
-            source = safe_resolve(owner, relative, must_exist=True)
-            expected_digest = item.get("sha256")
-            if (
-                isinstance(expected_digest, str)
-                and sha256_file(source) != expected_digest
-            ):
-                raise IntegrityError(
-                    f"Review context input digest mismatch: {relative}"
-                )
-            _copy_file(source, workspace / relative)
+        if input_only:
+            workspace.mkdir(parents=True)
+            run_git(workspace, "init")
+        else:
+            run_git(
+                owner,
+                "worktree",
+                "add",
+                "--detach",
+                str(workspace),
+                pack["head_sha"],
+            )
+            manifest = read_json(context_source)
+            for item in manifest.get("inputs", []):
+                relative = item.get("path")
+                if not isinstance(relative, str):
+                    raise IntegrityError("Review context contains an invalid input path")
+                source = safe_resolve(owner, relative, must_exist=True)
+                expected_digest = item.get("sha256")
+                if (
+                    isinstance(expected_digest, str)
+                    and sha256_file(source) != expected_digest
+                ):
+                    raise IntegrityError(
+                        f"Review context input digest mismatch: {relative}"
+                    )
+                _copy_file(source, workspace / relative)
         input_root = workspace / ".dls-review-input"
-        _copy_file(context_source, input_root / "context.json")
+        if not input_only:
+            _copy_file(context_source, input_root / "context.json")
         _copy_file(schema_path, input_root / "output.schema.json")
         atomic_write_text(input_root / "prompt.md", prompt_text, backup=False)
         for relative, value in extra_files.items():
@@ -882,7 +1025,8 @@ def _prepare_isolated_workspace(
                 _copy_file(value, destination)
         return workspace, temporary_parent
     except Exception:
-        run_git(owner, "worktree", "remove", "--force", str(workspace), check=False)
+        if not input_only:
+            run_git(owner, "worktree", "remove", "--force", str(workspace), check=False)
         shutil.rmtree(temporary_parent, ignore_errors=True)
         raise
 
@@ -891,10 +1035,14 @@ def _cleanup_isolated_workspace(
     owner: Path,
     workspace: Path,
     temporary_parent: Path,
+    *,
+    input_only: bool = False,
 ) -> None:
-    run_git(owner, "worktree", "remove", "--force", str(workspace), check=False)
+    if not input_only:
+        run_git(owner, "worktree", "remove", "--force", str(workspace), check=False)
     shutil.rmtree(temporary_parent, ignore_errors=True)
-    run_git(owner, "worktree", "prune", check=False)
+    if not input_only:
+        run_git(owner, "worktree", "prune", check=False)
 
 
 def _validate_structured_payload(
@@ -930,6 +1078,33 @@ def _validate_structured_payload(
         list,
     ):
         raise IntegrityError("Semantic decision ticket_verdicts must be an array")
+
+
+def _input_bundle_metadata(
+    extra_files: dict[str, Path | bytes],
+) -> tuple[str | None, int]:
+    if not extra_files:
+        return None, 0
+    entries: list[dict[str, Any]] = []
+    total_bytes = 0
+    for relative, value in sorted(extra_files.items()):
+        content = value if isinstance(value, bytes) else value.read_bytes()
+        total_bytes += len(content)
+        entries.append(
+            {
+                "path": relative,
+                "bytes": len(content),
+                "sha256": sha256_bytes(content),
+            }
+        )
+    return (
+        sha256_bytes(
+            json.dumps(entries, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ),
+        total_bytes,
+    )
 
 
 def _completed_lane_payload(
@@ -1009,6 +1184,9 @@ def _execute_structured_lane(
     lens_id: str | None = None,
     extra_files: dict[str, Path | bytes] | None = None,
     max_attempts: int = REVIEW_LANE_MAX_ATTEMPTS,
+    return_invalid_output: bool = False,
+    input_only_workspace: bool = False,
+    attempt_metadata: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     state_store = StateStore(owner)
     safe_lane = lane_key.replace(":", "-")
@@ -1029,6 +1207,14 @@ def _execute_structured_lane(
     schema_digest = sha256_file(schema_path)
     context_source = safe_resolve(owner, context_path, must_exist=True)
     context_digest = sha256_file(context_source)
+    resolved_extra_files = extra_files or {}
+    input_bundle_digest, input_bundle_bytes = _input_bundle_metadata(
+        resolved_extra_files
+    )
+    if input_only_workspace and input_bundle_bytes > DECISION_REPAIR_INPUT_MAX_BYTES:
+        raise IntegrityError(
+            "Decision repair input exceeds the 256 KiB contract limit"
+        )
     lane_contract_digest = _lane_contract_digest(
         pack=pack,
         lane_key=lane_key,
@@ -1037,6 +1223,7 @@ def _execute_structured_lane(
         prompt_digest=prompt_digest,
         schema_digest=schema_digest,
         context_digest=context_digest,
+        input_bundle_digest=input_bundle_digest,
     )
     while True:
         state = state_store.load(change_id)
@@ -1091,6 +1278,12 @@ def _execute_structured_lane(
                 lens_id=lens_id,
             )
         terminal = contract_attempts[-1] if contract_attempts else None
+        if (
+            terminal
+            and terminal.get("status") == "invalid-output"
+            and return_invalid_output
+        ):
+            return terminal, None
         if terminal and terminal.get("status") not in RETRYABLE_REVIEW_LANE_STATUSES:
             reason = terminal.get("failure_reason") or (
                 f"Review lane {lane_key} failed: status={terminal.get('status')}"
@@ -1108,7 +1301,12 @@ def _execute_structured_lane(
                 f"reason={reason}"
             )
         if len(contract_attempts) >= max_attempts:
-            reason = f"Review lane {lane_key} exhausted automatic attempts"
+            suffix = (
+                f"; last_error={terminal.get('failure_reason')}"
+                if terminal and terminal.get("failure_reason")
+                else ""
+            )
+            reason = f"Review lane {lane_key} exhausted automatic attempts{suffix}"
             _mark_lane_pipeline_failed(
                 owner,
                 change_id=change_id,
@@ -1182,17 +1380,28 @@ def _execute_structured_lane(
             "schema_digest": schema_digest,
             "context_manifest_path": context_path,
             "context_digest": context_digest,
+            "input_bundle_digest": input_bundle_digest,
+            "input_bundle_bytes": input_bundle_bytes,
             "output_path": output_relative,
             "transcript_path": transcript_relative,
             "source_snapshot_before": snapshot_before,
             "started_at": utc_now(),
         }
-        state, claimed_attempt, claimed = state_store.claim_review_lane(
-            change_id,
-            attempt=proposed,
-            operation_kind=f"review-run:{lane_key}",
-            max_attempts=max_attempts,
-        )
+        if attempt_metadata:
+            proposed.update(copy.deepcopy(attempt_metadata))
+        for lock_attempt in range(21):
+            try:
+                state, claimed_attempt, claimed = state_store.claim_review_lane(
+                    change_id,
+                    attempt=proposed,
+                    operation_kind=f"review-run:{lane_key}",
+                    max_attempts=max_attempts,
+                )
+                break
+            except LockError:
+                if lock_attempt == 20:
+                    raise
+                time.sleep(0.05)
         if not claimed:
             if claimed_attempt.get("status") == "running":
                 return claimed_attempt, None
@@ -1214,7 +1423,8 @@ def _execute_structured_lane(
                 context_path=context_path,
                 prompt_text=prompt_text,
                 schema_path=schema_path,
-                extra_files=extra_files or {},
+                extra_files=resolved_extra_files,
+                input_only=input_only_workspace,
             )
             execution = _run_bounded_command(
                 normalized_argv,
@@ -1244,10 +1454,11 @@ def _execute_structured_lane(
                 )
             status_value = "completed"
             failure_reason: str | None = None
+            validation_error: dict[str, Any] | None = None
             if execution["timed_out"]:
                 status_value = "timeout"
             elif execution["exit_code"] != 0:
-                status_value = "failed"
+                status_value = "api-failure"
                 failure_reason = _codex_failure_reason(
                     execution["output"],
                     exit_code=execution["exit_code"],
@@ -1273,6 +1484,18 @@ def _execute_structured_lane(
                 except IntegrityError as exc:
                     status_value = "invalid-output"
                     failure_reason = str(exc)
+                    validation_error = (
+                        exc.as_dict()
+                        if isinstance(exc, ReviewDecisionReferenceError)
+                        else {
+                            "code": "invalid-structured-output",
+                            "path": "$",
+                            "message": str(exc),
+                            "prior_finding_id": None,
+                            "invalid_value": None,
+                            "repairable": False,
+                        }
+                    )
             snapshot_after = git_source_snapshot_digest(owner)
             if status_value == "completed" and snapshot_after != snapshot_before:
                 status_value = "source-changed"
@@ -1308,6 +1531,7 @@ def _execute_structured_lane(
                 "duration_seconds": execution["duration_seconds"],
                 "source_snapshot_digest": snapshot_after,
                 "failure_reason": failure_reason,
+                "validation_error": validation_error,
                 "completed_at": utc_now(),
             }
             _, recorded, _ = state_store.finish_review_lane(
@@ -1347,11 +1571,14 @@ def _execute_structured_lane(
                     owner,
                     workspace,
                     temporary_parent,
+                    input_only=input_only_workspace,
                 )
         assert recorded is not None
         if recorded["status"] == "completed":
             assert payload is not None
             return recorded, payload
+        if recorded["status"] == "invalid-output" and return_invalid_output:
+            return recorded, None
         if recorded["status"] in RETRYABLE_REVIEW_LANE_STATUSES:
             continue
         reason = recorded.get("failure_reason") or (
@@ -1369,6 +1596,534 @@ def _execute_structured_lane(
             f"Review lane {lane_key} failed: status={recorded['status']}; "
             f"reason={reason}"
         )
+
+
+def _historical_invalid_attempt(
+    owner: Path,
+    *,
+    state: dict[str, Any],
+    pack: dict[str, Any],
+    lane_key: str,
+) -> tuple[dict[str, Any], dict[str, Any], ReviewDecisionReferenceError] | None:
+    attempts = _review_lane_entries(
+        state,
+        review_id=pack["review_id"],
+        lane_key=lane_key,
+    )
+    if any(item.get("status") == "completed" for item in attempts):
+        return None
+    attempt = next(
+        (
+            item
+            for item in reversed(attempts)
+            if item.get("status") == "invalid-output"
+        ),
+        None,
+    )
+    if attempt is None:
+        return None
+    if (
+        attempt.get("pack_digest") != pack["pack_digest"]
+        or attempt.get("head_sha") != pack["head_sha"]
+        or attempt.get("source_snapshot_digest")
+        != git_source_snapshot_digest(owner)
+    ):
+        raise IntegrityError(
+            "Historical invalid decision no longer matches the exact review source"
+        )
+    output_relative = attempt.get("output_path")
+    output_digest = attempt.get("output_digest")
+    if not isinstance(output_relative, str) or not isinstance(output_digest, str):
+        raise IntegrityError("Historical invalid decision is missing immutable output")
+    output_path = safe_resolve(owner, output_relative, must_exist=True)
+    if sha256_file(output_path) != output_digest:
+        raise IntegrityError("Historical invalid decision output digest mismatch")
+    raw = read_json(output_path)
+    try:
+        _normalize_structured_payload(
+            raw,
+            pack=pack,
+            payload_kind="decision",
+            lens_id=None,
+        )
+    except ReviewDecisionReferenceError as exc:
+        return attempt, raw, exc
+    except IntegrityError as exc:
+        raise IntegrityError(
+            f"Historical invalid decision is not safely repairable: {exc}"
+        ) from exc
+    raise IntegrityError(
+        "Historical invalid decision now validates but has no completed projection"
+    )
+
+
+def _canonical_prior_finding_map(
+    owner: Path,
+    *,
+    pack: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    required_ids = {
+        item["finding_id"]
+        for item in pack.get("required_prior_findings", [])
+        if isinstance(item, dict) and isinstance(item.get("finding_id"), str)
+    }
+    if not required_ids:
+        return {}
+    prior = pack.get("prior_review")
+    if not isinstance(prior, dict):
+        raise IntegrityError("Repair requires the digest-bound prior ReviewIR")
+    relative = prior.get("result_path")
+    digest = prior.get("result_digest")
+    if not isinstance(relative, str) or not isinstance(digest, str):
+        raise IntegrityError("Repair prior ReviewIR reference is incomplete")
+    path = safe_resolve(owner, relative, must_exist=True)
+    report = read_json(path)
+    canonical_digest = sha256_bytes(
+        json.dumps(
+            report,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    if canonical_digest != digest:
+        raise IntegrityError("Repair prior ReviewIR digest mismatch")
+    findings = {
+        item["id"]: item
+        for item in report.get("findings", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    missing = sorted(required_ids - set(findings))
+    if missing:
+        raise IntegrityError(
+            "Repair prior ReviewIR is missing findings: " + ", ".join(missing)
+        )
+    return {finding_id: findings[finding_id] for finding_id in sorted(required_ids)}
+
+
+def _reserve_replacement_ids(
+    owner: Path,
+    *,
+    state: dict[str, Any],
+    pack: dict[str, Any],
+    raw_decision: dict[str, Any],
+) -> dict[str, str]:
+    used = set(_all_review_findings(owner, state))
+    used.update(
+        item["id"]
+        for item in raw_decision.get("findings", [])
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    )
+    reservations: dict[str, str] = {}
+    for item in raw_decision.get("prior_finding_verdicts", []):
+        if not isinstance(item, dict) or item.get("verdict") not in {
+            "still-open",
+            "regressed",
+        }:
+            continue
+        prior_id = item.get("finding_id")
+        replacement = item.get("replacement_finding_id")
+        if not isinstance(prior_id, str) or (
+            isinstance(replacement, str)
+            and replacement != prior_id
+            and replacement in {
+                finding.get("id")
+                for finding in raw_decision.get("findings", [])
+                if isinstance(finding, dict)
+            }
+        ):
+            continue
+        match = re.fullmatch(r"(.*-R)([0-9]+)", prior_id)
+        if match:
+            prefix = match.group(1)
+            width = len(match.group(2))
+        else:
+            prefix = f"{pack['change_id'].replace('-', '')}-R"
+            width = 3
+        numbers = [
+            int(candidate.group(1))
+            for value in used
+            if (candidate := re.fullmatch(re.escape(prefix) + r"([0-9]+)", value))
+        ]
+        number = max(numbers, default=0) + 1
+        candidate_id = f"{prefix}{number:0{width}d}"
+        while candidate_id in used:
+            number += 1
+            candidate_id = f"{prefix}{number:0{width}d}"
+        used.add(candidate_id)
+        reservations[prior_id] = candidate_id
+    return reservations
+
+
+def _repair_bundle(
+    owner: Path,
+    *,
+    state: dict[str, Any],
+    pack: dict[str, Any],
+    original_entry: dict[str, Any],
+    raw_decision: dict[str, Any],
+    error: ReviewDecisionReferenceError,
+) -> tuple[bytes, dict[str, str], str]:
+    if not error.repairable:
+        raise IntegrityError(
+            f"Decision reference error is not safely repairable: {error}"
+        )
+    prior_findings = _canonical_prior_finding_map(owner, pack=pack)
+    reservations = _reserve_replacement_ids(
+        owner,
+        state=state,
+        pack=pack,
+        raw_decision=raw_decision,
+    )
+    bundle = {
+        "contract": REVIEW_DECISION_REPAIR_CONTRACT,
+        "review_id": pack["review_id"],
+        "original_attempt_id": original_entry["attempt_id"],
+        "original_output_digest": original_entry["output_digest"],
+        "validation_errors": [error.as_dict()],
+        "allowed_ticket_ids": list(pack["tickets"]),
+        "required_prior_finding_ids": list(prior_findings),
+        "canonical_prior_findings": prior_findings,
+        "reserved_replacement_ids": reservations,
+        "raw_decision": raw_decision,
+    }
+    encoded = json.dumps(
+        bundle,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(encoded) > DECISION_REPAIR_INPUT_MAX_BYTES:
+        raise IntegrityError("Decision repair bundle exceeds the 256 KiB limit")
+    error_digest = sha256_bytes(
+        json.dumps(
+            error.as_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    return encoded, reservations, error_digest
+
+
+def _validate_repaired_decision(
+    *,
+    original: dict[str, Any],
+    repaired: dict[str, Any],
+    error: ReviewDecisionReferenceError,
+    reservations: dict[str, str],
+    prior_findings: dict[str, dict[str, Any]],
+) -> None:
+    for field in ("verdict", "summary"):
+        if repaired.get(field) != original.get(field):
+            raise ReviewDecisionReferenceError(
+                f"Decision repair changed semantic field: {field}",
+                code="repair-changed-semantic-decision",
+                path=f"$.{field}",
+                invalid_value=repaired.get(field),
+                repairable=False,
+            )
+    original_prior = {
+        item.get("finding_id"): item
+        for item in original.get("prior_finding_verdicts", [])
+        if isinstance(item, dict)
+    }
+    repaired_prior = {
+        item.get("finding_id"): item
+        for item in repaired.get("prior_finding_verdicts", [])
+        if isinstance(item, dict)
+    }
+    if set(original_prior) != set(repaired_prior):
+        raise ReviewDecisionReferenceError(
+            "Decision repair changed the prior-finding verdict set",
+            code="repair-changed-prior-set",
+            path="$.prior_finding_verdicts",
+            invalid_value=sorted(str(item) for item in repaired_prior),
+            repairable=False,
+        )
+    for finding_id, source in original_prior.items():
+        candidate = repaired_prior[finding_id]
+        for field in ("finding_id", "verdict", "evidence"):
+            if candidate.get(field) != source.get(field):
+                raise ReviewDecisionReferenceError(
+                    f"Decision repair changed prior verdict field: {finding_id}.{field}",
+                    code="repair-changed-prior-verdict",
+                    path=f"$.prior_finding_verdicts[{finding_id}].{field}",
+                    prior_finding_id=(
+                        finding_id if isinstance(finding_id, str) else None
+                    ),
+                    invalid_value=candidate.get(field),
+                    repairable=False,
+                )
+        expected_replacement = reservations.get(str(finding_id))
+        if expected_replacement is not None and candidate.get(
+            "replacement_finding_id"
+        ) != expected_replacement:
+            raise ReviewDecisionReferenceError(
+                f"Decision repair did not use reserved replacement for {finding_id}",
+                code="repair-invalid-reserved-id",
+                path=(
+                    f"$.prior_finding_verdicts[{finding_id}]"
+                    ".replacement_finding_id"
+                ),
+                prior_finding_id=str(finding_id),
+                invalid_value=candidate.get("replacement_finding_id"),
+                repairable=False,
+            )
+        expected_existing_link = source.get("replacement_finding_id")
+        if (
+            error.code == "unexpected-replacement-finding"
+            and error.prior_finding_id == finding_id
+        ):
+            expected_existing_link = None
+        if expected_replacement is None and candidate.get(
+            "replacement_finding_id"
+        ) != expected_existing_link:
+            raise ReviewDecisionReferenceError(
+                f"Decision repair changed a valid replacement link for {finding_id}",
+                code="repair-changed-valid-link",
+                path=(
+                    f"$.prior_finding_verdicts[{finding_id}]"
+                    ".replacement_finding_id"
+                ),
+                prior_finding_id=str(finding_id),
+                invalid_value=candidate.get("replacement_finding_id"),
+                repairable=False,
+            )
+    original_findings = {
+        item.get("id"): item
+        for item in original.get("findings", [])
+        if isinstance(item, dict)
+    }
+    repaired_findings = {
+        item.get("id"): item
+        for item in repaired.get("findings", [])
+        if isinstance(item, dict)
+    }
+    reference_repair_fields = (
+        {"ticket_ids"}
+        if error.code in {
+            "unknown-ticket-id",
+            "ambiguous-ticket-id",
+            "duplicate-ticket-id",
+        }
+        else set()
+    )
+    for finding_id, finding in original_findings.items():
+        candidate = repaired_findings.get(finding_id)
+        if not isinstance(candidate, dict) or any(
+            candidate.get(field) != value
+            for field, value in finding.items()
+            if field not in reference_repair_fields
+        ):
+            raise ReviewDecisionReferenceError(
+                f"Decision repair changed existing finding: {finding_id}",
+                code="repair-changed-existing-finding",
+                path="$.findings",
+                invalid_value=finding_id,
+                repairable=False,
+            )
+    allowed_new = set(reservations.values())
+    actual_new = set(repaired_findings) - set(original_findings)
+    if actual_new != allowed_new:
+        raise ReviewDecisionReferenceError(
+            "Decision repair did not create exactly the reserved findings",
+            code="repair-invalid-finding-set",
+            path="$.findings",
+            invalid_value=sorted(str(item) for item in actual_new),
+            repairable=False,
+        )
+    for prior_id, replacement_id in reservations.items():
+        prior = prior_findings[prior_id]
+        replacement = repaired_findings[replacement_id]
+        for field in (
+            "severity",
+            "kind",
+            "ticket_ids",
+            "requirement_ids",
+            "blocks",
+        ):
+            if replacement.get(field) != prior.get(field):
+                raise ReviewDecisionReferenceError(
+                    f"Replacement {replacement_id} changed classification field: {field}",
+                    code="repair-changed-finding-classification",
+                    path=f"$.findings[{replacement_id}].{field}",
+                    prior_finding_id=prior_id,
+                    invalid_value=replacement.get(field),
+                    repairable=False,
+                )
+
+
+def _execute_decision_repair(
+    owner: Path,
+    *,
+    change_id: str,
+    state: dict[str, Any],
+    pack: dict[str, Any],
+    context_path: str,
+    root_operation_id: str,
+    source_lane_key: str,
+    original_entry: dict[str, Any],
+    raw_decision: dict[str, Any],
+    error: ReviewDecisionReferenceError,
+    effort: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    repair_bytes, reservations, error_digest = _repair_bundle(
+        owner,
+        state=state,
+        pack=pack,
+        original_entry=original_entry,
+        raw_decision=raw_decision,
+        error=error,
+    )
+    prior_findings = _canonical_prior_finding_map(owner, pack=pack)
+    lane_key = f"{source_lane_key}:repair"
+    _update_pipeline(
+        owner,
+        change_id=change_id,
+        review_id=pack["review_id"],
+        operation_id=root_operation_id,
+        stage="repairing",
+        create=True,
+        failure_reason=str(error),
+        failure_kind="model-output",
+    )
+    entry, repaired = _execute_structured_lane(
+        owner,
+        change_id=change_id,
+        pack=pack,
+        context_path=context_path,
+        root_operation_id=root_operation_id,
+        lane_key=lane_key,
+        lane_kind="decision-repair",
+        model=SEMANTIC_MODEL,
+        effort=effort,
+        prompt_text=_render_prompt("repair-decision.md", {}),
+        schema_path=SCHEMAS_ROOT / "review-decision.schema.json",
+        payload_kind="decision",
+        extra_files={"repair.json": repair_bytes},
+        max_attempts=2,
+        return_invalid_output=True,
+        input_only_workspace=True,
+        attempt_metadata={
+            "repair_contract": REVIEW_DECISION_REPAIR_CONTRACT,
+            "repair_source_lane_key": source_lane_key,
+            "repair_original_attempt_id": original_entry["attempt_id"],
+            "repair_original_output_digest": original_entry["output_digest"],
+            "repair_error_code": error.code,
+            "repair_error_digest": error_digest,
+            "repair_reserved_ids": reservations,
+        },
+    )
+    if repaired is None:
+        if entry.get("status") == "running":
+            return entry, None
+        reason = entry.get("failure_reason") or "decision repair failed"
+        _update_pipeline(
+            owner,
+            change_id=change_id,
+            review_id=pack["review_id"],
+            operation_id=root_operation_id,
+            stage="repairing",
+            status="failed",
+            failure_reason=reason,
+            failure_kind="invalid-repair-output",
+        )
+        raise IntegrityError(
+            f"Decision repair failed without another model retry: {reason}"
+        )
+    _validate_repaired_decision(
+        original=raw_decision,
+        repaired=repaired,
+        error=error,
+        reservations=reservations,
+        prior_findings=prior_findings,
+    )
+    return entry, repaired
+
+
+def _execute_decision_lane(
+    owner: Path,
+    *,
+    change_id: str,
+    pack: dict[str, Any],
+    context_path: str,
+    root_operation_id: str,
+    lane_key: str,
+    lane_kind: str,
+    effort: str,
+    prompt_text: str,
+    extra_files: dict[str, Path | bytes] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    state = StateStore(owner).load(change_id)
+    historical = _historical_invalid_attempt(
+        owner,
+        state=state,
+        pack=pack,
+        lane_key=lane_key,
+    )
+    if historical is None:
+        entry, decision = _execute_structured_lane(
+            owner,
+            change_id=change_id,
+            pack=pack,
+            context_path=context_path,
+            root_operation_id=root_operation_id,
+            lane_key=lane_key,
+            lane_kind=lane_kind,
+            model=SEMANTIC_MODEL,
+            effort=effort,
+            prompt_text=prompt_text,
+            schema_path=SCHEMAS_ROOT / "review-decision.schema.json",
+            payload_kind="decision",
+            extra_files=extra_files,
+            return_invalid_output=True,
+        )
+        if decision is not None or entry.get("status") == "running":
+            return entry, decision
+        output_path = safe_resolve(owner, entry["output_path"], must_exist=True)
+        raw_decision = read_json(output_path)
+        try:
+            _normalize_structured_payload(
+                raw_decision,
+                pack=pack,
+                payload_kind="decision",
+                lens_id=None,
+            )
+        except ReviewDecisionReferenceError as exc:
+            error = exc
+        except IntegrityError as exc:
+            _update_pipeline(
+                owner,
+                change_id=change_id,
+                review_id=pack["review_id"],
+                operation_id=root_operation_id,
+                stage=lane_key,
+                status="failed",
+                failure_reason=str(exc),
+                failure_kind="invalid-repair-output",
+            )
+            raise IntegrityError(
+                f"Semantic output is not eligible for bounded repair: {exc}"
+            ) from exc
+        else:
+            raise IntegrityError("Invalid semantic output has no reference error")
+        original_entry = entry
+    else:
+        original_entry, raw_decision, error = historical
+    return _execute_decision_repair(
+        owner,
+        change_id=change_id,
+        state=StateStore(owner).load(change_id),
+        pack=pack,
+        context_path=context_path,
+        root_operation_id=root_operation_id,
+        source_lane_key=lane_key,
+        original_entry=original_entry,
+        raw_decision=raw_decision,
+        error=error,
+        effort=effort,
+    )
 
 
 def _lane_provenance(entry: dict[str, Any]) -> dict[str, Any]:
@@ -1394,7 +2149,36 @@ def _lane_provenance(entry: dict[str, Any]) -> dict[str, Any]:
             "transcript_path",
             "transcript_digest",
             "source_snapshot_digest",
+            "repair_contract",
+            "repair_source_lane_key",
+            "repair_original_attempt_id",
+            "repair_original_output_digest",
+            "repair_error_code",
+            "repair_error_digest",
+            "repair_reserved_ids",
+            "input_bundle_digest",
         )
+    }
+
+
+def _repair_provenance(entry: dict[str, Any]) -> dict[str, Any] | None:
+    if entry.get("repair_contract") != REVIEW_DECISION_REPAIR_CONTRACT:
+        return None
+    return {
+        "contract": REVIEW_DECISION_REPAIR_CONTRACT,
+        "source_lane_key": entry.get("repair_source_lane_key"),
+        "original_attempt_id": entry.get("repair_original_attempt_id"),
+        "original_output_digest": entry.get("repair_original_output_digest"),
+        "error_code": entry.get("repair_error_code"),
+        "error_digest": entry.get("repair_error_digest"),
+        "input_bundle_digest": entry.get("input_bundle_digest"),
+        "repair_attempt_id": entry.get("attempt_id"),
+        "repair_output_digest": entry.get("output_digest"),
+        "model": entry.get("model"),
+        "reasoning_effort": entry.get("reasoning_effort"),
+        "started_at": entry.get("started_at"),
+        "completed_at": entry.get("completed_at"),
+        "transcript_digest": entry.get("transcript_digest"),
     }
 
 
@@ -1491,13 +2275,20 @@ def _update_pipeline(
         updates["failure_kind"] = failure_kind
     if status in {"completed", "failed", "failed-finalize"}:
         updates["completed_at"] = utc_now()
-    StateStore(owner).update_review_pipeline(
-        change_id,
-        review_id=review_id,
-        operation_id=operation_id,
-        updates=updates,
-        create=create,
-    )
+    for lock_attempt in range(21):
+        try:
+            StateStore(owner).update_review_pipeline(
+                change_id,
+                review_id=review_id,
+                operation_id=operation_id,
+                updates=updates,
+                create=create,
+            )
+            return
+        except LockError:
+            if lock_attempt == 20:
+                raise
+            time.sleep(0.05)
 
 
 def _build_review_ir(
@@ -1553,6 +2344,16 @@ def _build_review_ir(
                 "transcript_digest": final_full_entry["transcript_digest"],
             }
         )
+    repairs = [
+        repair
+        for entry in (
+            independent_entry,
+            reconciliation_entry,
+            final_full_entry,
+        )
+        if entry is not None
+        if (repair := _repair_provenance(entry)) is not None
+    ]
     lanes: dict[str, Any] = {
         "semantic": {
             "status": "completed",
@@ -1567,6 +2368,7 @@ def _build_review_ir(
             "transcript_path": independent_entry["transcript_path"],
             "transcript_digest": independent_entry["transcript_digest"],
             "passes": passes,
+            **({"repairs": repairs} if repairs else {}),
         },
         "reconciliation": _lane_provenance(reconciliation_entry),
         "specialists": [
@@ -1603,6 +2405,11 @@ def _build_review_ir(
     return {
         "schema_version": 2,
         "runner_contract": REVIEW_RUNNER_CONTRACT,
+        **(
+            {"decision_repair_contract": REVIEW_DECISION_REPAIR_CONTRACT}
+            if repairs
+            else {}
+        ),
         **(
             {"identifier_contract": pack["identifier_contract"]}
             if pack.get("identifier_contract") == REVIEW_IDENTIFIER_CONTRACT
@@ -1893,78 +2700,25 @@ def _resume_failed_finalization(
     if decision is None:
         if terminal_reference_error is None:
             raise IntegrityError("Failed-finalize recovery has no terminal decision")
-        prompt_values = _review_prompt_values(pack)
-        if final_full_entry is not None:
-            correction_lane_key = "semantic:final-full:identifier-correction"
-            correction_prompt = _render_prompt("final-full.md", prompt_values)
-            targeted_bytes: Path | bytes
-            if reconciliation_decision is not None:
-                targeted_bytes = json.dumps(
-                    reconciliation_decision,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ).encode("utf-8")
-            else:
-                targeted_bytes = safe_resolve(
-                    owner,
-                    reconciliation_entry["output_path"],
-                    must_exist=True,
-                )
-            extra_files: dict[str, Path | bytes] = {
-                "native.txt": native_bytes,
-                "semantic-independent.json": json.dumps(
-                    independent_decision,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ).encode("utf-8"),
-                "targeted-decision.json": targeted_bytes,
-                **{
-                    f"specialists/{name}": payload
-                    for name, payload in specialist_payloads.items()
-                },
-            }
-        else:
-            correction_lane_key = "reconciliation:identifier-correction"
-            correction_prompt = _render_prompt("reconcile.md", prompt_values)
-            extra_files = {
-                "native.txt": native_bytes,
-                "semantic-independent.json": json.dumps(
-                    independent_decision,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ).encode("utf-8"),
-                **{
-                    f"specialists/{name}": payload
-                    for name, payload in specialist_payloads.items()
-                },
-            }
-        _update_pipeline(
-            owner,
-            change_id=change_id,
-            review_id=review_id,
-            operation_id=pipeline_operation_id,
-            stage=correction_lane_key,
-            create=True,
-            failure_reason=str(terminal_reference_error),
-            failure_kind="model-output",
+        source_entry = final_full_entry or reconciliation_entry
+        source_lane_key = (
+            "semantic:final-full" if final_full_entry is not None else "reconciliation"
         )
-        correction_entry, corrected_decision = _execute_structured_lane(
+        raw_decision = read_json(
+            safe_resolve(owner, source_entry["output_path"], must_exist=True)
+        )
+        correction_entry, corrected_decision = _execute_decision_repair(
             owner,
             change_id=change_id,
+            state=state,
             pack=pack,
             context_path=context_path,
             root_operation_id=pipeline_operation_id,
-            lane_key=correction_lane_key,
-            lane_kind=(
-                "semantic" if final_full_entry is not None else "reconciliation"
-            ),
-            model=SEMANTIC_MODEL,
+            source_lane_key=source_lane_key,
+            original_entry=source_entry,
+            raw_decision=raw_decision,
+            error=terminal_reference_error,
             effort=_semantic_review_effort(state),
-            prompt_text=correction_prompt,
-            schema_path=SCHEMAS_ROOT / "review-decision.schema.json",
-            payload_kind="decision",
-            extra_files=extra_files,
-            max_attempts=1,
         )
         if corrected_decision is None:
             return {
@@ -2235,7 +2989,7 @@ def review_run(
         operation_id=pipeline_operation_id,
         stage=f"semantic:{independent_kind}",
     )
-    independent_entry, independent_decision = _execute_structured_lane(
+    independent_entry, independent_decision = _execute_decision_lane(
         owner,
         change_id=change_id,
         pack=pack,
@@ -2243,11 +2997,8 @@ def review_run(
         root_operation_id=pipeline_operation_id,
         lane_key=f"semantic:{independent_kind}",
         lane_kind="semantic",
-        model=SEMANTIC_MODEL,
         effort=semantic_effort,
         prompt_text=independent_prompt,
-        schema_path=SCHEMAS_ROOT / "review-decision.schema.json",
-        payload_kind="decision",
     )
     if independent_decision is None:
         return {
@@ -2275,7 +3026,7 @@ def review_run(
         operation_id=pipeline_operation_id,
         stage="reconciliation",
     )
-    reconciliation_entry, decision = _execute_structured_lane(
+    reconciliation_entry, decision = _execute_decision_lane(
         owner,
         change_id=change_id,
         pack=pack,
@@ -2283,11 +3034,8 @@ def review_run(
         root_operation_id=pipeline_operation_id,
         lane_key="reconciliation",
         lane_kind="reconciliation",
-        model=SEMANTIC_MODEL,
         effort=semantic_effort,
         prompt_text=reconciliation_prompt,
-        schema_path=SCHEMAS_ROOT / "review-decision.schema.json",
-        payload_kind="decision",
         extra_files={
             "native.txt": native_bytes,
             "semantic-independent.json": json.dumps(
@@ -2321,7 +3069,7 @@ def review_run(
             operation_id=pipeline_operation_id,
             stage="semantic:final-full",
         )
-        final_full_entry, final_decision = _execute_structured_lane(
+        final_full_entry, final_decision = _execute_decision_lane(
             owner,
             change_id=change_id,
             pack=pack,
@@ -2329,11 +3077,8 @@ def review_run(
             root_operation_id=pipeline_operation_id,
             lane_key="semantic:final-full",
             lane_kind="semantic",
-            model=SEMANTIC_MODEL,
             effort=semantic_effort,
             prompt_text=final_prompt,
-            schema_path=SCHEMAS_ROOT / "review-decision.schema.json",
-            payload_kind="decision",
             extra_files={
                 "native.txt": native_bytes,
                 "semantic-independent.json": json.dumps(

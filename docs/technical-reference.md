@@ -232,13 +232,50 @@ inputs.
 несколько lanes, а неизвестная ссылка обнаруживалась только при ReviewIR import.
 Для старого `failed-finalize` DLS сначала выполняет deterministic reassembly из
 проверенных completed attempts. Однозначная ссылка исправляется без model call;
-неоднозначная может вызвать ровно одну новую terminal decision lane. Native,
-specialists и independent semantic при этом не повторяются.
+логически противоречивый decision передаётся в bounded repair, а не в повторную
+terminal или whole-epic lane. Native, specialists и independent semantic при
+этом не повторяются.
+
+### Decision repair вместо слепого semantic retry
+
+В `v0.4.2` межполевая ошибка semantic JSON считалась обычным `invalid-output`.
+Runner повторял исходную lane с тем же prompt, но не передавал модели причину
+отказа. Это могло дважды оплатить один и тот же анализ и получить тот же дефект,
+как в случае `still-open` без обязательного replacement finding.
+
+Новый контракт `dls-decision-repair/v1` разделяет два класса отказов:
+
+- timeout, API failure, missing output и output cap могут один раз повторить
+  транспортный вызов исходной lane;
+- логически противоречивый, но parseable decision не повторяет анализ. DLS
+  запускает отдельную compact Sol repair lane.
+
+Repair получает только immutable raw decision, структурированную ошибку с JSON
+path, допустимые ticket/prior IDs, полные canonical prior findings и заранее
+зарезервированные DLS replacement IDs. Временный Git workspace не содержит
+product source, native output, specialist results, sibling semantic drafts или
+пользовательскую конфигурацию. Общий repair bundle ограничен 256 KiB.
+
+DLS не сочиняет finding самостоятельно. Модель возвращает полный decision по той
+же strict schema, но может менять только ссылочную структуру, необходимую для
+исправления конкретной ошибки. Verdict, summary, prior verdicts, evidence и уже
+валидные findings сохраняются; classification нового replacement finding должна
+совпасть с canonical prior finding. Повторное логически некорректное repair-
+решение не запускается ещё раз. Только инфраструктурный отказ самой repair lane
+получает один transport retry.
+
+До model call state атомарно хранит отдельный repair attempt и digest контракта.
+ReviewIR v2 может содержать state-owned `semantic.repairs`: original и repair
+attempt IDs, raw/error/input/output digests, model/effort, timestamps и transcript
+digest. Import сверяет эти поля с DLS state и неизменным raw output. Новый pack
+объявляет `decision_repair_contract: dls-decision-repair/v1`; старые ReviewPack и
+ReviewIR остаются читаемыми и не переписываются.
 
 `resume-review` означает повторяемую deterministic finalization,
-`retry-review-decision` — ограниченное исправление model decision, а
-`inspect-review-integrity` — tampering или drift, которые нельзя повторять
-автоматически. Предварительные findings во всех трёх случаях остаются скрыты до
+`resume-review-repair` — продолжение одной compact repair lane и ещё не
+выполненных downstream lanes, `inspect-review-output` — окончательно
+некорректный или небезопасный model output, а `inspect-review-integrity` —
+tampering или drift. Предварительные findings во всех случаях остаются скрыты до
 успешного канонического импорта.
 
 Canonical ticket verdicts не доверяются модели. DLS механически связывает
@@ -251,14 +288,15 @@ Token counters являются локальной диагностическо�
 cached context и повторные tool turns, поэтому не трактуются как точная стоимость
 API. DLS не отправляет эти данные во внешний analytics service.
 
-Подтверждённые `orphan`, `timeout`, `output-cap`, missing или invalid structured
-output получают не более одной автоматической повторной попытки. Drift HEAD,
-source, definition или pack не повторяется автоматически. Timeout одной попытки
-— 30 минут; final output ограничен 256 KiB, JSONL transcript — 1 MiB с явным
-признаком truncation. Model, effort, prompt, schema, context, pack и HEAD входят
-в digest lane contract: после исправления самого DLS старая failed attempt
-остаётся в истории, но не расходует retry budget нового контракта. Completed lane
-переиспользуется только при точном совпадении этого digest.
+Подтверждённые `orphan`, `timeout`, `api-failure`, `output-cap` или missing output
+получают не более одной автоматической транспортной попытки. `invalid-output`
+никогда не повторяет исходный semantic-анализ: безопасная межполевая ошибка идёт
+в compact repair, остальные случаи получают `inspect-review-output`. Drift HEAD,
+source, definition или pack не запускает модель. Timeout одной попытки — 30
+минут; final output ограничен 256 KiB, JSONL transcript — 1 MiB с явным признаком
+truncation. Model, effort, prompt, schema, context, pack, HEAD и repair input
+входят в digest lane contract. Completed lane переиспользуется только при точном
+совпадении этого digest.
 
 Новые packs помечаются `runner_contract: dls-review-runner/v1`. Для них import
 доверяет provenance только completed attempts из DLS state: модель возвращает
@@ -286,6 +324,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.4.2`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.4.3`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

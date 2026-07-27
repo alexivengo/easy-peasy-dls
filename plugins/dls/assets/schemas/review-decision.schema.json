@@ -134,6 +134,7 @@
           ]
         },
         "replacement_finding_id": {
+          "description": "Must be null for verified/waived. For still-open/regressed it must name a new complete finding in this decision and must differ from finding_id.",
           "type": [
             "string",
             "null"
