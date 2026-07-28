@@ -1286,7 +1286,7 @@ def _recover_completed_token_budget_lane(
     aggregate_total = sum(
         value
         for item in state.get("reviews", [])
-        if isinstance(item, dict)
+        if isinstance(item, dict) and item.get("review_id") == pack["review_id"]
         for value in [processed_tokens(item.get("usage"))]
         if value is not None
     )
@@ -1515,19 +1515,6 @@ def _execute_structured_lane(
             review_id=pack["review_id"],
             lane_key=lane_key,
         )
-        recovered_budget = _recover_completed_token_budget_lane(
-            owner,
-            state_store=state_store,
-            change_id=change_id,
-            pack=pack,
-            attempts=attempts,
-            lane_contract_digest=lane_contract_digest,
-            effective_budget=effective_budget,
-            payload_kind=payload_kind,
-            lens_id=lens_id,
-        )
-        if recovered_budget is not None:
-            return recovered_budget
         contract_attempts = [
             item
             for item in attempts
@@ -1557,6 +1544,19 @@ def _execute_structured_lane(
                 },
             )
             continue
+        recovered_budget = _recover_completed_token_budget_lane(
+            owner,
+            state_store=state_store,
+            change_id=change_id,
+            pack=pack,
+            attempts=attempts,
+            lane_contract_digest=lane_contract_digest,
+            effective_budget=effective_budget,
+            payload_kind=payload_kind,
+            lens_id=lens_id,
+        )
+        if recovered_budget is not None:
+            return recovered_budget
         completed = next(
             (
                 item

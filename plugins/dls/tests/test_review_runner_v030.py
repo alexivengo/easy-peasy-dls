@@ -1121,6 +1121,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 item
                 for item in StateStore(root).load("C001")["reviews"]
                 if item.get("lane_key") == "semantic:full"
+                and item.get("review_id") == completed["review_id"]
             ]
             self.assertEqual(
                 [item["status"] for item in semantic],
@@ -1159,6 +1160,44 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                     failed["next_action"]["id"],
                     "inspect-review-budget",
                 )
+                store = StateStore(root)
+                _, _, claimed = store.claim_review_lane(
+                    "C001",
+                    attempt={
+                        "review_id": "historical-review",
+                        "kind": "semantic",
+                        "lane_key": "semantic:full",
+                        "attempt_id": "historical-usage",
+                        "attempt_ordinal": 1,
+                        "operation_id": "historical-usage",
+                        "runner_pid": os.getpid(),
+                        "runner_contract": REVIEW_RUNNER_CONTRACT,
+                        "lane_contract_digest": "historical-contract",
+                        "head_sha": git(root, "rev-parse", "HEAD"),
+                        "pack_digest": "historical-pack",
+                        "model": "gpt-5.6-sol",
+                        "reasoning_effort": "high",
+                        "started_at": utc_now(),
+                    },
+                    operation_kind="review-run:semantic:full",
+                    max_attempts=1,
+                )
+                self.assertTrue(claimed)
+                store.finish_review_lane(
+                    "C001",
+                    attempt_id="historical-usage",
+                    expected_status="running",
+                    updates={
+                        "status": "completed",
+                        "usage": {
+                            "input_tokens": 1_000_000,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 1,
+                            "reasoning_output_tokens": 0,
+                        },
+                        "completed_at": utc_now(),
+                    },
+                )
                 config.write_text(
                     config.read_text(encoding="utf-8")
                     .replace("aggregate_tokens = 100", "aggregate_tokens = 300")
@@ -1183,6 +1222,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 item
                 for item in StateStore(root).load("C001")["reviews"]
                 if item.get("lane_key") == "semantic:full"
+                and item.get("review_id") == completed["review_id"]
             ]
             self.assertEqual(len(semantic), 1)
             self.assertEqual(semantic[0]["status"], "completed")
