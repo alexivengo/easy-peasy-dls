@@ -3605,6 +3605,17 @@ def _native_plaintext_projection(text: str) -> dict[str, Any]:
     if clean_match:
         summary = clean_match.group(1).strip() or "No actionable review findings."
         return {"summary": summary, "findings": []}
+    clean_sentence = re.search(
+        r"(?:^|(?<=[.!?])\s+)"
+        r"no actionable (?:review )?(?:findings|regressions) "
+        r"(?:were )?(?:identified|found)"
+        r"(?: in (?:the )?(?:reviewed )?(?:diff|changes|candidate))?"
+        r"(?:[.!?](?:\s|$)|$)",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    if clean_sentence:
+        return {"summary": stripped, "findings": []}
 
     lines = stripped.splitlines()
     comment_pattern = re.compile(

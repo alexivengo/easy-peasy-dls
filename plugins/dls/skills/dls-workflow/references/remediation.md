@@ -1,6 +1,9 @@
 # DLS remediation
 
-Use this procedure in the existing implementation task after an imported `not-clear` review. Product source has one writer.
+Prefer a fresh implementation task after an imported `not-clear` review. The
+user handoff is only `Исправь findings последнего review CHANGE_ID.` Reusing the
+previous implementation task is allowed but advisory telemetry may recommend a
+fresh one. Product source has one writer.
 
 ## 1. Verify canonical input before edits
 
@@ -58,4 +61,6 @@ On another typed blocking action, perform that action in this implementation tas
 Handoff only the short review request. The reviewer resolves the registered worktree, ignores stale unfinished packs, and may create the current remediation pack automatically.
 
 Stop this implementation task after `candidate-ready` returns
-`open-review-task`. Never invoke `review-run` from the remediation task.
+`open-review-task`. Recommend a fresh review task with only
+`Проведи code review CHANGE_ID.` Never invoke `review-run` from the remediation
+task and never paste the manifest or full finding list into the handoff.

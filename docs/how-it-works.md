@@ -122,6 +122,17 @@ Runner выбирает только pack текущего HEAD. Для повт
 может перехватить новую проверку. Итогом всегда служит импортированный
 `review_result_path`, а не сырой transcript модели.
 
+Между задачами достаточно двух коротких handoff-команд: `Исправь findings
+последнего review EPIC-01.` и затем `Проведи code review EPIC-01.` DLS сам
+находит canonical manifest и exact-HEAD pack; копировать findings, SHA или пути
+не требуется.
+
+Локальная telemetry отмечает `fresh`, `continued` и `reused`. Retry и новый HEAD
+того же remediation manifest считаются продолжением одного cycle. Новый ReviewIR
+или совмещение implementation и review в одной длинной задаче считаются reuse и
+дают одно неблокирующее предупреждение. Без `CODEX_THREAD_ID` процесс продолжает
+работать со статусом `unavailable`.
+
 ## Что остаётся за человеком
 
 Только человек:
@@ -151,5 +162,7 @@ Runner выбирает только pack текущего HEAD. Для повт
 - generated status не переписывает authored definition;
 - routine work не получает пакет документов для critical work;
 - новые сессии используют manifest вместо копирования старого диалога.
+- reuse длинной Codex-задачи измеряется отдельно от child review-lanes, чтобы
+  controller/context overhead не скрывался в общей цифре.
 
 Это не гарантирует фиксированное число токенов: сложность задач различается. Цель — убрать предсказуемые повторы и оставить модели только работу, требующую понимания.

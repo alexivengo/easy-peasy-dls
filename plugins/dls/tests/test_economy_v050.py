@@ -165,6 +165,8 @@ class EconomyV050Tests(unittest.TestCase):
             self.assertEqual(len(result["lanes"]), 3)
             self.assertTrue(result["lanes"][-1]["retry"])
             self.assertIsNone(result["lanes"][0]["usage"])
+            self.assertEqual(result["lanes"][0]["usage_source"], "reported-zero")
+            self.assertIn("native-reported-zero", result["completeness_reasons"])
 
     def test_codex_adapter_uses_current_turn_delta_and_filters_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

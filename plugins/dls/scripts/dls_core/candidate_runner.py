@@ -69,7 +69,12 @@ def _blocked(
     failed_command: str | None = None,
     failure_excerpt: str | None = None,
     log_path: str | None = None,
+    task_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if task_context is None:
+        from .telemetry import unavailable_task_context
+
+        task_context = unavailable_task_context("implementation")
     result: dict[str, Any] = {
         "ok": True,
         "dry_run": dry_run,
@@ -82,6 +87,7 @@ def _blocked(
         "phase": "preflight" if run_id is None else "validating",
         "next_action": _next_action(action, detail),
         "review_pack_path": None,
+        "task_context": task_context,
     }
     if failed_command is not None:
         result["failed_command"] = failed_command
@@ -415,10 +421,11 @@ def _run_response(
     current_head: str | None = None,
     exact_head: bool | None = None,
     prepared: bool | None = None,
+    task_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     status = run.get("status", "running")
     if status == "completed":
-        action = _next_action("open-review-task", run.get("review_pack_path", ""))
+        action = _next_action("open-review-task", "candidate is ready")
     elif status == "blocked":
         action = run.get("next_action") or _next_action("fix-validation", "validation failed")
     elif status == "failed":
@@ -461,6 +468,12 @@ def _run_response(
             "run-candidate-ready",
             "historical candidate run is not a prepared exact-HEAD handoff",
         )
+    if task_context is None:
+        task_context = run.get("task_context")
+    if not isinstance(task_context, dict):
+        from .telemetry import unavailable_task_context
+
+        task_context = unavailable_task_context("implementation")
     result: dict[str, Any] = {
         "ok": True,
         "dry_run": False,
@@ -485,6 +498,7 @@ def _run_response(
         "prepared": prepared,
         "failed_command": run.get("failed_command"),
         "next_action": action,
+        "task_context": task_context,
     }
     if diagnostic and isinstance(run.get("validation_failure"), dict):
         failure = copy.deepcopy(run["validation_failure"])
@@ -570,6 +584,7 @@ def _candidate_ready_impl(
     extra_commands: list[str],
     operation_id: str | None,
     dry_run: bool = False,
+    bind_context: bool = True,
 ) -> dict[str, Any]:
     owner, owner_selection = _owner_root(root, change_id)
     if not is_git_repo(owner):
@@ -748,6 +763,21 @@ def _candidate_ready_impl(
     if parent_run_id == run_id:
         parent_run_id = parent_run.get("parent_run_id")
     declaration_digest = _declaration_digest(statuses)
+    from .telemetry import candidate_task_context
+
+    task_context = candidate_task_context(
+        owner,
+        change_id=change_id,
+        operation_id=effective_operation_id,
+        definition_digest=definition_digest,
+        review_base_sha=str(effective_base),
+        canonical_review_id=prior_review.get("review_id") if prior_review else None,
+        canonical_review_result_digest=(
+            prior_review.get("result_digest") if prior_review else None
+        ),
+        remediation_manifest_digest=manifest_digest,
+        record=bind_context and not dry_run,
+    )
     command_records = [
         {
             "command_id": command_id,
@@ -778,6 +808,7 @@ def _candidate_ready_impl(
         "declaration_source": declaration_source,
         "review_pack_path": None,
         "next_action": _next_action("run-candidate-ready", "execute trusted validation"),
+        "task_context": task_context,
     }
     if dry_run:
         return projected
@@ -795,6 +826,7 @@ def _candidate_ready_impl(
             "head_sha": head_sha,
             "source_digest": source_digest,
             "definition_digest": definition_digest,
+            "review_base_sha": str(effective_base),
             "review_mode": review_mode,
             "candidate_run_contract": CANDIDATE_RUN_CONTRACT,
             "parent_run_id": parent_run_id,
@@ -810,6 +842,7 @@ def _candidate_ready_impl(
             "commands": command_records,
             "finding_dispositions": statuses,
             "started_at": utc_now(),
+            "task_context": task_context,
         },
     )
     if not claimed:
@@ -863,6 +896,7 @@ def _candidate_ready_impl(
                 current_head=head_sha,
                 exact_head=True,
                 prepared=prepared,
+                task_context=task_context,
             )
     evidence_paths: list[str] = []
     for command_id in commands:
@@ -1003,6 +1037,7 @@ def _candidate_ready_impl(
                 failed_command=command_id,
                 failure_excerpt=excerpt,
                 log_path=log_path,
+                task_context=task_context,
             )
         if not isinstance(evidence_path, str):
             raise IntegrityError(f"Validation produced no evidence path: {command_id}")
@@ -1125,6 +1160,7 @@ def _candidate_ready_impl(
         owner=owner,
         owner_selection=owner_selection,
         run=completed_run,
+        task_context=task_context,
     )
     result["changed"] = changed
     result["finding_counts"] = {
@@ -1161,6 +1197,7 @@ def candidate_ready(
     extra_commands: list[str],
     operation_id: str | None,
     dry_run: bool = False,
+    _bind_task_context: bool = True,
 ) -> dict[str, Any]:
     """Run candidate orchestration and never leave this process recorded as live."""
     try:
@@ -1173,6 +1210,7 @@ def candidate_ready(
             extra_commands=extra_commands,
             operation_id=operation_id,
             dry_run=dry_run,
+            bind_context=_bind_task_context,
         )
     except Exception as exc:
         if not dry_run:
@@ -1223,6 +1261,8 @@ def candidate_status(
     else:
         runs = [item for item in runs if item.get("head_sha") == current_head]
     if not runs:
+        from .telemetry import unavailable_task_context
+
         return {
             "ok": True,
             "change_id": change_id,
@@ -1241,6 +1281,7 @@ def candidate_status(
             "exact_head": False,
             "prepared": False,
             "next_action": _next_action("run-candidate-ready", "no candidate run exists"),
+            "task_context": unavailable_task_context("implementation"),
         }
     selected = runs[-1]
     exact_head = selected.get("head_sha") == current_head
@@ -1252,7 +1293,22 @@ def candidate_status(
             run=selected,
             current_head=current_head,
         ) is not None
-    return _run_response(
+    from .telemetry import candidate_task_context
+
+    inspected_context = candidate_task_context(
+        owner,
+        change_id=change_id,
+        operation_id=str(selected.get("operation_id") or "candidate-status"),
+        definition_digest=selected.get("definition_digest"),
+        review_base_sha=selected.get("review_base_sha"),
+        canonical_review_id=selected.get("canonical_review_id"),
+        canonical_review_result_digest=selected.get(
+            "canonical_review_result_digest"
+        ),
+        remediation_manifest_digest=selected.get("remediation_manifest_digest"),
+        record=False,
+    )
+    response = _run_response(
         change_id=change_id,
         owner=owner,
         owner_selection=owner_selection,
@@ -1261,4 +1317,12 @@ def candidate_status(
         current_head=current_head,
         exact_head=exact_head,
         prepared=prepared,
+        task_context=inspected_context,
     )
+    if not diagnostic:
+        for key in ("active_command", "failed_command"):
+            if response.get(key) is None:
+                response.pop(key, None)
+        if not response.get("remaining_commands"):
+            response.pop("remaining_commands", None)
+    return response

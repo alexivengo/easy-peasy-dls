@@ -256,6 +256,15 @@ native результатом. Для routine projection также содерж
 Повторный вызов после обновления DLS может построить projection из уже
 завершённого raw output без нового native model call.
 
+Release-gate v0.6.1 обнаружил ещё один безопасно восстанавливаемый вариант
+clean presentation: Codex завершил анализ фразой `No actionable regressions were
+identified in the reviewed diff`, но v0.6.0 принимал только начальные маркеры
+`review-clear`/`no findings`. v0.6.1 распознаёт эту точную самостоятельную
+clean-фразу, но по-прежнему отклоняет неоднозначные продолжения вроде `..., but
+an issue remains`. Existing raw output и digest не переписываются; invalid-output
+attempt восстанавливается штатной plaintext projection без повторного native
+model call.
+
 Все DLS-owned semantic decisions используют repository-owned
 prompt templates и schemas. Перед модельным вызовом DLS локально проверяет
 strict Structured Outputs contract: каждый object запрещает дополнительные
@@ -376,15 +385,51 @@ release/production-only note сохраняется в ReviewIR, но не де�
 ticket `not-clear`. Общий review verdict выводится из тех же stage-correct
 relations.
 
-`review-metrics` возвращает `dls-review-metrics/v1`: child lanes, retries,
-repairs, elapsed, command events и input/cached/output/reasoning tokens.
+### Task context и короткий handoff
+
+`candidate-ready`, `candidate-status`, `review-run`, `review-status`,
+`delivery-status` и `review-metrics` возвращают безопасный объект
+`dls-task-context/v1`. Он различает свежую задачу (`fresh`), продолжение того же
+canonical cycle (`continued`), reuse задачи для другого cycle или роли
+(`reused`) и отсутствие доступного Codex identifier (`unavailable`).
+
+Implementation cycle определяется definition approval + review base для первого
+candidate либо canonical ReviewIR + remediation manifest для remediation.
+Descendant HEAD одного manifest не создаёт новый cycle. Review cycle определяется
+точным ReviewPack ID и digest. Совмещение implementation и независимого review в
+одной задаче помечается `reused/cross-role`; routine fast-path является
+намеренным исключением.
+
+`reused` не меняет exit code и основной `next_action`: stream один раз сообщает
+`context-warning`, а payload рекомендует `open-fresh-task`. Raw thread/turn ID и
+локальная ссылка на rollout остаются только в ignored
+`.dls/cache/telemetry`. State, stdout, metrics и canonical artifacts содержат
+только классификацию, роль и безопасные counts. Отсутствующая или повреждённая
+необязательная telemetry даёт `unavailable`; symlink/path traversal остаётся
+integrity error.
+
+Нормальный handoff поэтому состоит из одной строки: `Исправь findings последнего
+review CHANGE_ID.` или `Проведи code review CHANGE_ID.` Manifest, findings, SHA
+и пути повторно в контекст модели не копируются.
+
+`review-metrics` возвращает обратно совместимый `dls-review-metrics/v1`: child
+lanes, retries, repairs, elapsed, command events и
+input/cached/output/reasoning tokens. Для каждой lane указывается
+`usage_source: state | transcript | reported-zero | unavailable`, cached-input
+ratio, processed tokens на command event и безопасная сводка model-facing
+context: compact/large-context, bytes, words и input count. `--verbose` добавляет
+только counts inputs по reason, без путей и содержимого.
 `processed_tokens = input + output`; cached tokens уже входят в input и повторно
-не суммируются. Нулевой или отсутствующий native usage имеет статус
-`unavailable`, а не ноль. Локальный Codex adapter читает только lifecycle и
-usage events текущей задачи; ID остаётся в ignored cache, наружу выходит hash.
+не суммируются. Нулевой native usage имеет source `reported-zero`, значение
+`null` и причину `native-reported-zero`, а не выдуманную оценку или ноль.
+Локальный Codex adapter читает только envelope types, lifecycle и usage events
+текущей задачи; он считает model messages, tool calls, tool outputs и token
+samples, но не читает и не возвращает их содержимое. ID остаётся в ignored
+cache, наружу выходит hash.
 Активная задача даёт lower bound, завершённая после `--refresh` — exact total,
 если все child lanes также измерены. Prompts, сообщения, reasoning и raw outputs
-в metrics не попадают, внешний analytics service не используется.
+в metrics не попадают. Дополнительно показывается controller share of measured
+usage и task reuse status; внешний analytics service не используется.
 
 `delivery-status` возвращает один typed next action и не более 2 KiB.
 `cache-prune` по умолчанию dry-run. Canonical state/ReviewPack/ReviewIR,
@@ -455,6 +500,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.6.0`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.6.1`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

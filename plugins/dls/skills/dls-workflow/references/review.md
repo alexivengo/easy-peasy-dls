@@ -43,6 +43,12 @@ The command emits bounded NDJSON transitions and at most one heartbeat per
 minute. If the shell tool returns a running cell or session, wait on that same
 execution until it exits. Never start a second `review-run`.
 
+If the stream emits one `context-warning`, tell the user that this Codex task
+has already served another DLS cycle or role and recommend a fresh task next
+time. The warning is advisory: keep waiting on the same runner, do not restart
+it, and do not replace its primary `next_action`. Do not repeat the warning on
+heartbeats.
+
 Do not poll `review-status` while the original streamed process is available.
 Use it only after the shell/session was lost or for explicit diagnostics:
 
@@ -93,9 +99,11 @@ replace `review_result_path`, finding IDs, ticket verdicts, or remediation state
 - `completed` with `review-clear`: report the imported result and the separate
   acceptance/release boundaries.
 - `completed` with `not-clear` or `blocked`: report findings and hand off to the
-  remediation workflow. An actionable result must include a non-null canonical
-  `remediation_manifest_path`. This is a successful runner execution, not an
-  infrastructure failure.
+  remediation workflow using only `Исправь findings последнего review CHANGE_ID.`
+  Prefer a fresh implementation task. An actionable result must include a
+  non-null canonical `remediation_manifest_path`. This is a successful runner
+  execution, not an infrastructure failure. Do not replay the manifest or
+  findings in the handoff unless the user requests them.
 - `running`: wait or use only `review-status`.
 - `prepare-candidate`: `review-run` first attempts guarded remediation recovery.
   It may run trusted named validation and create DLS artifacts, but never edit

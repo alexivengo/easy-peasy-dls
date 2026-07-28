@@ -111,6 +111,15 @@ DLS-контексте. Обычные coding/review-задачи без DLS-с�
 Проведи code review EPIC-01.
 ```
 
+После `not-clear` откройте свежую implementation-задачу и напишите только:
+
+```text
+Исправь findings последнего review EPIC-01.
+```
+
+После готовности candidate откройте свежую review-задачу с предыдущей короткой
+командой. ReviewIR, manifest, SHA и пути между задачами переносить не нужно.
+
 После committed candidate handoff короткой команды достаточно. DLS найдёт
 зарегистрированный worktree и выберет exact-HEAD pack, подготовленный
 `candidate-ready`. Если remediation pack ещё не создан, но current-HEAD
@@ -142,6 +151,13 @@ pack и digest. DLS использует CLI только из реально з
 token counters. Недоступные токены показываются как `unavailable`, активная
 управляющая задача — как lower bound. Если финальная сборка прервётся, DLS
 возобновит её из завершённых lanes без повторной оплаты model-review.
+
+DLS также различает свежую задачу, продолжение того же delivery-cycle и
+повторное использование длинной задачи для другого cycle или роли. Это
+advisory, а не новый gate: работа не останавливается, но один раз появляется
+рекомендация открыть свежую задачу. Raw Codex thread/turn ID остаются только в
+ignored локальной telemetry; state и публичные artifacts получают лишь
+безопасный агрегат `task_context`.
 
 Если semantic-модель вернула логически противоречивый JSON — например, оставила
 finding открытым, но не создала обязательную replacement-ссылку, — DLS не

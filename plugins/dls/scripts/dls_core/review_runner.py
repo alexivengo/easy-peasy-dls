@@ -41,8 +41,10 @@ from .operations import (
     _existing_remediation_manifest_path,
     _finding_blocks,
     _latest_review_result,
+    _native_plaintext_projection,
     _process_is_alive,
     _read_review_result,
+    _resolve_review_pack,
     _review_lane_entries,
     _semantic_review_effort,
     _validate_review_pack_current,
@@ -62,7 +64,11 @@ from .repo import (
 )
 from .review_presentation import build_review_presentation
 from .state import StateStore
-from .telemetry import record_review_task_reference
+from .telemetry import (
+    record_review_task_reference,
+    review_task_context,
+    unavailable_task_context,
+)
 from .worktrees import resolve_registered_worktree
 
 SEMANTIC_MODEL = "gpt-5.6-sol"
@@ -817,10 +823,14 @@ def review_status(
     remediation_manifest_path: str | None = None
     prior_review_id: str | None = None
     prior_review_result_path: str | None = None
+    prior_reviewed_head: str | None = None
+    prior_remediation_manifest_path: str | None = None
     active_lane = any(
         item.get("status") == "running" for item in latest_by_lane.values()
     )
-    candidate: dict[str, Any] | None = None
+    from .candidate_runner import candidate_status
+
+    candidate: dict[str, Any] | None = candidate_status(owner, change_id=change_id)
     if result_entry:
         status_value = "completed"
         next_action = {"id": "review-complete", "detail": result_entry["result_path"]}
@@ -877,10 +887,6 @@ def review_status(
             next_action = {"id": "start-review", "detail": pack_entry["pack_path"]}
     else:
         latest_result = None
-        if review_id is None:
-            from .candidate_runner import candidate_status
-
-            candidate = candidate_status(owner, change_id=change_id)
         if candidate is not None and candidate.get("status") == "running":
             status_value = "preparing-candidate"
             next_action = {
@@ -954,6 +960,14 @@ def review_status(
         if pack_entry is provenance_pack_entry:
             _validate_review_pack_current(owner, state=state, pack=pack)
         runner_contract = pack.get("runner_contract", runner_contract)
+        prior = pack.get("prior_review")
+        if isinstance(prior, dict):
+            prior_review_id = prior.get("review_id")
+            prior_review_result_path = prior.get("result_path")
+            prior_reviewed_head = prior.get("head_sha")
+            prior_remediation_manifest_path = prior.get(
+                "remediation_manifest_path"
+            )
     presentation = None
     if result_entry is not None:
         _, report = _read_review_result(owner, result_entry)
@@ -965,6 +979,27 @@ def review_status(
         pipeline=pipeline,
         status_value=status_value,
     )
+    task_context = review_task_context(
+        owner,
+        change_id=change_id,
+        operation_id=str(
+            (pipeline or {}).get("operation_id") or selected_review_id or "review-status"
+        ),
+        review_id=pack.get("review_id") if isinstance(pack, dict) else None,
+        pack_digest=pack.get("pack_digest") if isinstance(pack, dict) else None,
+        record=False,
+        allow_cross_role=bool(
+            isinstance(pack, dict) and pack.get("control_level") == "routine"
+        ),
+    )
+    pack_exact = bool(
+        pack_entry
+        and isinstance(pack, dict)
+        and pack.get("head_sha") == current_head
+        and candidate is not None
+        and candidate.get("prepared")
+        and candidate.get("review_id") == selected_review_id
+    )
     payload = {
         "ok": True,
         "changed": False,
@@ -973,12 +1008,14 @@ def review_status(
         "owner_root": str(owner),
         "owner_selection": owner_selection,
         "current_head": current_head,
-        "candidate_head": candidate.get("candidate_head") if candidate else None,
-        "exact_head": bool(pack_entry and pack_entry.get("head_sha") == current_head),
-        "prepared": bool(pack_entry),
+        "candidate_head": pack.get("head_sha") if isinstance(pack, dict) else None,
+        "exact_head": pack_exact,
+        "prepared": pack_exact,
         "review_id": selected_review_id,
         "prior_review_id": prior_review_id,
         "prior_review_result_path": prior_review_result_path,
+        "prior_reviewed_head": prior_reviewed_head,
+        "prior_remediation_manifest_path": prior_remediation_manifest_path,
         "status": status_value,
         "runner_contract": runner_contract,
         "progress": progress,
@@ -993,6 +1030,7 @@ def review_status(
         ),
         "presentation": presentation,
         "next_action": next_action,
+        "task_context": task_context,
     }
     if verbose:
         payload["lane_details"] = latest_by_lane
@@ -2599,10 +2637,16 @@ def _native_review_is_clean(output: bytes) -> bool:
             and item.get("severity") in {"blocker", "should-fix"}
             for item in payload["findings"]
         )
-    clean_markers = ("no findings", "no actionable findings", "review clear")
-    finding_markers = ("blocker", "should-fix", "[p0]", "[p1]", "[p2]", "finding")
-    return any(marker in text for marker in clean_markers) and not any(
-        marker in text for marker in finding_markers if marker != "finding"
+    try:
+        projection = _native_plaintext_projection(
+            output.decode("utf-8", errors="replace")
+        )
+    except IntegrityError:
+        return False
+    return not any(
+        isinstance(item, dict)
+        and item.get("severity") in {"blocker", "should-fix"}
+        for item in projection.get("findings", [])
     )
 
 
@@ -2677,6 +2721,7 @@ def _update_pipeline(
     create: bool = False,
     failure_reason: str | None = None,
     failure_kind: str | None = None,
+    task_context: dict[str, Any] | None = None,
 ) -> None:
     updates: dict[str, Any] = {
         "status": status,
@@ -2688,6 +2733,8 @@ def _update_pipeline(
         updates["failure_reason"] = failure_reason
     if failure_kind is not None:
         updates["failure_kind"] = failure_kind
+    if task_context is not None:
+        updates["task_context"] = copy.deepcopy(task_context)
     if status in {"completed", "failed", "failed-finalize"}:
         updates["completed_at"] = utc_now()
     for lock_attempt in range(21):
@@ -3236,12 +3283,14 @@ def review_run(
     handoff_recovered = False
     recovered_candidate_run_id: str | None = None
     recovered_pack_created = False
+    task_context = unavailable_task_context("review")
 
     def annotate_handoff(payload: dict[str, Any]) -> dict[str, Any]:
         payload["handoff_recovered"] = handoff_recovered
         payload["candidate_run_id"] = recovered_candidate_run_id
         if recovered_pack_created:
             payload["pack_created"] = True
+        payload["task_context"] = task_context
         return payload
 
     def emit(event: str, **values: Any) -> None:
@@ -3285,6 +3334,7 @@ def review_run(
     explicit_pack = Path(pack_path).is_absolute() if pack_path else False
     if not explicit_pack:
         existing_status = review_status(root, change_id=change_id)
+        task_context = existing_status.get("task_context") or task_context
         if (
             existing_status["status"] == "completed"
             and existing_status["review_result_path"]
@@ -3306,6 +3356,33 @@ def review_run(
                 next_action=existing_status.get("next_action", {}).get("id"),
             )
             return annotate_handoff(existing_status)
+        if existing_status.get("status") == "running":
+            running_owner = Path(existing_status["owner_root"])
+            running_state = StateStore(running_owner).load(change_id)
+            execution_is_live = any(
+                isinstance(item, dict)
+                and item.get("review_id") == existing_status.get("review_id")
+                and item.get("status") == "running"
+                and _process_is_alive(item.get("runner_pid"))
+                for item in running_state.get("reviews", [])
+            )
+            if execution_is_live:
+                existing_status.update(
+                    {
+                        "dry_run": dry_run,
+                        "operation_id": effective_operation_id,
+                        "review_pack_path": existing_status.get("review_pack_path"),
+                        "pack_created": False,
+                        "review_result_path": None,
+                    }
+                )
+                emit(
+                    "completed",
+                    review_id=existing_status.get("review_id"),
+                    status="running",
+                    next_action="wait-review",
+                )
+                return annotate_handoff(existing_status)
         if existing_status.get("status") == "preparing-candidate":
             existing_status.update(
                 {
@@ -3418,6 +3495,7 @@ def review_run(
                     extra_commands=[],
                     operation_id=None,
                     dry_run=dry_run,
+                    _bind_task_context=False,
                 )
                 recovered_candidate_run_id = candidate.get("run_id")
                 if candidate.get("status") == "completed" and isinstance(
@@ -3496,6 +3574,36 @@ def review_run(
                     next_action=existing_status.get("next_action", {}).get("id"),
                 )
                 return annotate_handoff(existing_status)
+    context_owner, _, context_pack, _, _ = _resolve_review_pack(
+        root,
+        change_id=change_id,
+        pack_path=pack_path,
+        allow_missing_current=False,
+    )
+    task_context = review_task_context(
+        context_owner,
+        change_id=change_id,
+        operation_id=effective_operation_id,
+        review_id=context_pack.get("review_id"),
+        pack_digest=context_pack.get("pack_digest"),
+        record=not dry_run,
+        allow_cross_role=context_pack.get("control_level") == "routine",
+    )
+    if task_context.get("status") == "reused":
+        emit(
+            "context-warning",
+            review_id=context_pack.get("review_id"),
+            recommendation="open-fresh-task",
+            reuse_reason=task_context.get("reuse_reason"),
+        )
+    if not dry_run:
+        record_review_task_reference(
+            context_owner,
+            change_id=change_id,
+            review_id=context_pack["review_id"],
+            operation_id=effective_operation_id,
+            task_context=task_context,
+        )
     started = review_start(
         root,
         change_id=change_id,
@@ -3513,6 +3621,7 @@ def review_run(
                 change_id=change_id,
                 review_id=started["review_id"],
                 operation_id=effective_operation_id,
+                task_context=task_context,
             )
         started["review_result_path"] = None
         if started.get("next_action", {}).get("id") == "inspect-review-budget":
@@ -3583,6 +3692,7 @@ def review_run(
         change_id=change_id,
         review_id=pack["review_id"],
         operation_id=effective_operation_id,
+        task_context=task_context,
     )
     _validate_review_pack_current(owner, state=state, pack=pack)
     context_path = started["review_context_path"]
@@ -3598,6 +3708,7 @@ def review_run(
         operation_id=pipeline_operation_id,
         stage="specialists" if selected_risk_lenses else "semantic-independent",
         create=True,
+        task_context=task_context,
     )
     specialist_entries: list[tuple[dict[str, Any], str]] = []
     specialist_payloads: dict[str, bytes] = {}

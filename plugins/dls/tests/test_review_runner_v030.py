@@ -38,6 +38,7 @@ from dls_core.review_runner import (
     _collect_decision_reference_errors,
     _derive_review_verdict,
     _derive_ticket_verdicts,
+    _native_review_is_clean,
     _normalize_structured_payload,
     _validate_strict_output_schema,
     _validate_structured_payload,
@@ -1001,10 +1002,24 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         self.assertEqual(finding["severity"], "blocker")
         self.assertEqual(finding["location"], "Sources/App/Ledger.swift:79-87")
         self.assertEqual(finding["issue"], "Exclude secured claims from stale sweeps")
+        clean = _native_plaintext_projection(
+            "The sidecar cleanup is consistent with the existing recovery flow. "
+            "No actionable regressions were identified in the reviewed diff."
+        )
+        self.assertEqual(clean["findings"], [])
+        with self.assertRaisesRegex(IntegrityError, "neither an explicit clean marker"):
+            _native_plaintext_projection(
+                "No actionable regressions were identified, but a race remains."
+            )
         with self.assertRaisesRegex(IntegrityError, "neither an explicit clean marker"):
             _native_plaintext_projection("The review probably looks fine.")
         with self.assertRaisesRegex(IntegrityError, "unparseable review comment"):
             _native_plaintext_projection("- [P1] Missing a location")
+        self.assertTrue(
+            _native_review_is_clean(
+                b"No actionable regressions were identified in the reviewed diff."
+            )
+        )
 
     def test_cached_standard_native_plaintext_recovers_without_model_rerun(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
