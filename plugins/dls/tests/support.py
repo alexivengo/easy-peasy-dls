@@ -64,6 +64,11 @@ def initialize_git(root: Path) -> str:
     git(root, "init", "-b", "main")
     git(root, "config", "user.name", "DLS Tests")
     git(root, "config", "user.email", "dls-tests@example.invalid")
+    # CI can otherwise start detached auto-maintenance while TemporaryDirectory
+    # removes the fixture, producing a racy `.git/objects/pack` recreation.
+    git(root, "config", "gc.auto", "0")
+    git(root, "config", "gc.autoDetach", "false")
+    git(root, "config", "maintenance.auto", "false")
     (root / "README.md").write_text("# Fixture\n", encoding="utf-8")
     git(root, "add", "README.md")
     git(root, "commit", "-m", "fixture baseline")

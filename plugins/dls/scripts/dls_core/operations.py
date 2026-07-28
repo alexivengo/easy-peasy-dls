@@ -3801,6 +3801,12 @@ def _create_native_review_workspace(
     workspace = parent / "checkout"
     run_git(
         owner,
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "gc.autoDetach=false",
+        "-c",
+        "maintenance.auto=false",
         "clone",
         "--no-hardlinks",
         "--no-checkout",
