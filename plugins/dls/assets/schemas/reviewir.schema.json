@@ -69,6 +69,33 @@
             "context_digest": { "type": "string", "minLength": 1 },
             "output_path": { "type": "string", "minLength": 1 },
             "output_digest": { "type": "string", "minLength": 1 },
+            "normalized_output_path": { "type": ["string", "null"], "minLength": 1 },
+            "normalized_output_digest": { "type": ["string", "null"], "minLength": 1 },
+            "native_output_format": {
+              "type": ["string", "null"],
+              "enum": [
+                "structured-json",
+                "codex-review-plaintext",
+                "codex-review-plaintext-indeterminate",
+                null
+              ]
+            },
+            "native_decision_status": {
+              "type": ["string", "null"],
+              "enum": ["determinate", "indeterminate", null]
+            },
+            "native_plaintext_projection_contract": {
+              "type": ["string", "null"],
+              "enum": [
+                "dls-native-plaintext/v1",
+                "dls-native-plaintext-indeterminate/v1",
+                null
+              ]
+            },
+            "native_transcript_validation_contract": {
+              "type": ["string", "null"],
+              "enum": ["dls-native-transcript-final-message/v1", null]
+            },
             "transcript_path": { "type": "string", "minLength": 1 },
             "transcript_digest": { "type": "string", "minLength": 1 },
             "source_snapshot_digest": { "type": "string", "minLength": 1 },

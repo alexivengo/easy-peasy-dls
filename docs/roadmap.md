@@ -2,14 +2,14 @@
 
 Срез: 28 июля 2026 года
 
-Текущая линия: `v0.8.0`
+Текущая линия: `v0.8.1`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
 ручную работу и повтор контекста, Attractive добавляет удобство только после
 стабилизации основного цикла.
 
-Полный реестр всех 146 реализованных, запланированных, отложенных и намеренно
+Полный реестр всех 147 реализованных, запланированных, отложенных и намеренно
 исключённых возможностей находится в [карте возможностей](capability-catalog.md).
 Этот файл остаётся короткой выборкой ближайших волн, а не вторым каталогом.
 
@@ -136,7 +136,18 @@ Exit criteria v0.8.0: повторный render byte-identical, Receipt не м�
 release/production не выводятся из отсутствия findings, а successful import и
 accept автоматически возвращают один Receipt.
 
-## Следующая волна v0.8.1: UI/UX Attractive pilot
+## v0.8.1 — безопасное восстановление native output
+
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| M62 | Must-be / P0 | Indeterminate native recovery | Completed prose сверяется с immutable transcript, не считается clean, не повторяет native model call и обязательно проходит semantic reconciliation |
+
+Exit criteria v0.8.1: legacy `invalid-output` восстанавливается без второго
+native call, output/transcript digests остаются неизменными, неоднозначный текст
+не создаёт verdict самостоятельно, а unsafe/integrity случаи получают terminal
+typed action без resume-loop.
+
+## Следующая волна v0.9.0: UI/UX Attractive pilot
 
 - `M38–M39` — проверить Tier 1 precedent и Tier 2/3 versioned design artifact на
   реальном UI change;

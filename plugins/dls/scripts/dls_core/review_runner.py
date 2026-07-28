@@ -674,6 +674,19 @@ def _terminal_lane_next_action(
     if terminal.get("status") == "invalid-output":
         validation_error = terminal.get("validation_error")
         if terminal.get("lane_key") == "native":
+            recovery_status = terminal.get("native_recovery_status")
+            if recovery_status == "integrity-failed":
+                return {
+                    "id": "inspect-review-integrity",
+                    "detail": terminal.get("native_recovery_error")
+                    or "the native output or transcript failed integrity checks",
+                }
+            if recovery_status == "unsafe":
+                return {
+                    "id": "inspect-review-output",
+                    "detail": terminal.get("native_recovery_error")
+                    or "the native plaintext cannot be safely recovered",
+                }
             return {
                 "id": "resume-review",
                 "detail": terminal.get("failure_reason")
@@ -2883,6 +2896,16 @@ def _build_review_ir(
             "context_digest": native.get("context_digest"),
             "output_path": native["output_path"],
             "output_digest": native["output_digest"],
+            "normalized_output_path": native.get("normalized_output_path"),
+            "normalized_output_digest": native.get("normalized_output_digest"),
+            "native_output_format": native.get("native_output_format"),
+            "native_decision_status": native.get("native_decision_status"),
+            "native_plaintext_projection_contract": native.get(
+                "native_plaintext_projection_contract"
+            ),
+            "native_transcript_validation_contract": native.get(
+                "native_transcript_validation_contract"
+            ),
             "transcript_path": native.get("transcript_path"),
             "transcript_digest": native.get("transcript_digest"),
             "source_snapshot_digest": native["source_snapshot_digest"],

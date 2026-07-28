@@ -758,6 +758,8 @@ env_allow = []
         semantic_exit: int = 0,
         native_exit: int = 0,
         native_plaintext: bool = False,
+        native_plaintext_text: str | None = None,
+        native_transcript_message: str | None = None,
         reconciliation_blocker: bool = False,
         invalid_repair: bool = False,
         repair_exit: int = 0,
@@ -772,6 +774,11 @@ env_allow = []
         invalid_marker = root / ".dls" / "cache" / "invalid-semantic-used"
         state_path = root / ".dls" / "state" / "C001.json"
         executable = fake_bin / "codex"
+        effective_native_transcript_message = (
+            native_transcript_message
+            if native_transcript_message is not None
+            else native_plaintext_text
+        )
         executable.write_text(
             "#!/usr/bin/env python3\n"
             "import json, re, sys, time\n"
@@ -805,7 +812,9 @@ env_allow = []
             "'findings': [], 'prior_finding_verdicts': []} "
             "if schema.endswith('review-decision.schema.json') else "
             "{'summary': 'No findings.', 'findings': []})\n"
-            f"    if {native_plaintext!r}:\n"
+            f"    if {native_plaintext_text is not None!r}:\n"
+            f"        output.write_text({native_plaintext_text!r})\n"
+            f"    elif {native_plaintext!r}:\n"
             "        output.write_text('Concurrent recovery can lose state.\\n\\n'\n"
             "            'Review comment:\\n\\n'\n"
             "            '- [P1] Exclude secured claims from stale sweeps — '\n"
@@ -926,6 +935,15 @@ env_allow = []
             "    output.write_text(json.dumps(payload))\n"
             "counter.parent.mkdir(parents=True, exist_ok=True)\n"
             "with counter.open('a') as handle: handle.write(kind + '\\n')\n"
+            f"if native and {native_plaintext_text is not None!r}:\n"
+            "    print('2026-07-28T16:39:42Z ERROR cache metadata is stale', "
+            "file=sys.stderr, flush=True)\n"
+            "    print(json.dumps({'type': 'item.completed', 'item': "
+            "{'id': 'item-final', 'type': 'agent_message', "
+            f"'text': {effective_native_transcript_message!r}}}}}), flush=True)\n"
+            "    print(json.dumps({'type': 'turn.completed', 'usage': "
+            "{'input_tokens': 0, 'cached_input_tokens': 0, "
+            "'output_tokens': 0, 'reasoning_output_tokens': 0}}), flush=True)\n"
             f"if not native:\n"
             f"    for event_index in range({semantic_command_events!r}):\n"
             "        print(json.dumps({'type': 'item.started', 'item': "
@@ -1116,6 +1134,164 @@ env_allow = []
             )
         )
 
+    def test_unstructured_native_summary_is_indeterminate_and_reconciled(self) -> None:
+        summary = (
+            "The changes correctly close the observed publication races and "
+            "include focused regression coverage. The bridge smoke tests pass."
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                native_plaintext_text=summary,
+            )
+            try:
+                completed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="indeterminate-native",
+                )
+            finally:
+                self._restore_path(original)
+
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(completed["verdict"], "review-clear")
+            self.assertEqual(
+                counter.read_text(encoding="utf-8").splitlines(),
+                ["native", "semantic-independent", "reconciliation"],
+            )
+            report = json.loads(
+                (root / completed["review_result_path"]).read_text(encoding="utf-8")
+            )
+            native = report["lanes"]["native"]
+            self.assertEqual(native["native_decision_status"], "indeterminate")
+            self.assertEqual(
+                native["native_output_format"],
+                "codex-review-plaintext-indeterminate",
+            )
+            self.assertEqual(
+                native["native_plaintext_projection_contract"],
+                "dls-native-plaintext-indeterminate/v1",
+            )
+            self.assertEqual(
+                native["native_transcript_validation_contract"],
+                "dls-native-transcript-final-message/v1",
+            )
+            self.assertIn("reconciliation", report["lanes"])
+
+    def test_unsafe_native_transcript_stops_without_resume_loop(self) -> None:
+        summary = "The changes look correct and the focused tests pass."
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                native_plaintext_text=summary,
+                native_transcript_message="A different final message.",
+            )
+            try:
+                with self.assertRaisesRegex(
+                    IntegrityError,
+                    "status=invalid-output",
+                ):
+                    review_run(
+                        root,
+                        change_id="C001",
+                        pack_path=None,
+                        operation_id="unsafe-native",
+                    )
+                failed = review_status(root, change_id="C001")
+                self.assertEqual(
+                    failed["next_action"]["id"],
+                    "inspect-review-output",
+                )
+                calls_before = counter.read_text(encoding="utf-8").splitlines()
+                with self.assertRaisesRegex(
+                    IntegrityError,
+                    "does not match",
+                ):
+                    review_run(
+                        root,
+                        change_id="C001",
+                        pack_path=None,
+                        operation_id="unsafe-native",
+                    )
+            finally:
+                self._restore_path(original)
+            self.assertEqual(calls_before, ["native"])
+            self.assertEqual(
+                counter.read_text(encoding="utf-8").splitlines(),
+                calls_before,
+            )
+
+    def test_cached_unstructured_native_summary_recovers_without_native_rerun(self) -> None:
+        summary = (
+            "The changes correctly close the observed publication races and "
+            "include focused regression coverage. The bridge smoke tests pass."
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                native_plaintext_text=summary,
+                native_transcript_message="A different final message.",
+            )
+            try:
+                with self.assertRaisesRegex(IntegrityError, "status=invalid-output"):
+                    review_run(
+                        root,
+                        change_id="C001",
+                        pack_path=None,
+                        operation_id="cached-indeterminate-native",
+                    )
+                state_path = root / ".dls" / "state" / "C001.json"
+                legacy_state = json.loads(state_path.read_text(encoding="utf-8"))
+                native = next(
+                    item
+                    for item in legacy_state["reviews"]
+                    if item.get("lane_key") == "native"
+                )
+                native.pop("native_recovery_status", None)
+                native.pop("native_recovery_error", None)
+                transcript_path = root / native["transcript_path"]
+                transcript = transcript_path.read_text(encoding="utf-8").replace(
+                    "A different final message.",
+                    summary,
+                )
+                transcript_path.write_text(transcript, encoding="utf-8")
+                native["transcript_digest"] = sha256_file(transcript_path)
+                state_path.write_text(
+                    json.dumps(legacy_state, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+                completed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="cached-indeterminate-native",
+                )
+            finally:
+                self._restore_path(original)
+
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(
+                counter.read_text(encoding="utf-8").splitlines().count("native"),
+                1,
+            )
+            state = StateStore(root).load("C001")
+            native = next(
+                item
+                for item in state["reviews"]
+                if item.get("lane_key") == "native"
+            )
+            self.assertEqual(native["status"], "completed")
+            self.assertEqual(native["native_decision_status"], "indeterminate")
+            self.assertEqual(native["native_recovery_status"], "recovered")
+
     def test_cached_standard_native_plaintext_recovers_without_model_rerun(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1148,6 +1324,12 @@ env_allow = []
                 ]
                 self.assertEqual([item["status"] for item in native_before], ["invalid-output"])
                 raw_digest = native_before[0]["output_digest"]
+                native_before[0].pop("native_recovery_status", None)
+                native_before[0].pop("native_recovery_error", None)
+                (root / ".dls" / "state" / "C001.json").write_text(
+                    json.dumps(state_before, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
 
                 completed = review_run(
                     root,

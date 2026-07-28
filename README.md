@@ -140,6 +140,13 @@ semantic passes, соберёт ReviewIR и импортирует его. Пе�
 subagents или вручную собирать provenance не нужно. Human approval DLS всё равно
 не запишет без вашего прямого подтверждения.
 
+Если встроенный `codex exec review` завершился успешно, но вместо обещанного
+structured JSON вернул обычный итоговый текст, DLS не объявляет такой ответ
+чистым review. Для standard/critical change runner сверяет его с неизменяемым
+JSONL transcript, помечает native decision как `indeterminate` и передаёт на
+независимую semantic reconciliation. Уже завершённый native-вызов при этом не
+оплачивается повторно.
+
 До review evidence тоже не нужно вести вручную. После того как Codex исправил
 код и закоммитил candidate, навык сам запускает один внутренний
 `candidate-ready`: DLS последовательно выполняет доверенные проверки из

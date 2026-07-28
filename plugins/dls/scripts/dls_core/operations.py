@@ -136,6 +136,10 @@ COMMAND_EVENT_CONTRACT = "logical-invocations/v1"
 NATIVE_OUTPUT_CONTRACT = "dls-native-review/v2"
 NATIVE_WORKSPACE_CONTRACT = "dls-native-workspace/v1"
 NATIVE_WORKSPACE_ISOLATION = "standalone-clone"
+NATIVE_INDETERMINATE_PROJECTION_CONTRACT = (
+    "dls-native-plaintext-indeterminate/v1"
+)
+NATIVE_TRANSCRIPT_VALIDATION_CONTRACT = "dls-native-transcript-final-message/v1"
 REVIEW_IDENTIFIER_CONTRACT = "canonical-ticket-ids/v1"
 REVIEW_DECISION_REPAIR_CONTRACT = "dls-decision-repair/v1"
 REVIEW_LANE_MAX_ATTEMPTS = 2
@@ -3742,6 +3746,69 @@ def _native_plaintext_projection(text: str) -> dict[str, Any]:
     }
 
 
+def _native_indeterminate_plaintext_projection(
+    text: str,
+    *,
+    transcript_text: str,
+) -> dict[str, Any]:
+    """Preserve an unstructured native conclusion without calling it clean.
+
+    ``codex exec review`` can complete successfully while writing a
+    human-facing final message even when ``--output-schema`` was supplied. For
+    standard and critical reviews, DLS may retain that message as an
+    indeterminate native projection only when the immutable JSONL transcript
+    proves it is the completed turn's final agent message. The runner then
+    forces independent semantic reconciliation; this projection is never a
+    clean native verdict by itself.
+    """
+
+    stripped = text.strip()
+    if not stripped:
+        raise IntegrityError("native review plaintext is empty")
+    events: list[dict[str, Any]] = []
+    for line_number, line in enumerate(transcript_text.splitlines(), start=1):
+        candidate = line.strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            event = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            raise IntegrityError(
+                "native transcript contains malformed JSONL at "
+                f"line {line_number}: {exc.msg}"
+            ) from exc
+        if not isinstance(event, dict):
+            raise IntegrityError("native transcript event must be an object")
+        events.append(event)
+    if not events:
+        raise IntegrityError("native transcript contains no JSONL events")
+    if any(event.get("type") in {"turn.failed", "error"} for event in events):
+        raise IntegrityError("native transcript contains a failed turn")
+    messages = [
+        (index, event["item"]["text"])
+        for index, event in enumerate(events)
+        if event.get("type") == "item.completed"
+        and isinstance(event.get("item"), dict)
+        and event["item"].get("type") == "agent_message"
+        and isinstance(event["item"].get("text"), str)
+    ]
+    if not messages:
+        raise IntegrityError("native transcript has no completed agent message")
+    final_message_index, final_message = messages[-1]
+    if final_message.strip() != stripped:
+        raise IntegrityError(
+            "native output-last-message does not match the transcript's final agent message"
+        )
+    completed_turns = [
+        index
+        for index, event in enumerate(events)
+        if event.get("type") == "turn.completed"
+    ]
+    if not completed_turns or completed_turns[-1] <= final_message_index:
+        raise IntegrityError("native transcript does not complete after its final message")
+    return {"summary": stripped, "findings": []}
+
+
 def _native_review_argv(
     pack: dict[str, Any],
     final_output_path: str,
@@ -3904,6 +3971,29 @@ def _successful_native_entry(
             raise IntegrityError(
                 "Native review diagnostic transcript digest mismatch"
             )
+    decision_status = entry.get("native_decision_status")
+    if decision_status not in {None, "determinate", "indeterminate"}:
+        raise IntegrityError("Native review decision status is invalid")
+    normalized_path = entry.get("normalized_output_path")
+    if isinstance(normalized_path, str):
+        normalized = safe_resolve(root, normalized_path)
+        if not normalized.is_file():
+            raise IntegrityError("Native normalized output cache is missing")
+        if sha256_file(normalized) != entry.get("normalized_output_digest"):
+            raise IntegrityError("Native normalized output digest mismatch")
+    if decision_status == "indeterminate":
+        if (
+            entry.get("native_output_format")
+            != "codex-review-plaintext-indeterminate"
+            or entry.get("native_plaintext_projection_contract")
+            != NATIVE_INDETERMINATE_PROJECTION_CONTRACT
+            or entry.get("native_transcript_validation_contract")
+            != NATIVE_TRANSCRIPT_VALIDATION_CONTRACT
+            or not isinstance(normalized_path, str)
+        ):
+            raise IntegrityError(
+                "Indeterminate native review provenance is incomplete"
+            )
     return entry
 
 
@@ -3919,15 +4009,77 @@ def _recover_native_plaintext_projection(
     attempt_id = entry.get("attempt_id")
     if not isinstance(output_relative, str) or not isinstance(attempt_id, str):
         raise IntegrityError("Native plaintext recovery metadata is incomplete")
+
+    def record_failure(kind: str, error: Exception) -> None:
+        state_store.finish_review_lane(
+            change_id,
+            attempt_id=attempt_id,
+            expected_status="invalid-output",
+            updates={
+                "status": "invalid-output",
+                "native_recovery_status": kind,
+                "native_recovery_error": redact_text(str(error)),
+            },
+        )
+
+    prior_recovery = entry.get("native_recovery_status")
+    if prior_recovery in {"unsafe", "integrity-failed"}:
+        raise IntegrityError(
+            entry.get("native_recovery_error")
+            or f"Native plaintext recovery is {prior_recovery}"
+        )
     output_path = safe_resolve(root, output_relative, must_exist=True)
     if sha256_file(output_path) != entry.get("output_digest"):
-        raise IntegrityError("Native plaintext recovery raw output digest mismatch")
+        error = IntegrityError("Native plaintext recovery raw output digest mismatch")
+        record_failure("integrity-failed", error)
+        raise error
     raw_text = output_path.read_text(encoding="utf-8")
-    decision = (
-        _routine_plaintext_decision(raw_text, pack=pack)
-        if pack.get("control_level") == "routine"
-        else _native_plaintext_projection(raw_text)
-    )
+    output_format = "codex-review-plaintext"
+    projection_contract = NATIVE_PLAINTEXT_PROJECTION_CONTRACT
+    decision_status = "determinate"
+    transcript_validation_contract: str | None = None
+    try:
+        decision = (
+            _routine_plaintext_decision(raw_text, pack=pack)
+            if pack.get("control_level") == "routine"
+            else _native_plaintext_projection(raw_text)
+        )
+    except IntegrityError as strict_error:
+        if pack.get("control_level") not in {"standard", "critical"}:
+            record_failure("unsafe", strict_error)
+            raise
+        transcript_relative = entry.get("transcript_path")
+        if not isinstance(transcript_relative, str):
+            error = IntegrityError(
+                "Native indeterminate recovery requires a diagnostic transcript"
+            )
+            record_failure("integrity-failed", error)
+            raise error from strict_error
+        try:
+            transcript_path = safe_resolve(root, transcript_relative, must_exist=True)
+            if sha256_file(transcript_path) != entry.get("transcript_digest"):
+                raise IntegrityError(
+                    "Native indeterminate recovery transcript digest mismatch"
+                )
+        except IntegrityError as error:
+            record_failure("integrity-failed", error)
+            raise error from strict_error
+        try:
+            decision = _native_indeterminate_plaintext_projection(
+                raw_text,
+                transcript_text=transcript_path.read_text(encoding="utf-8"),
+            )
+        except (OSError, UnicodeError, IntegrityError) as recovery_error:
+            error = IntegrityError(
+                "Native plaintext is neither strictly projectable nor safely "
+                f"indeterminate: {recovery_error}"
+            )
+            record_failure("unsafe", error)
+            raise error from strict_error
+        output_format = "codex-review-plaintext-indeterminate"
+        projection_contract = NATIVE_INDETERMINATE_PROJECTION_CONTRACT
+        decision_status = "indeterminate"
+        transcript_validation_contract = NATIVE_TRANSCRIPT_VALIDATION_CONTRACT
     normalized_relative = (
         f".dls/cache/reviews/{change_id}/{pack['review_id']}/"
         f"native-normalized-{attempt_id}.json"
@@ -3943,10 +4095,14 @@ def _recover_native_plaintext_projection(
                 "status": "completed",
                 "normalized_output_path": normalized_relative,
                 "normalized_output_digest": sha256_file(normalized_path),
-                "native_output_format": "codex-review-plaintext",
-                "native_plaintext_projection_contract": (
-                    NATIVE_PLAINTEXT_PROJECTION_CONTRACT
+                "native_output_format": output_format,
+                "native_decision_status": decision_status,
+                "native_plaintext_projection_contract": projection_contract,
+                "native_transcript_validation_contract": (
+                    transcript_validation_contract
                 ),
+                "native_recovery_status": "recovered",
+                "native_recovery_error": None,
                 "failure_reason": None,
                 "completed_at": utc_now(),
             },
@@ -4814,6 +4970,10 @@ def review_start(
         failure_reason: str | None = native_failure_reason
         native_output_format: str | None = None
         native_plaintext_projection_contract: str | None = None
+        native_decision_status: str | None = None
+        native_transcript_validation_contract: str | None = None
+        native_recovery_status: str | None = None
+        native_recovery_error: str | None = None
         if native_failure_reason is not None:
             status_value = "failed"
         elif execution["timed_out"]:
@@ -4837,25 +4997,51 @@ def review_start(
             except (OSError, json.JSONDecodeError, IntegrityError) as exc:
                 try:
                     raw_text = output_path.read_text(encoding="utf-8")
-                    native_payload = (
-                        _routine_plaintext_decision(raw_text, pack=pack)
-                        if routine_review
-                        else _native_plaintext_projection(raw_text)
-                    )
+                    try:
+                        native_payload = (
+                            _routine_plaintext_decision(raw_text, pack=pack)
+                            if routine_review
+                            else _native_plaintext_projection(raw_text)
+                        )
+                    except IntegrityError as strict_error:
+                        if routine_review:
+                            raise
+                        native_payload = _native_indeterminate_plaintext_projection(
+                            raw_text,
+                            transcript_text=transcript_text,
+                        )
+                        native_output_format = (
+                            "codex-review-plaintext-indeterminate"
+                        )
+                        native_plaintext_projection_contract = (
+                            NATIVE_INDETERMINATE_PROJECTION_CONTRACT
+                        )
+                        native_decision_status = "indeterminate"
+                        native_transcript_validation_contract = (
+                            NATIVE_TRANSCRIPT_VALIDATION_CONTRACT
+                        )
+                        native_recovery_status = "recovered"
                     atomic_write_json(
                         normalized_output_path,
                         native_payload,
                         backup=False,
                     )
-                    native_output_format = "codex-review-plaintext"
-                    native_plaintext_projection_contract = (
-                        NATIVE_PLAINTEXT_PROJECTION_CONTRACT
-                    )
+                    if native_output_format is None:
+                        native_output_format = "codex-review-plaintext"
+                        native_plaintext_projection_contract = (
+                            NATIVE_PLAINTEXT_PROJECTION_CONTRACT
+                        )
+                        native_decision_status = "determinate"
+                        native_recovery_status = "recovered"
                 except (OSError, UnicodeError, IntegrityError) as parse_exc:
                     status_value = "invalid-output"
+                    native_recovery_status = "unsafe"
+                    native_recovery_error = redact_text(str(parse_exc))
                     failure_reason = (
                         "native structured output is invalid and plaintext "
-                        f"fallback is unsafe: {parse_exc}; JSON error: {exc}"
+                        "fallback is unsafe: "
+                        f"{redact_text(str(parse_exc))}; JSON error: "
+                        f"{redact_text(str(exc))}"
                     )
             else:
                 if routine_review and (
@@ -4886,6 +5072,10 @@ def review_start(
                         backup=False,
                     )
                     native_output_format = "structured-json"
+                    native_decision_status = "determinate"
+                else:
+                    native_output_format = "structured-json"
+                    native_decision_status = "determinate"
         if status_value == "completed" and (
             snapshot_after != snapshot_before
             or workspace_snapshot_after != workspace_snapshot_before
@@ -4919,6 +5109,12 @@ def review_start(
             "native_plaintext_projection_contract": (
                 native_plaintext_projection_contract
             ),
+            "native_decision_status": native_decision_status,
+            "native_transcript_validation_contract": (
+                native_transcript_validation_contract
+            ),
+            "native_recovery_status": native_recovery_status,
+            "native_recovery_error": native_recovery_error,
             "exit_code": execution["exit_code"],
             "timed_out": execution["timed_out"],
             "overflow": output_overflow,
@@ -5341,6 +5537,25 @@ def review_import(
             if native_lane.get(report_key) != native_entry.get(state_key):
                 raise IntegrityError(
                     f"ReviewIR native provenance mismatch: {report_key}"
+                )
+        optional_native_fields = (
+            "normalized_output_path",
+            "normalized_output_digest",
+            "native_output_format",
+            "native_decision_status",
+            "native_plaintext_projection_contract",
+            "native_transcript_validation_contract",
+        )
+        require_projection_provenance = (
+            native_entry.get("native_decision_status") == "indeterminate"
+        )
+        for field in optional_native_fields:
+            report_value = native_lane.get(field)
+            if (
+                require_projection_provenance or report_value is not None
+            ) and report_value != native_entry.get(field):
+                raise IntegrityError(
+                    f"ReviewIR native provenance mismatch: {field}"
                 )
         if pack.get("native_workspace_contract") is not None:
             for field in (

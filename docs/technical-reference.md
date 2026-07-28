@@ -308,9 +308,27 @@ CLI запрещает сочетать positional review instructions и `--bas
 становится native finding, а только явный `review-clear`/`no findings` — чистым
 native результатом. Для routine projection также содержит итоговый verdict;
 для standard/critical она остаётся входом независимой semantic adjudication.
-Нераспознанный, заблокированный или неоднозначный текст не импортируется.
-Повторный вызов после обновления DLS может построить projection из уже
-завершённого raw output без нового native model call.
+Нераспознанный текст никогда сам по себе не доказывает clean review.
+
+В `v0.8.0` проявился ещё один контрактный разрыв: built-in review завершил turn
+с exit code 0, но вместо JSON вернул положительно сформулированный свободный
+текст. Строгая projection закономерно отклонила его, однако status продолжал
+предлагать `resume-review`, хотя тот же parser детерминированно получал ту же
+ошибку. `v0.8.1` добавляет безопасный промежуточный статус
+`native_decision_status: indeterminate` только для standard/critical review.
+DLS проверяет raw output digest, transcript digest, отсутствие failed events,
+совпадение `--output-last-message` с последним completed `agent_message` и
+следующий за ним `turn.completed`. Затем сохраняет отдельную нормализованную
+projection, не изменяя raw output, и обязательно запускает semantic
+reconciliation. Такой native result не считается clean, не создаёт verdict сам
+по себе и не отменяет независимый semantic pass.
+
+Legacy `invalid-output` может быть восстановлен из уже завершённого raw output
+без нового native model call. Неподтверждённый transcript получает
+`inspect-review-output`, а digest/path drift — `inspect-review-integrity`;
+повторный вызов не образует бесконечный resume-loop. Routine путь сохраняет
+строгий итоговый verdict и не использует indeterminate fallback, потому что у
+него нет независимой Sol lane.
 
 Release-gate v0.6.1 обнаружил ещё один безопасно восстанавливаемый вариант
 clean presentation: Codex завершил анализ фразой `No actionable regressions were
@@ -588,6 +606,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.8.0`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.8.1`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

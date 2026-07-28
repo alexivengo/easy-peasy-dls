@@ -113,6 +113,14 @@ DLS запрашивает structured output и одновременно пон�
 обычный ReviewIR строится из отдельной проверяемой проекции. Второй модельный
 вызов для форматирования routine-result не нужен.
 
+Иногда встроенный review завершает turn, но игнорирует structured schema и
+оставляет только свободный итоговый текст. На standard/critical пути DLS
+проверяет, что этот текст действительно является последним completed
+agent-message в digest-bound transcript, и сохраняет его как `indeterminate`.
+Он не считается clean и обязательно проходит независимую semantic
+reconciliation. Если transcript не подтверждает output, процесс останавливается
+с typed integrity/output action вместо слепого retry.
+
 Повторный review сначала проверяет delta и каждый предыдущий finding. Если
 подтверждён хотя бы один `blocker` или `should-fix`, compact reconciliation
 сразу импортирует `not-clear`: final-full не запускается. Только clean delta

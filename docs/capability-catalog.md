@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
 Срез: 28 июля 2026 года
-Текущая линия: `v0.8.0`
+Текущая линия: `v0.8.1`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -9,16 +9,16 @@
 «что делать следующим», а этот документ — «что вообще существует, планируется
 или намеренно не будет реализовано».
 
-Всего отслеживается 146 пунктов:
+Всего отслеживается 147 пунктов:
 
-- 61 Must-be: `M01–M61`;
+- 62 Must-be: `M01–M62`;
 - 39 Performance: `P01–P39`;
 - 10 Attractive: `A01–A10`;
 - 12 Indifferent/premature: `I01–I12`;
 - 24 Reverse anti-features: `R01–R24`.
 
 Исходный KANO-снимок содержал 129 пунктов: все они сохранены под прежними ID.
-К ним добавлены 17 публичных возможностей `M51–M61` и `P34–P39`. Удалять ID
+К ним добавлены 18 публичных возможностей `M51–M62` и `P34–P39`. Удалять ID
 нельзя: изменившееся решение помечается как заменённое, а не исчезает из карты.
 
 ## Статусы
@@ -101,6 +101,7 @@
 | M59 | Budget-terminal safety | ✅ | P0 | Budget stop не маскируется parser failure; новый budget образует новый contract |
 | M60 | Candidate/review/delivery status из одного pack | ✅ | P0 | Exact HEAD, prior review и typed next action используют общий resolver |
 | M61 | Standalone native workspace provenance | ✅ | P0 | Native review запускается в clean exact-HEAD clone; owner-local `.dls` и попытки без workspace marker не входят в canonical provenance |
+| M62 | Indeterminate native recovery | ✅ | P0 | Transcript-verified prose не объявляется clean, не повторяет native call и обязательно проходит semantic reconciliation |
 
 ## Performance — экономия времени, контекста и ручной работы
 
@@ -231,7 +232,15 @@
   acceptance и отдельным release/production boundaries;
 - receipt автоматически возвращается после canonical review import и `accept`.
 
-### v0.8.1 — UI/UX и полный architecture lifecycle
+### v0.8.1 — безопасное восстановление native output
+
+- `M62`: completed unstructured native output получает digest/transcript
+  validation и статус `indeterminate`, а не ложный clean verdict;
+- semantic reconciliation обязательна, native model call не повторяется;
+- unsafe output и integrity drift получают terminal typed actions вместо
+  бесконечного `resume-review`.
+
+### v0.9.0 — UI/UX и полный architecture lifecycle
 
 - `M38–M39`: UI tiers и immutable design source на реальном change;
 - `M40`: approved critical definition/review lifecycle;

@@ -83,6 +83,16 @@ drafts, or user-created correction prompt. Never read raw output or create a
 correction subagent. Native, specialists, and the original semantic analysis are
 not restarted.
 
+A legacy native `invalid-output` may also return `resume-review` when the raw
+attempt completed before the installed DLS learned its deterministic recovery
+contract. Re-run the same operation once. For standard/critical review, DLS may
+verify the raw digest plus the JSONL transcript's final completed agent message,
+record the prose as `native_decision_status: indeterminate`, and continue with
+independent semantic reconciliation. This never means native clean and never
+skips Sol adjudication. `inspect-review-output` means the transcript cannot
+safely prove the output; `inspect-review-integrity` means immutable inputs or
+digests drifted. Stop on either action and never launch another native review.
+
 ## Present the canonical result
 
 For a completed exact-HEAD review, use the DLS-owned `presentation` object from
@@ -126,6 +136,9 @@ approval, release, or production gates and never requires a model call.
   replacement review.
 - `resume-review-repair`: call the same `review-run`; DLS resumes the single
   compact repair and only the downstream lanes that have not completed.
+- `resume-review` for legacy native invalid-output: call the same `review-run`
+  once; DLS either recovers the completed output without a native model call or
+  returns a terminal inspect action.
 - `inspect-review-output`: stop. The bounded repair itself was invalid or the
   original output was not safely repairable; do not run a manual semantic retry.
 - `inspect-review-integrity`: stop. Do not retry changed or tampered inputs.
