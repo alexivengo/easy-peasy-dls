@@ -676,6 +676,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         repair_exit: int = 0,
         repair_sleep: float = 0.0,
         semantic_command_events: int = 0,
+        semantic_usage_tokens: int = 0,
     ) -> tuple[str | None, Path, Path]:
         fake_bin = root / ".dls" / "cache" / "runner-fake-bin"
         fake_bin.mkdir(parents=True, exist_ok=True)
@@ -840,6 +841,11 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             f"    for event_index in range({semantic_command_events!r}):\n"
             "        print(json.dumps({'type': 'item.started', 'item': "
             "{'id': f'command-{event_index}', 'type': 'command_execution'}}), flush=True)\n"
+            f"    if {semantic_usage_tokens!r}:\n"
+            "        print(json.dumps({'type': 'turn.completed', 'usage': "
+            f"{{'input_tokens': {semantic_usage_tokens!r}, "
+            "'cached_input_tokens': 0, 'output_tokens': 1, "
+            "'reasoning_output_tokens': 0}}), flush=True)\n"
             "counter.parent.mkdir(parents=True, exist_ok=True)\n"
             "with counter.open('a') as handle: handle.write(kind + '\\n')\n"
             "print(json.dumps({'type': 'fake', 'lane': kind}))\n",
@@ -1123,6 +1129,70 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertNotEqual(
                 semantic[0]["lane_contract_digest"],
                 semantic[1]["lane_contract_digest"],
+            )
+
+    def test_completed_token_budget_output_recovers_without_model_rerun(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            config = root / ".dls/config.toml"
+            config.write_text(
+                config.read_text(encoding="utf-8")
+                + "\n[review_budgets.standard]\n"
+                "aggregate_tokens = 100\n"
+                "lane_tokens = 100\n",
+                encoding="utf-8",
+            )
+            original, counter, _ = self._install_fake_codex(
+                root,
+                semantic_usage_tokens=150,
+            )
+            try:
+                failed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="token-budget-recovery",
+                )
+                self.assertEqual(failed["status"], "failed")
+                self.assertEqual(
+                    failed["next_action"]["id"],
+                    "inspect-review-budget",
+                )
+                config.write_text(
+                    config.read_text(encoding="utf-8")
+                    .replace("aggregate_tokens = 100", "aggregate_tokens = 300")
+                    .replace("lane_tokens = 100", "lane_tokens = 300"),
+                    encoding="utf-8",
+                )
+                completed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="token-budget-recovery",
+                )
+            finally:
+                self._restore_path(original)
+
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(completed["verdict"], "review-clear")
+            calls = counter.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(calls.count("native"), 1)
+            self.assertEqual(calls.count("semantic-independent"), 1)
+            semantic = [
+                item
+                for item in StateStore(root).load("C001")["reviews"]
+                if item.get("lane_key") == "semantic:full"
+            ]
+            self.assertEqual(len(semantic), 1)
+            self.assertEqual(semantic[0]["status"], "completed")
+            self.assertEqual(
+                semantic[0]["budget_recovery_contract"],
+                "dls-token-budget-recovery/v1",
+            )
+            self.assertEqual(
+                semantic[0]["original_budget_failure_reason"],
+                "lane processed_tokens=151 exceeds budget=100",
             )
 
     def test_review_run_returns_unprepared_candidate_to_implementation_task(self) -> None:

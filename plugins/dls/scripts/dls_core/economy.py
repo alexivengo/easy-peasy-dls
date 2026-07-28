@@ -22,7 +22,7 @@ class ReviewBudget:
 DEFAULT_REVIEW_BUDGETS = {
     "routine": ReviewBudget(750_000, 750_000, 12, 600, 384 * 1024),
     "standard": ReviewBudget(3_000_000, 1_500_000, 24, 900, 768 * 1024),
-    "critical": ReviewBudget(5_000_000, 2_500_000, 48, 1_200, 1536 * 1024),
+    "critical": ReviewBudget(8_000_000, 6_000_000, 48, 1_200, 1536 * 1024),
 }
 
 

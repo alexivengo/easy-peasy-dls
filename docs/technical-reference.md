@@ -416,12 +416,16 @@ bounded budget является явным новым execution contract, а н�
 укладывается в исходный budget. Остальные budget failures не становятся
 retryable.
 
-Первый real critical pilot после исправления double-count дошёл до 33
-логических команд и показал, что прежний cap 32 обрывает валидный targeted-pass
-на границе. В `v0.6.0` critical cap откалиброван до 48 command events и 1.5 MiB
-transcript; token и 20-минутный time budgets не расширялись. Terminal budget
-attempt не передаётся в decision-repair и возвращает типизированный
-`inspect-review-budget`, даже когда output artifact отсутствует.
+Первый real critical pilot после исправления double-count дошёл до 36
+логических команд и 5.51 млн processed tokens. Он показал, что прежние caps 32
+commands, 2.5 млн на lane и 5 млн aggregate обрывали уже завершённый валидный
+targeted-pass. В `v0.6.0` critical budget откалиброван до 48 commands, 1.5 MiB
+transcript, 6 млн на lane и 8 млн aggregate; 20-минутный timeout не расширялся.
+Завершённый digest-bound structured output можно принять без нового model call
+только после явного нового budget contract, в который укладывается измеренный
+usage. Command, time, transcript, transport и integrity failures так не
+восстанавливаются. Остальные terminal budget attempts возвращают
+типизированный `inspect-review-budget`, в том числе без output artifact.
 
 Новые packs помечаются `runner_contract: dls-review-runner/v2`,
 `context_contract: dls-review-context/v2`, `economy_contract:

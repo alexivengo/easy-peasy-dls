@@ -1263,6 +1263,137 @@ def _completed_lane_payload(
     return normalized
 
 
+def _recover_completed_token_budget_lane(
+    owner: Path,
+    *,
+    state_store: StateStore,
+    change_id: str,
+    pack: dict[str, Any],
+    attempts: list[dict[str, Any]],
+    lane_contract_digest: str,
+    effective_budget: ReviewBudget,
+    payload_kind: str,
+    lens_id: str | None,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Accept an already completed decision under a newer bounded budget.
+
+    Command, duration, transcript, transport and integrity failures are never
+    eligible. The raw output and transcript remain immutable provenance.
+    """
+
+    current_snapshot = git_source_snapshot_digest(owner)
+    state = state_store.load(change_id)
+    aggregate_total = sum(
+        value
+        for item in state.get("reviews", [])
+        if isinstance(item, dict)
+        for value in [processed_tokens(item.get("usage"))]
+        if value is not None
+    )
+    for candidate in reversed(attempts):
+        if candidate.get("status") == "completed" and candidate.get(
+            "budget_recovery_lane_contract_digest"
+        ) == lane_contract_digest:
+            return candidate, _completed_lane_payload(
+                owner,
+                candidate,
+                pack=pack,
+                payload_kind=payload_kind,
+                lens_id=lens_id,
+            )
+        reason = candidate.get("failure_reason")
+        if (
+            candidate.get("status") != "budget-exceeded"
+            or not isinstance(reason, str)
+            or not reason.startswith(
+                ("lane processed_tokens=", "aggregate processed_tokens=")
+            )
+            or candidate.get("exit_code") != 0
+            or candidate.get("timed_out") is not False
+            or candidate.get("overflow") is not False
+            or candidate.get("transcript_truncated") is True
+            or candidate.get("head_sha") != pack["head_sha"]
+            or candidate.get("pack_digest") != pack["pack_digest"]
+            or candidate.get("source_snapshot_before") != current_snapshot
+            or candidate.get("source_snapshot_digest") != current_snapshot
+        ):
+            continue
+        usage_tokens = processed_tokens(candidate.get("usage"))
+        if usage_tokens is None:
+            continue
+        if token_budget_failure(
+            candidate.get("usage"),
+            aggregate_before=max(0, aggregate_total - usage_tokens),
+            budget=effective_budget,
+        ) is not None:
+            continue
+        if (
+            candidate.get("command_events", 0) > effective_budget.command_events
+            or candidate.get("duration_seconds", 0) > effective_budget.timeout_seconds
+            or candidate.get("transcript_retained_bytes", 0)
+            > effective_budget.transcript_bytes
+        ):
+            continue
+        output_relative = candidate.get("output_path")
+        transcript_relative = candidate.get("transcript_path")
+        attempt_id = candidate.get("attempt_id")
+        if not all(
+            isinstance(value, str) and value
+            for value in (output_relative, transcript_relative, attempt_id)
+        ):
+            continue
+        output_path = safe_resolve(owner, output_relative, must_exist=True)
+        transcript_path = safe_resolve(owner, transcript_relative, must_exist=True)
+        if (
+            sha256_file(output_path) != candidate.get("output_digest")
+            or sha256_file(transcript_path) != candidate.get("transcript_digest")
+        ):
+            raise IntegrityError("Token-budget recovery artifact digest mismatch")
+        raw_payload = read_json(output_path)
+        normalized, identifier_normalizations = _normalize_structured_payload(
+            raw_payload,
+            pack=pack,
+            payload_kind=payload_kind,
+            lens_id=lens_id,
+        )
+        safe_lane = str(candidate.get("lane_key", "lane")).replace(":", "-")
+        normalized_relative = (
+            f".dls/cache/reviews/{change_id}/{pack['review_id']}/"
+            f"{safe_lane}-{attempt_id}.normalized.json"
+        )
+        normalized_path = safe_resolve(owner, normalized_relative)
+        atomic_write_json(normalized_path, normalized, backup=False)
+        try:
+            _, recovered, _ = state_store.finish_review_lane(
+                change_id,
+                attempt_id=attempt_id,
+                expected_status="budget-exceeded",
+                updates={
+                    "status": "completed",
+                    "normalized_output_path": normalized_relative,
+                    "normalized_output_digest": sha256_file(normalized_path),
+                    "identifier_normalizations": identifier_normalizations,
+                    "original_budget_failure_reason": reason,
+                    "budget_recovery_contract": "dls-token-budget-recovery/v1",
+                    "budget_recovery_lane_contract_digest": lane_contract_digest,
+                    "recovered_budget": {
+                        "aggregate_tokens": effective_budget.aggregate_tokens,
+                        "lane_tokens": effective_budget.lane_tokens,
+                        "command_events": effective_budget.command_events,
+                        "timeout_seconds": effective_budget.timeout_seconds,
+                        "transcript_bytes": effective_budget.transcript_bytes,
+                    },
+                    "budget_recovered_at": utc_now(),
+                    "failure_reason": None,
+                },
+            )
+        except Exception:
+            normalized_path.unlink(missing_ok=True)
+            raise
+        return recovered, normalized
+    return None
+
+
 def _mark_lane_pipeline_failed(
     owner: Path,
     *,
@@ -1384,6 +1515,19 @@ def _execute_structured_lane(
             review_id=pack["review_id"],
             lane_key=lane_key,
         )
+        recovered_budget = _recover_completed_token_budget_lane(
+            owner,
+            state_store=state_store,
+            change_id=change_id,
+            pack=pack,
+            attempts=attempts,
+            lane_contract_digest=lane_contract_digest,
+            effective_budget=effective_budget,
+            payload_kind=payload_kind,
+            lens_id=lens_id,
+        )
+        if recovered_budget is not None:
+            return recovered_budget
         contract_attempts = [
             item
             for item in attempts
@@ -2564,6 +2708,7 @@ def _update_pipeline(
 
 def _build_review_ir(
     *,
+    owner: Path,
     pack: dict[str, Any],
     start_result: dict[str, Any],
     decision: dict[str, Any],
@@ -2573,6 +2718,17 @@ def _build_review_ir(
     final_full_entry: dict[str, Any] | None,
     identifier_normalizations: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
+    semantic_context_path = safe_resolve(
+        owner,
+        independent_entry["context_manifest_path"],
+        must_exist=True,
+    )
+    if sha256_file(semantic_context_path) != independent_entry.get("context_digest"):
+        raise IntegrityError("Semantic context digest changed before ReviewIR assembly")
+    semantic_context = read_json(semantic_context_path)
+    semantic_context_manifest_digest = semantic_context.get("manifest_digest")
+    if not isinstance(semantic_context_manifest_digest, str):
+        raise IntegrityError("Semantic context is missing its manifest digest")
     decision, derived_normalizations = _normalize_structured_payload(
         decision,
         pack=pack,
@@ -2630,8 +2786,8 @@ def _build_review_ir(
             "status": "completed",
             "model": independent_entry["model"],
             "reasoning_effort": independent_entry["reasoning_effort"],
-            "context_manifest_path": start_result["review_context_path"],
-            "context_manifest_digest": start_result["review_context_digest"],
+            "context_manifest_path": independent_entry["context_manifest_path"],
+            "context_manifest_digest": semantic_context_manifest_digest,
             "independent_draft_path": independent_entry["output_path"],
             "independent_draft_digest": independent_entry["output_digest"],
             "attempt_id": independent_entry["attempt_id"],
@@ -2769,6 +2925,7 @@ def _finalize_review(
             "identifier_normalizations", []
         )
         report = _build_review_ir(
+            owner=owner,
             pack=pack,
             start_result=start_result,
             decision=decision,
