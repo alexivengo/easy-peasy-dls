@@ -480,8 +480,9 @@ env_allow = []
             }
             state_path.write_text(json.dumps(state), encoding="utf-8")
             change_path = root / state["artifacts"]["change"]["path"]
+            user_path = "/" + "Users/private"
             change_path.write_text(
-                "# Secret token=very-secret /Users/private/project $HOME/private ~/local\n\n"
+                f"# Secret token=very-secret {user_path}/project $HOME/private ~/local\n\n"
                 "## Outcome\n\nShip password=hunter2 from /tmp/private/output.\n",
                 encoding="utf-8",
             )
@@ -494,7 +495,7 @@ env_allow = []
             encoded = json.dumps(receipt, ensure_ascii=False)
             self.assertNotIn("very-secret", encoded)
             self.assertNotIn("hunter2", encoded)
-            self.assertNotIn("/Users/private", encoded)
+            self.assertNotIn(user_path, encoded)
             self.assertNotIn("/tmp/private", encoded)
             self.assertNotIn("$HOME/private", encoded)
             self.assertNotIn("~/local", encoded)

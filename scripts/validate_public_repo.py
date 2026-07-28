@@ -88,10 +88,8 @@ def repository_files() -> list[Path]:
         ).stdout
     except (FileNotFoundError, subprocess.CalledProcessError):
         return working_tree_files()
-    tracked = [Path(item.decode()) for item in output.split(b"\0") if item]
-    if tracked:
-        return tracked
-    return working_tree_files()
+    tracked = {Path(item.decode()) for item in output.split(b"\0") if item}
+    return sorted(tracked | set(working_tree_files()))
 
 
 def load_json(path: Path) -> object:
