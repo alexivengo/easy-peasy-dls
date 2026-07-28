@@ -16,6 +16,7 @@ from dls_core.operations import (
     REVIEW_DECISION_REPAIR_CONTRACT,
     REVIEW_IDENTIFIER_CONTRACT,
     REVIEW_RUNNER_CONTRACT,
+    NATIVE_WORKSPACE_CONTRACT,
     _codex_usage_from_output,
     _native_plaintext_projection,
     _review_pack_digest,
@@ -203,6 +204,10 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertEqual(
                 pack["review_pack"]["decision_repair_contract"],
                 REVIEW_DECISION_REPAIR_CONTRACT,
+            )
+            self.assertEqual(
+                pack["review_pack"]["native_workspace_contract"],
+                NATIVE_WORKSPACE_CONTRACT,
             )
 
     def test_routine_review_uses_one_terra_lane_without_sol_or_reconciliation(self) -> None:
@@ -2516,6 +2521,13 @@ env_allow = []
             / "references"
             / "remediation.md"
         ).read_text(encoding="utf-8")
+        activation = (
+            plugin_root
+            / "skills"
+            / "dls-workflow"
+            / "agents"
+            / "openai.yaml"
+        ).read_text(encoding="utf-8")
         combined = skill + "\n" + review
         self.assertIn("review-run", combined)
         self.assertNotIn("command -v dls", combined)
@@ -2534,6 +2546,7 @@ env_allow = []
         self.assertIn("reinstall-dls-plugin", combined)
         self.assertIn("Do not activate for generic coding", skill)
         self.assertIn("repository has DLS config/state", skill)
+        self.assertIn("allow_implicit_invocation: true", activation)
         self.assertNotIn("Use only when the user explicitly invokes", skill)
         self.assertNotIn("archive fallback", combined.lower())
         self.assertIn("open-review-task", remediation)

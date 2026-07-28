@@ -2,7 +2,7 @@
 
 Срез: 28 июля 2026 года
 
-Текущая линия: `v0.7.0`
+Текущая линия: `v0.7.1`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
@@ -25,7 +25,7 @@ Must-be ядро реализовано и защищается regression-те�
 - latest-only remediation manifest и reviewer-owned verification;
 - одна implementation-команда `candidate-ready` и одна review-команда
   `review-run`;
-- read-only disposable review workspaces, single-flight и bounded recovery.
+- read-only disposable review workspaces, single-flight и bounded recovery;
 - bounded review execution: risk budgets, compact context и ранняя остановка.
 
 Ранее открытые gaps launcher/PATH, semantic write prevention, remediation
@@ -110,7 +110,19 @@ ReviewPack и model calls. Models и default budgets не меняются.
 вернул `approve-definition`. Поэтому это profile/runtime доказательство, а не
 backend review-usage baseline для настройки budgets или моделей.
 
-## Следующая волна v0.7.1: UI/UX platform pilot
+## v0.7.1 — native review scope integrity
+
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| M61 | Must-be / P0 | Standalone native workspace provenance | Native review получает clean standalone clone exact HEAD, не видит owner-local `.dls`, а попытка без workspace marker не переиспользуется |
+| P35 | Performance / P0 | Реальная guarded activation | Workflow skill разрешён для implicit invocation, но description по-прежнему требует явный DLS-сигнал |
+
+Exit criteria v0.7.1: dirty generated DLS sidecar владельца отсутствует в
+native workspace, recorded argv не содержит owner/temp paths, Git common-dir и
+remote не ведут обратно в owner checkout, а legacy owner-scoped attempt не
+может стать canonical native provenance.
+
+## Следующая волна v0.7.2: UI/UX platform pilot
 
 - `M38–M39` — проверить Tier 1 precedent и Tier 2/3 versioned design artifact на
   реальном UI change;

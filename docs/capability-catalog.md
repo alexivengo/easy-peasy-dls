@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
 Срез: 28 июля 2026 года
-Текущая линия: `v0.7.0`
+Текущая линия: `v0.7.1`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -9,16 +9,16 @@
 «что делать следующим», а этот документ — «что вообще существует, планируется
 или намеренно не будет реализовано».
 
-Всего отслеживается 145 пунктов:
+Всего отслеживается 146 пунктов:
 
-- 60 Must-be: `M01–M60`;
+- 61 Must-be: `M01–M61`;
 - 39 Performance: `P01–P39`;
 - 10 Attractive: `A01–A10`;
 - 12 Indifferent/premature: `I01–I12`;
 - 24 Reverse anti-features: `R01–R24`.
 
 Исходный KANO-снимок содержал 129 пунктов: все они сохранены под прежними ID.
-К ним добавлены 16 публичных возможностей `M51–M60` и `P34–P39`. Удалять ID
+К ним добавлены 17 публичных возможностей `M51–M61` и `P34–P39`. Удалять ID
 нельзя: изменившееся решение помечается как заменённое, а не исчезает из карты.
 
 ## Статусы
@@ -77,8 +77,8 @@
 | M35 | Review не завершается без result path | ✅ | P0 | Успех требует canonical `review_result_path`; actionable result — remediation path |
 | M36 | Findings lifecycle | ✅ | P0 | Implementer ставит addressed/note; verified принадлежит independent review; waiver — человеку |
 | M37 | Latest-only remediation context | ✅ | P0 | Рабочий manifest строится только из последнего canonical ReviewIR |
-| M38 | UI/UX source prerequisite | 🟨 | P0 | Policy и approvals реализованы; реальный UI pilot перенесён в v0.7.1 |
-| M39 | Tiered UI policy | 🟨 | P0 | Tier 1 допускает precedent, Tier 2/3 требуют versioned artifact; реальный pilot перенесён в v0.7.1 |
+| M38 | UI/UX source prerequisite | 🟨 | P0 | Policy и approvals реализованы; реальный UI pilot перенесён в v0.7.2 |
+| M39 | Tiered UI policy | 🟨 | P0 | Tier 1 допускает precedent, Tier 2/3 требуют versioned artifact; реальный pilot перенесён в v0.7.2 |
 | M40 | Architecture decision до завершения SPEC | 🟨 | P0 | Critical E03 adoption и Draft/approval boundary дают backend preflight evidence; нужен полный approved definition/review lifecycle |
 | M41 | ADR только для долговечного решения | ✅ | P0 | ADR остаётся conditional artifact, а не ритуалом для каждого change |
 | M42 | Release/production evidence не подменяет review | ✅ | P0 | External gaps не блокируют code review без прямой ссылки на ticket DoD |
@@ -100,6 +100,7 @@
 | M58 | Native presentation recovery | ✅ | P0 | Строгая plaintext projection сохраняет raw provenance и не повторяет model call |
 | M59 | Budget-terminal safety | ✅ | P0 | Budget stop не маскируется parser failure; новый budget образует новый contract |
 | M60 | Candidate/review/delivery status из одного pack | ✅ | P0 | Exact HEAD, prior review и typed next action используют общий resolver |
+| M61 | Standalone native workspace provenance | ✅ | P0 | Native review запускается в clean exact-HEAD clone; owner-local `.dls` и попытки без workspace marker не входят в canonical provenance |
 
 ## Performance — экономия времени, контекста и ручной работы
 
@@ -158,7 +159,7 @@
 | A07 | Generated ADR index | 🧊 | P3 | Несколько проектов с накопленным набором долговечных ADR |
 | A08 | Guided legacy migration report | 🧊 | P2 | Повторяющийся спрос, dry-run, diff и rollback |
 | A09 | Release-profile library | 🧊 | P2 | Реальные App Store, Play, web deploy и backend production pilots |
-| A10 | Disposable review workspace | ✅ | P1 | Реализовано runner-owned detached workspace с cleanup в `finally` |
+| A10 | Disposable review workspace | ✅ | P1 | Semantic lanes используют detached workspace; native lane — standalone no-hardlinks clone с cleanup в `finally` |
 
 ## Indifferent или premature — не включать без новых данных
 
@@ -217,7 +218,13 @@
 - `P12` остаётся planned: models и default budgets не меняются без
   сопоставимого backend model-review baseline.
 
-### v0.7.1 — UI/UX и полный architecture lifecycle
+### v0.7.1 — native review scope integrity
+
+- `M61`: standalone clone, explicit Codex `--cd` и state-owned workspace provenance;
+- `P35`: guarded workflow действительно доступен для implicit invocation по DLS-сигналу;
+- owner-scoped legacy native attempt получает bounded replacement вместо reuse.
+
+### v0.7.2 — UI/UX и полный architecture lifecycle
 
 - `M38–M39`: UI tiers и immutable design source на реальном change;
 - `M40`: approved critical definition/review lifecycle;

@@ -2875,6 +2875,15 @@ def _build_review_ir(
             "transcript_path": native.get("transcript_path"),
             "transcript_digest": native.get("transcript_digest"),
             "source_snapshot_digest": native["source_snapshot_digest"],
+            "native_workspace_contract": native.get("native_workspace_contract"),
+            "workspace_isolation": native.get("workspace_isolation"),
+            "workspace_head_sha": native.get("workspace_head_sha"),
+            "workspace_source_snapshot_before": native.get(
+                "workspace_source_snapshot_before"
+            ),
+            "workspace_source_snapshot_after": native.get(
+                "workspace_source_snapshot_after"
+            ),
             "coverage_chain": start_result.get("native_coverage", []),
         }
     return {
@@ -2883,6 +2892,11 @@ def _build_review_ir(
         **({"context_contract": pack["context_contract"]} if pack.get("context_contract") else {}),
         **({"economy_contract": pack["economy_contract"]} if pack.get("economy_contract") else {}),
         **({"native_output_contract": pack["native_output_contract"]} if pack.get("native_output_contract") else {}),
+        **(
+            {"native_workspace_contract": pack["native_workspace_contract"]}
+            if pack.get("native_workspace_contract")
+            else {}
+        ),
         **(
             {"decision_repair_contract": REVIEW_DECISION_REPAIR_CONTRACT}
             if repairs

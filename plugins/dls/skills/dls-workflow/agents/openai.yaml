@@ -3,4 +3,4 @@ interface:
   short_description: "Провести изменение с контролем и evidence"
   default_prompt: "Используй $dls-workflow и проведи это изменение по минимальному подходящему DLS-пути."
 policy:
-  allow_implicit_invocation: false
+  allow_implicit_invocation: true

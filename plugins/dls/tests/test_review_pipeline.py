@@ -609,6 +609,158 @@ class ReviewPipelineTests(unittest.TestCase):
                     operation_id="native-missing-cache",
                 )
 
+    def test_native_review_uses_clean_standalone_clone_not_owner_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, pack = self._standard_pack(root)
+            owner_only = root / ".dls" / "cache" / "owner-only"
+            owner_only.write_text("must not be visible to native review\n", encoding="utf-8")
+            observed_cwd = root / ".dls" / "cache" / "native-cwd"
+            original = self._install_fake_codex(
+                root,
+                (
+                    "test -d .git || exit 70\n"
+                    "test ! -e .dls/cache/owner-only || exit 71\n"
+                    "test -z \"$(git status --porcelain)\" || exit 72\n"
+                    "test -z \"$(git remote)\" || exit 73\n"
+                    "test ! -e .git/objects/info/alternates || exit 74\n"
+                    f"printf '%s' \"$PWD\" > {str(observed_cwd)!r}\n"
+                ),
+            )
+            try:
+                result = review_start(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="native-isolated",
+                )
+            finally:
+                self._restore_path(original)
+
+            pack_document = pack["review_pack"]
+            self.assertEqual(
+                pack_document["native_workspace_contract"],
+                "dls-native-workspace/v1",
+            )
+            native = result["native"]
+            self.assertEqual(
+                native["native_workspace_contract"],
+                pack_document["native_workspace_contract"],
+            )
+            self.assertEqual(native["workspace_isolation"], "standalone-clone")
+            self.assertEqual(native["workspace_head_sha"], pack_document["head_sha"])
+            self.assertEqual(
+                native["workspace_source_snapshot_before"],
+                native["workspace_source_snapshot_after"],
+            )
+            self.assertIn("--cd", native["argv"])
+            self.assertIn("<dls-native-workspace>", native["argv"])
+            self.assertIn("<dls-native-output>", native["argv"])
+            self.assertNotIn(str(root), " ".join(native["argv"]))
+            native_cwd = Path(observed_cwd.read_text(encoding="utf-8"))
+            self.assertNotEqual(native_cwd, root.resolve())
+            self.assertFalse(native_cwd.exists())
+
+    def test_native_attempt_without_workspace_provenance_is_not_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._standard_pack(root)
+            first = start_review_with_fake_codex(
+                root,
+                change_id="C001",
+                operation_id="native-legacy",
+            )
+            first_attempt_id = first["native"]["attempt_id"]
+            store = StateStore(root)
+            state = store.load("C001")
+
+            def strip_workspace_provenance(value: dict) -> None:
+                attempt = next(
+                    item
+                    for item in value["reviews"]
+                    if item.get("attempt_id") == first_attempt_id
+                )
+                for field in (
+                    "native_workspace_contract",
+                    "workspace_isolation",
+                    "workspace_head_sha",
+                    "workspace_source_snapshot_before",
+                    "workspace_source_snapshot_after",
+                ):
+                    attempt.pop(field, None)
+                attempt["argv"] = ["codex", "exec", "review", "--base", "HEAD~1"]
+
+            store.mutate(
+                "C001",
+                expected_revision=state["state_revision"],
+                operation_id="fixture-strip-native-provenance",
+                operation_kind="fixture",
+                mutator=strip_workspace_provenance,
+            )
+            recovered = start_review_with_fake_codex(
+                root,
+                change_id="C001",
+                operation_id="native-current",
+            )
+            self.assertNotEqual(recovered["native"]["attempt_id"], first_attempt_id)
+            attempts = [
+                item
+                for item in StateStore(root).load("C001")["reviews"]
+                if item.get("lane_key") == "native"
+            ]
+            self.assertEqual(
+                [item["status"] for item in attempts],
+                ["incompatible-workspace", "completed"],
+            )
+
+    def test_pre_runner_native_entry_without_lane_key_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._standard_pack(root)
+            first = start_review_with_fake_codex(
+                root,
+                change_id="C001",
+                operation_id="native-pre-runner",
+            )
+            first_attempt_id = first["native"]["attempt_id"]
+            store = StateStore(root)
+            state = store.load("C001")
+
+            def make_pre_runner_attempt(value: dict) -> None:
+                attempt = next(
+                    item
+                    for item in value["reviews"]
+                    if item.get("attempt_id") == first_attempt_id
+                )
+                attempt.pop("lane_key", None)
+                attempt.pop("native_workspace_contract", None)
+                attempt.pop("workspace_isolation", None)
+                attempt.pop("workspace_head_sha", None)
+                attempt["argv"] = ["codex", "exec", "review", "--base", "HEAD~1"]
+
+            store.mutate(
+                "C001",
+                expected_revision=state["state_revision"],
+                operation_id="fixture-pre-runner-native",
+                operation_kind="fixture",
+                mutator=make_pre_runner_attempt,
+            )
+            recovered = start_review_with_fake_codex(
+                root,
+                change_id="C001",
+                operation_id="native-after-pre-runner",
+            )
+            self.assertNotEqual(recovered["native"]["attempt_id"], first_attempt_id)
+            updated = StateStore(root).load("C001")
+            old = next(
+                item
+                for item in updated["reviews"]
+                if item.get("attempt_id") == first_attempt_id
+            )
+            self.assertNotIn("lane_key", old)
+            self.assertEqual(old["status"], "completed")
+            self.assertEqual(recovered["native"]["status"], "completed")
+
     def test_import_requires_native_metadata_and_rejects_semantic_source_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             sandbox = Path(directory)

@@ -42,6 +42,7 @@
     "economy_contract": { "const": "dls-review-economy/v1" },
     "command_event_contract": { "const": "logical-invocations/v1" },
     "native_output_contract": { "const": "dls-native-review/v2" },
+    "native_workspace_contract": { "const": "dls-native-workspace/v1" },
     "identifier_contract": { "const": "canonical-ticket-ids/v1" },
     "decision_repair_contract": { "const": "dls-decision-repair/v1" },
     "platform_profile": {

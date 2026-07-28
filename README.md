@@ -54,6 +54,7 @@ DLS спроектирован так, чтобы меньше повторят�
 - candidate привязан к точному Git SHA;
 - validation запускает только доверенные команды из конфигурации репозитория;
 - evidence должно относиться к текущей ревизии;
+- native review работает в чистом standalone clone и не видит локальный DLS sidecar рабочего checkout;
 - independent review нельзя закрыть силами implementer;
 - remediation проверяет предыдущие findings и изменившийся blast radius;
 - `review-clear`, пользовательский `accept` и готовность к release остаются разными состояниями.

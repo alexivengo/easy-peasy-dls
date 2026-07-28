@@ -248,6 +248,24 @@ action — `reinstall-dls-plugin`. Поиск `dls` в `PATH`, sibling checkout,
 `dls_version`, поэтому происхождение ответа диагностируется без публикации
 локального пути.
 
+В `v0.7.1` это правило усилено после реального scope-leak: review-задача
+запустила CLI из внутреннего R&D-архива. Старый `codex exec review --base`
+привязался к owner checkout, включил dirty generated `.dls/state` и выдал
+ложный finding о незакоммиченном ReviewPack. Такой native attempt не был
+каноническим ReviewIR, но мог быть ошибочно переиспользован по одному
+`kind=native`.
+
+Теперь guarded workflow допускает implicit activation только при описанных
+выше DLS-сигналах. Native runner создаёт не linked worktree, а standalone
+`--no-hardlinks` clone точного HEAD, удаляет remote, запрещает Git alternates и
+явно передаёт Codex `--cd` этого clone. Model output сначала пишется во
+временный runtime path и только затем переносится в owner-local cache. Новый
+ReviewPack marker `native_workspace_contract: dls-native-workspace/v1` и
+state-owned workspace provenance не позволяют переиспользовать попытку без
+доказанной изоляции. Legacy ReviewPack/ReviewIR остаются читаемыми; небезопасный
+незавершённый native attempt получает один bounded повтор, а не считается
+успешной lane.
+
 `candidate-status`, `review-status` и `delivery-status` используют один
 exact-HEAD resolver. Исторический completed candidate доступен по явному
 operation ID для аудита, но получает `exact_head: false`, `prepared: false` и
@@ -511,7 +529,8 @@ usage. Command, time, transcript, transport и integrity failures так не
 
 Новые packs помечаются `runner_contract: dls-review-runner/v2`,
 `context_contract: dls-review-context/v2`, `economy_contract:
-dls-review-economy/v1` и `native_output_contract: dls-native-review/v2`. Для них import
+dls-review-economy/v1`, `native_output_contract: dls-native-review/v2` и
+`native_workspace_contract: dls-native-workspace/v1`. Для них import
 доверяет provenance только completed attempts из DLS state: модель возвращает
 semantic decision, но не может сама объявить lane завершённым. Исторические
 ReviewPack/ReviewIR v1 и v2 без marker остаются читаемыми как

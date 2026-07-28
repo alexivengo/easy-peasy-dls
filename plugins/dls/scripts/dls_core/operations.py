@@ -134,12 +134,15 @@ REVIEW_CONTEXT_CONTRACT = "dls-review-context/v2"
 REVIEW_ECONOMY_CONTRACT = "dls-review-economy/v1"
 COMMAND_EVENT_CONTRACT = "logical-invocations/v1"
 NATIVE_OUTPUT_CONTRACT = "dls-native-review/v2"
+NATIVE_WORKSPACE_CONTRACT = "dls-native-workspace/v1"
+NATIVE_WORKSPACE_ISOLATION = "standalone-clone"
 REVIEW_IDENTIFIER_CONTRACT = "canonical-ticket-ids/v1"
 REVIEW_DECISION_REPAIR_CONTRACT = "dls-decision-repair/v1"
 REVIEW_LANE_MAX_ATTEMPTS = 2
 RETRYABLE_REVIEW_LANE_STATUSES = {
     "abandoned",
     "api-failure",
+    "incompatible-workspace",
     "timeout",
     "output-cap",
     "missing-output",
@@ -2469,6 +2472,12 @@ def _validate_review_pack(pack: dict[str, Any], change_id: str) -> None:
     if not isinstance(pack["tickets"], dict) or not isinstance(pack["artifacts"], dict):
         raise IntegrityError("ReviewPack artifacts and tickets must be objects")
     if schema_version == REVIEW_PACK_SCHEMA_VERSION:
+        native_workspace_contract = pack.get("native_workspace_contract")
+        if native_workspace_contract not in {None, NATIVE_WORKSPACE_CONTRACT}:
+            raise IntegrityError(
+                "Unsupported ReviewPack native workspace contract: "
+                f"{native_workspace_contract}"
+            )
         identifier_contract = pack.get("identifier_contract")
         if identifier_contract not in {None, REVIEW_IDENTIFIER_CONTRACT}:
             raise IntegrityError(
@@ -2763,6 +2772,7 @@ def _review_pack_state_entry(
         "context_contract": pack.get("context_contract"),
         "economy_contract": pack.get("economy_contract"),
         "native_output_contract": pack.get("native_output_contract"),
+        "native_workspace_contract": pack.get("native_workspace_contract"),
         "identifier_contract": pack.get("identifier_contract"),
         "decision_repair_contract": pack.get("decision_repair_contract"),
         "pack_path": relative_path,
@@ -2905,6 +2915,7 @@ def review_pack(
         "economy_contract": REVIEW_ECONOMY_CONTRACT,
         "command_event_contract": COMMAND_EVENT_CONTRACT,
         "native_output_contract": NATIVE_OUTPUT_CONTRACT,
+        "native_workspace_contract": NATIVE_WORKSPACE_CONTRACT,
         "identifier_contract": REVIEW_IDENTIFIER_CONTRACT,
         "decision_repair_contract": REVIEW_DECISION_REPAIR_CONTRACT,
         "platform_profile": {
@@ -3722,6 +3733,8 @@ def _native_plaintext_projection(text: str) -> dict[str, Any]:
 def _native_review_argv(
     pack: dict[str, Any],
     final_output_path: str,
+    *,
+    working_directory: str | None = None,
 ) -> list[str]:
     routine = pack.get("control_level") == "routine"
     schema_path = (
@@ -3745,6 +3758,8 @@ def _native_review_argv(
         "--color",
         "never",
     ]
+    if working_directory is not None:
+        argv.extend(["--cd", working_directory])
     if pack.get("native_output_contract") == NATIVE_OUTPUT_CONTRACT:
         argv.extend(
             [
@@ -3769,23 +3784,88 @@ def _native_review_argv(
     return argv
 
 
+def _create_native_review_workspace(
+    owner: Path,
+    *,
+    head_sha: str,
+    parent: Path,
+) -> Path:
+    """Create a standalone exact-HEAD clone for the built-in review command.
+
+    A linked Git worktree shares repository metadata with its owner.  Some
+    Codex CLI builds can then resolve the owner checkout and include its dirty
+    generated `.dls` sidecar in `review --base`.  A no-hardlinks clone with no
+    remote or alternates gives the model one clean repository root only.
+    """
+
+    workspace = parent / "checkout"
+    run_git(
+        owner,
+        "clone",
+        "--no-hardlinks",
+        "--no-checkout",
+        "--quiet",
+        "--",
+        str(owner.resolve()),
+        str(workspace),
+    )
+    run_git(workspace, "checkout", "--detach", "--quiet", head_sha)
+    run_git(workspace, "remote", "remove", "origin", check=False)
+    if git_head(workspace) != head_sha:
+        raise IntegrityError("Native review workspace is not at the exact ReviewPack HEAD")
+    if git_source_dirty_paths(workspace):
+        raise IntegrityError("Native review workspace is not clean")
+    common_dir_raw = run_git(workspace, "rev-parse", "--git-common-dir").stdout.strip()
+    common_dir = Path(common_dir_raw)
+    if not common_dir.is_absolute():
+        common_dir = workspace / common_dir
+    expected_git_dir = workspace / ".git"
+    try:
+        common_dir.resolve().relative_to(expected_git_dir.resolve())
+    except ValueError as exc:
+        raise IntegrityError(
+            "Native review workspace still shares Git metadata with its owner"
+        ) from exc
+    alternates = expected_git_dir / "objects" / "info" / "alternates"
+    if alternates.exists():
+        raise IntegrityError("Native review workspace must not use Git alternates")
+    config_path = expected_git_dir / "config"
+    if owner.resolve().as_posix() in config_path.read_text(encoding="utf-8"):
+        raise IntegrityError("Native review workspace leaks its owner path")
+    return workspace
+
+
 def _successful_native_entry(
     root: Path,
     *,
     state: dict[str, Any],
     review_id: str,
+    pack: dict[str, Any],
 ) -> dict[str, Any] | None:
-    entry = next(
-        (
-            item
-            for item in reversed(state["reviews"])
-            if item.get("kind") == "native"
-            and item.get("review_id") == review_id
-            and item.get("status") == "completed"
-        ),
-        None,
-    )
-    if not entry:
+    entry: dict[str, Any] | None = None
+    for candidate in reversed(state["reviews"]):
+        if (
+            candidate.get("kind") != "native"
+            or candidate.get("review_id") != review_id
+            or candidate.get("status") != "completed"
+        ):
+            continue
+        if (
+            pack.get("runner_contract") == REVIEW_RUNNER_CONTRACT
+            and candidate.get("lane_key") != "native"
+        ):
+            continue
+        workspace_contract = pack.get("native_workspace_contract")
+        if workspace_contract is not None and (
+            candidate.get("native_workspace_contract") != workspace_contract
+            or candidate.get("workspace_isolation")
+            != NATIVE_WORKSPACE_ISOLATION
+            or candidate.get("workspace_head_sha") != pack.get("head_sha")
+        ):
+            continue
+        entry = candidate
+        break
+    if entry is None:
         return None
     output_path = entry.get("output_path")
     if not isinstance(output_path, str):
@@ -4225,6 +4305,7 @@ def review_start(
         owner,
         state=state,
         review_id=pack["review_id"],
+        pack=pack,
     )
     native_was_reused = native_entry is not None
     predicted_attempt_id = str(
@@ -4237,7 +4318,11 @@ def review_start(
         f".dls/cache/reviews/{change_id}/{pack['review_id']}/"
         f"native-final-{predicted_attempt_id}.txt"
     )
-    argv = _native_review_argv(pack, predicted_output_path)
+    argv = _native_review_argv(
+        pack,
+        "<dls-native-output>",
+        working_directory="<dls-native-workspace>",
+    )
     if native_entry and isinstance(native_entry.get("argv"), list):
         argv = native_entry["argv"]
     if dry_run:
@@ -4379,7 +4464,24 @@ def review_start(
                     owner,
                     state=state,
                     review_id=pack["review_id"],
+                    pack=pack,
                 )
+                if native_entry is None:
+                    state, _, invalidated = state_store.finish_review_lane(
+                        change_id,
+                        attempt_id=completed["attempt_id"],
+                        expected_status="completed",
+                        updates={
+                            "status": "incompatible-workspace",
+                            "completed_at": utc_now(),
+                            "failure_reason": (
+                                "native attempt lacks the exact-HEAD standalone "
+                                "workspace provenance required by this ReviewPack"
+                            ),
+                        },
+                    )
+                    changed = changed or invalidated
+                    continue
                 native_was_reused = True
                 return _review_start_ready_response(
                     owner=owner,
@@ -4493,7 +4595,8 @@ def review_start(
             )
             argv = _native_review_argv(
                 pack,
-                str(safe_resolve(owner, relative_output_path)),
+                "<dls-native-output>",
+                working_directory="<dls-native-workspace>",
             )
             routine_review = pack.get("control_level") == "routine"
             native_schema_path = (
@@ -4516,6 +4619,11 @@ def review_start(
                 "operation_id": lane_operation_id,
                 "runner_pid": os.getpid(),
                 "runner_contract": pack.get("runner_contract", REVIEW_RUNNER_CONTRACT),
+                "dls_version": VERSION,
+                "native_workspace_contract": pack.get(
+                    "native_workspace_contract", NATIVE_WORKSPACE_CONTRACT
+                ),
+                "workspace_isolation": NATIVE_WORKSPACE_ISOLATION,
                 "base_sha": pack.get("comparison_base_sha", pack["base_sha"]),
                 "head_sha": pack["head_sha"],
                 "pack_digest": pack["pack_digest"],
@@ -4607,21 +4715,27 @@ def review_start(
         output_path.parent.mkdir(parents=True, exist_ok=True)
         native_parent = Path(tempfile.mkdtemp(prefix="dls-native-review-"))
         native_workspace = native_parent / "checkout"
+        runtime_output_path = native_parent / "last-message.json"
         workspace_snapshot_before = snapshot_before
         workspace_snapshot_after = snapshot_before
+        workspace_head_sha: str | None = None
+        runtime_output_bytes = 0
         native_failure_reason: str | None = None
         try:
-            run_git(
+            native_workspace = _create_native_review_workspace(
                 owner,
-                "worktree",
-                "add",
-                "--detach",
-                str(native_workspace),
-                pack["head_sha"],
+                head_sha=pack["head_sha"],
+                parent=native_parent,
             )
+            workspace_head_sha = git_head(native_workspace)
             workspace_snapshot_before = git_source_snapshot_digest(native_workspace)
+            runtime_argv = _native_review_argv(
+                pack,
+                str(runtime_output_path),
+                working_directory=str(native_workspace),
+            )
             execution = _run_bounded_command(
-                argv,
+                runtime_argv,
                 cwd=native_workspace,
                 environment=allowed_environment(["HOME", "CODEX_HOME"]),
                 timeout_seconds=budget.timeout_seconds,
@@ -4661,29 +4775,21 @@ def review_start(
                 "duration_seconds": 0.0,
             }
         finally:
-            run_git(
-                owner,
-                "worktree",
-                "remove",
-                "--force",
-                str(native_workspace),
-                check=False,
-            )
+            if runtime_output_path.is_file():
+                runtime_output_bytes = runtime_output_path.stat().st_size
+                with runtime_output_path.open("rb") as handle:
+                    retained_final = handle.read(NATIVE_REVIEW_MAX_OUTPUT_BYTES)
+                atomic_write_text(
+                    output_path,
+                    retained_final.decode("utf-8", errors="replace"),
+                    backup=False,
+                )
             shutil.rmtree(native_parent, ignore_errors=True)
-            run_git(owner, "worktree", "prune", check=False)
         transcript_text = execution["output"].decode("utf-8", errors="replace")
         atomic_write_text(transcript_path, transcript_text, backup=False)
         output_exists = output_path.is_file()
-        output_bytes = output_path.stat().st_size if output_exists else 0
+        output_bytes = runtime_output_bytes if output_exists else 0
         output_overflow = output_bytes > NATIVE_REVIEW_MAX_OUTPUT_BYTES
-        if output_overflow:
-            with output_path.open("rb") as handle:
-                retained_final = handle.read(NATIVE_REVIEW_MAX_OUTPUT_BYTES)
-            atomic_write_text(
-                output_path,
-                retained_final.decode("utf-8", errors="replace"),
-                backup=False,
-            )
         output_digest = sha256_file(output_path) if output_exists else None
         snapshot_after = git_source_snapshot_digest(owner)
         status_value = "completed"
@@ -4818,6 +4924,9 @@ def review_start(
             },
             "duration_seconds": execution["duration_seconds"],
             "source_snapshot_digest": snapshot_after,
+            "workspace_head_sha": workspace_head_sha,
+            "workspace_source_snapshot_before": workspace_snapshot_before,
+            "workspace_source_snapshot_after": workspace_snapshot_after,
             "failure_reason": failure_reason,
             "completed_at": utc_now(),
         }
@@ -5192,6 +5301,7 @@ def review_import(
         root,
         state=state,
         review_id=review_id,
+        pack=pack,
     )
     native_required = "native-diff" in pack["required_lanes"]
     if native_required and not native_entry:
@@ -5214,6 +5324,18 @@ def review_import(
                 raise IntegrityError(
                     f"ReviewIR native provenance mismatch: {report_key}"
                 )
+        if pack.get("native_workspace_contract") is not None:
+            for field in (
+                "native_workspace_contract",
+                "workspace_isolation",
+                "workspace_head_sha",
+                "workspace_source_snapshot_before",
+                "workspace_source_snapshot_after",
+            ):
+                if native_lane.get(field) != native_entry.get(field):
+                    raise IntegrityError(
+                        f"ReviewIR native workspace provenance mismatch: {field}"
+                    )
         if runner_contract in {
             LEGACY_REVIEW_RUNNER_CONTRACT,
             REVIEW_RUNNER_CONTRACT,
@@ -5740,16 +5862,21 @@ def doctor(root: Path) -> dict[str, Any]:
         text = skill_path.read_text(encoding="utf-8")
         yaml_path = skill_path.parent / "agents" / "openai.yaml"
         yaml_text = yaml_path.read_text(encoding="utf-8") if yaml_path.is_file() else ""
+        expected_implicit = (
+            "allow_implicit_invocation: true"
+            if skill_path.parent.name == "dls-workflow"
+            else "allow_implicit_invocation: false"
+        )
         if (
             not text.startswith("---\n")
             or "description:" not in text.split("---", 2)[1]
-            or "allow_implicit_invocation: false" not in yaml_text
+            or expected_implicit not in yaml_text
         ):
             skill_metadata_ok = False
         active_skills.append(skill_path.parent.name)
     checks.append(
         _check(
-            "skills:explicit-only",
+            "skills:activation-policy",
             skill_metadata_ok and set(active_skills) == {"dls-workflow", "dls-debug"},
             ",".join(active_skills),
         )
@@ -6010,6 +6137,7 @@ def _validate_review_report(
         "context_contract",
         "economy_contract",
         "native_output_contract",
+        "native_workspace_contract",
     ):
         if pack.get(field) is not None and report.get(field) != pack.get(field):
             raise IntegrityError(f"ReviewIR {field} does not match ReviewPack")

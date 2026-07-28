@@ -467,6 +467,15 @@ def build_review_report(
             "transcript_path": native.get("transcript_path"),
             "transcript_digest": native.get("transcript_digest"),
             "source_snapshot_digest": native["source_snapshot_digest"],
+            "native_workspace_contract": native.get("native_workspace_contract"),
+            "workspace_isolation": native.get("workspace_isolation"),
+            "workspace_head_sha": native.get("workspace_head_sha"),
+            "workspace_source_snapshot_before": native.get(
+                "workspace_source_snapshot_before"
+            ),
+            "workspace_source_snapshot_after": native.get(
+                "workspace_source_snapshot_after"
+            ),
             "coverage_chain": start_result.get("native_coverage", []),
         }
     if prior_finding_verdicts is None:
@@ -502,6 +511,7 @@ def build_review_report(
                 "context_contract",
                 "economy_contract",
                 "native_output_contract",
+                "native_workspace_contract",
             )
             if isinstance(pack.get(field), str)
         },
