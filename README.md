@@ -182,6 +182,7 @@ review запускается в отдельной задаче только д
 - [Чем DLS отличается от других подходов](docs/comparison.md)
 - [Технический справочник](docs/technical-reference.md)
 - [Roadmap и приоритеты KANO](docs/roadmap.md)
+- [Полная карта возможностей и anti-features](docs/capability-catalog.md)
 - [Как внести вклад](CONTRIBUTING.md)
 - [Как сообщить об уязвимости](SECURITY.md)
 

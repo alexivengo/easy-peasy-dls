@@ -24,6 +24,7 @@ REQUIRED_FILES = (
     ROOT / "LICENSE",
     ROOT / "CONTRIBUTING.md",
     ROOT / "SECURITY.md",
+    ROOT / "docs" / "capability-catalog.md",
     ROOT / "docs" / "roadmap.md",
     MARKETPLACE,
     MANIFEST,
@@ -52,6 +53,14 @@ SEMVER = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
+CAPABILITY_ROW = re.compile(r"^\| ([MPAIR])(\d{2}) \|", re.MULTILINE)
+CAPABILITY_RANGES = {
+    "M": 60,
+    "P": 39,
+    "A": 10,
+    "I": 12,
+    "R": 24,
+}
 
 
 def fail(message: str) -> None:
@@ -202,6 +211,34 @@ def validate_skills() -> None:
             fail(f"{skill_name}: отсутствует description")
 
 
+def validate_capability_catalog() -> None:
+    catalog = ROOT / "docs" / "capability-catalog.md"
+    text = catalog.read_text(encoding="utf-8")
+    ids = [f"{prefix}{number}" for prefix, number in CAPABILITY_ROW.findall(text)]
+    duplicates = sorted({item for item in ids if ids.count(item) > 1})
+    if duplicates:
+        fail(
+            "Capability catalog содержит повторяющиеся ID: "
+            + ", ".join(duplicates)
+        )
+
+    expected = {
+        f"{prefix}{number:02d}"
+        for prefix, maximum in CAPABILITY_RANGES.items()
+        for number in range(1, maximum + 1)
+    }
+    actual = set(ids)
+    missing = sorted(expected - actual)
+    unexpected = sorted(actual - expected)
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append("отсутствуют " + ", ".join(missing))
+        if unexpected:
+            details.append("неожиданные " + ", ".join(unexpected))
+        fail("Capability catalog неполон: " + "; ".join(details))
+
+
 def validate_public_surface() -> None:
     for relative in repository_files():
         parts = set(relative.parts)
@@ -225,6 +262,7 @@ def main() -> int:
         validate_json_files,
         validate_model_output_schemas,
         validate_skills,
+        validate_capability_catalog,
         validate_public_surface,
     )
     try:

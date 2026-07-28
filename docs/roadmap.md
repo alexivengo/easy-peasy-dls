@@ -9,6 +9,10 @@ solo AI-delivery. Must-be защищает доверие к процессу, P
 ручную работу и повтор контекста, Attractive добавляет удобство только после
 стабилизации основного цикла.
 
+Полный реестр всех 145 реализованных, запланированных, отложенных и намеренно
+исключённых возможностей находится в [карте возможностей](capability-catalog.md).
+Этот файл остаётся короткой выборкой ближайших волн, а не вторым каталогом.
+
 ## Что уже является базой
 
 Must-be ядро реализовано и защищается regression-тестами:
@@ -86,9 +90,13 @@ Exit criteria v0.6.1: reuse даёт одно advisory-предупрежден�
 
 ## Следующая волна v0.7.0: platform pilots и настройка budgets
 
-- собрать несколько routine/standard/critical запусков на разных стеках;
-- настраивать default budgets только по накопленным абсолютным данным;
-- проверить второй platform adapter на web, backend или Android;
+- `P21`, `P39` — второй platform adapter и targeted-review baseline на web,
+  backend или Android;
+- `M38–M40` — реальные UI/UX tiers и early architecture-decision pilot;
+- `P02`, `P04`, `P18`, `P30` — проверить routine/standard UX, ticket policy,
+  compact status и domain-skill routing;
+- `P10`, `P12` — настраивать budgets и model routing только по накопленным
+  абсолютным данным;
 - не публиковать процент экономии до сопоставимых повторяемых pilots.
 
 ## Позже, только по данным
@@ -100,6 +108,10 @@ Exit criteria v0.6.1: reuse даёт одно advisory-предупрежден�
 - A06 — cross-project dashboard, только если CLI status перестанет справляться;
 - release/production profiles — после стабильного acceptance loop в нескольких
   типах проектов.
+
+Полный P2/P3 backlog, включая migration, repository cache, changelog, model/cost
+recommendations и сохранённые anti-features, ведётся только в
+[карте возможностей](capability-catalog.md).
 
 ## Что не станет частью продукта по умолчанию
 
