@@ -130,6 +130,7 @@ LEGACY_REVIEW_RUNNER_CONTRACT = "dls-review-runner/v1"
 REVIEW_RUNNER_CONTRACT = "dls-review-runner/v2"
 REVIEW_CONTEXT_CONTRACT = "dls-review-context/v2"
 REVIEW_ECONOMY_CONTRACT = "dls-review-economy/v1"
+COMMAND_EVENT_CONTRACT = "logical-invocations/v1"
 NATIVE_OUTPUT_CONTRACT = "dls-native-review/v2"
 REVIEW_IDENTIFIER_CONTRACT = "canonical-ticket-ids/v1"
 REVIEW_DECISION_REPAIR_CONTRACT = "dls-decision-repair/v1"
@@ -2879,6 +2880,7 @@ def review_pack(
         "runner_contract": REVIEW_RUNNER_CONTRACT,
         "context_contract": REVIEW_CONTEXT_CONTRACT,
         "economy_contract": REVIEW_ECONOMY_CONTRACT,
+        "command_event_contract": COMMAND_EVENT_CONTRACT,
         "native_output_contract": NATIVE_OUTPUT_CONTRACT,
         "identifier_contract": REVIEW_IDENTIFIER_CONTRACT,
         "decision_repair_contract": REVIEW_DECISION_REPAIR_CONTRACT,
@@ -3761,6 +3763,76 @@ def _attempt_lease_expired(attempt: dict[str, Any]) -> bool:
     return elapsed > NATIVE_REVIEW_TIMEOUT_SECONDS + 60
 
 
+def _recover_legacy_double_counted_budget_attempt(
+    root: Path,
+    *,
+    state_store: StateStore,
+    change_id: str,
+    attempt: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Reclassify the v0.5.0 start/completion double-count failure once."""
+    budget = attempt.get("budget")
+    transcript_relative = attempt.get("transcript_path")
+    if (
+        attempt.get("status") != "budget-exceeded"
+        or attempt.get("command_event_contract") is not None
+        or not isinstance(budget, dict)
+        or not isinstance(budget.get("command_events"), int)
+        or not isinstance(attempt.get("command_events"), int)
+        or attempt["command_events"] <= budget["command_events"]
+        or int(attempt.get("attempt_ordinal", 0)) >= REVIEW_LANE_MAX_ATTEMPTS
+        or attempt.get("timed_out") is True
+        or attempt.get("overflow") is True
+        or attempt.get("transcript_truncated") is True
+        or not isinstance(transcript_relative, str)
+        or not isinstance(attempt.get("transcript_digest"), str)
+    ):
+        return state_store.load(change_id), False
+    transcript_path = safe_resolve(root, transcript_relative, must_exist=True)
+    if sha256_file(transcript_path) != attempt["transcript_digest"]:
+        raise IntegrityError("Legacy budget transcript digest mismatch")
+    transcript_bytes = transcript_path.read_bytes()
+    if (
+        isinstance(budget.get("transcript_bytes"), int)
+        and len(transcript_bytes) > budget["transcript_bytes"]
+    ):
+        return state_store.load(change_id), False
+    usage = _codex_usage_from_output(transcript_bytes)
+    if usage is not None:
+        usage_total = processed_tokens(usage)
+        if any(
+            isinstance(budget.get(key), int) and usage_total > budget[key]
+            for key in ("lane_tokens", "aggregate_tokens")
+        ):
+            return state_store.load(change_id), False
+    logical_count = _logical_command_event_count(transcript_bytes)
+    if logical_count > budget["command_events"] or logical_count >= attempt["command_events"]:
+        return state_store.load(change_id), False
+    updated, _, changed = state_store.finish_review_lane(
+        change_id,
+        attempt_id=attempt["attempt_id"],
+        expected_status="budget-exceeded",
+        updates={
+            "status": "abandoned",
+            "legacy_budget_reclassified": True,
+            "logical_command_events": logical_count,
+            "command_event_contract": "legacy-double-count/v0",
+            "failure_reason": (
+                "v0.5.0 counted paired command start/completion events twice; "
+                f"recorded={attempt['command_events']}, logical={logical_count}"
+            ),
+            "budget_recovery": {
+                "kind": "paired-command-events",
+                "recorded_command_events": attempt["command_events"],
+                "logical_command_events": logical_count,
+                "budget": budget["command_events"],
+                "reclassified_at": utc_now(),
+            },
+        },
+    )
+    return updated, changed
+
+
 def _lane_wait_response(
     *,
     change_id: str,
@@ -4182,6 +4254,15 @@ def review_start(
                 )
             terminal = attempts[-1] if attempts else None
             if terminal is not None and terminal.get("status") == "budget-exceeded":
+                state, recovered_budget = _recover_legacy_double_counted_budget_attempt(
+                    owner,
+                    state_store=state_store,
+                    change_id=change_id,
+                    attempt=terminal,
+                )
+                if recovered_budget:
+                    changed = True
+                    continue
                 return {
                     "ok": True,
                     "dry_run": False,
@@ -4576,6 +4657,10 @@ def review_start(
             "transcript_truncated": execution["overflow"],
             "usage": usage,
             "command_events": execution.get("command_events", 0),
+            "command_event_contract": execution.get(
+                "command_event_contract",
+                COMMAND_EVENT_CONTRACT,
+            ),
             "budget": {
                 "aggregate_tokens": budget.aggregate_tokens,
                 "lane_tokens": budget.lane_tokens,
@@ -6366,6 +6451,53 @@ def _codex_usage_from_output(output: bytes) -> dict[str, int] | None:
     return latest
 
 
+def _command_event_identity(event: dict[str, Any]) -> tuple[bool, str | None]:
+    """Return whether a JSONL event is command-like and its logical invocation ID."""
+    item = event.get("item")
+    item_type = item.get("type") if isinstance(item, dict) else None
+    event_type = event.get("type")
+    command_like = item_type in {"command_execution", "mcp_tool_call", "tool_call"} or event_type in {
+        "command.started",
+        "command.completed",
+        "tool.started",
+        "tool.completed",
+    }
+    if not command_like:
+        return False, None
+    for value in (
+        item.get("id") if isinstance(item, dict) else None,
+        event.get("id"),
+    ):
+        if isinstance(value, str) and value:
+            return True, value
+    return True, None
+
+
+def _logical_command_event_count(output: bytes) -> int:
+    """Count logical command invocations in a complete Codex JSONL transcript."""
+    seen: set[str] = set()
+    count = 0
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line.startswith(b"{"):
+            continue
+        try:
+            event = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        command_like, event_id = _command_event_identity(event)
+        if not command_like:
+            continue
+        if event_id is not None:
+            if event_id in seen:
+                continue
+            seen.add(event_id)
+        count += 1
+    return count
+
+
 def _run_bounded_command(
     argv: list[str],
     *,
@@ -6400,6 +6532,9 @@ def _run_bounded_command(
             "output_bytes": len(message),
             "output_sha256": sha256_bytes(message),
             "duration_seconds": time.monotonic() - started,
+            "command_events": 0,
+            "command_event_contract": COMMAND_EVENT_CONTRACT,
+            "budget_exceeded": False,
         }
     assert process.stdout is not None
     selector = selectors.DefaultSelector()
@@ -6411,6 +6546,7 @@ def _run_bounded_command(
     overflow = False
     budget_exceeded = False
     command_events = 0
+    logical_command_ids: set[str] = set()
     line_buffer = bytearray()
     last_heartbeat = started
 
@@ -6425,15 +6561,17 @@ def _run_bounded_command(
             return
         if not isinstance(event, dict):
             return
-        item = event.get("item")
-        item_type = item.get("type") if isinstance(item, dict) else None
-        event_type = event.get("type")
-        if item_type in {"command_execution", "mcp_tool_call", "tool_call"} or event_type in {
-            "command.started",
-            "command.completed",
-            "tool.started",
-            "tool.completed",
-        }:
+        command_like, event_id = _command_event_identity(event)
+        if command_like:
+            # Codex JSONL reports one logical tool/command twice: once when the
+            # item starts and once when it completes. Budget the invocation,
+            # not the transport events. Anonymous legacy events still count
+            # individually so older/fake runners retain their semantics.
+            if event_id is not None:
+                logical_key = f"command:{event_id}"
+                if logical_key in logical_command_ids:
+                    return
+                logical_command_ids.add(logical_key)
             command_events += 1
             if max_command_events is not None and command_events > max_command_events:
                 budget_exceeded = True
@@ -6506,5 +6644,6 @@ def _run_bounded_command(
         "output_sha256": output_hasher.hexdigest(),
         "duration_seconds": time.monotonic() - started,
         "command_events": command_events,
+        "command_event_contract": COMMAND_EVENT_CONTRACT,
         "budget_exceeded": budget_exceeded,
     }

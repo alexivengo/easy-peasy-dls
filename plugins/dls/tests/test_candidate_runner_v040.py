@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dls_core.candidate_runner import candidate_ready, candidate_status
 from dls_core.errors import IntegrityError, UsageError
-from dls_core.operations import approve, review_import
+from dls_core.operations import approve, evidence_add, finding_disposition, review_import
 from dls_core.state import StateStore
 from dls_core.worktrees import worktree_register
 
@@ -213,6 +213,7 @@ env_allow = []
             self.assertEqual(execution.returncode, 0, execution.stderr or execution.stdout)
             result = json.loads(execution.stdout)
             self.assertEqual(result["status"], "completed")
+            self.assertIn("dls_version", result)
             self.assertTrue((root / result["review_pack_path"]).is_file())
 
     def test_candidate_cli_continues_descendant_without_finding_arguments(self) -> None:
@@ -539,6 +540,113 @@ env_allow = []
             )
             self.assertEqual(pack["head_sha"], git(root, "rev-parse", "HEAD").strip())
 
+    def test_current_head_dispositions_prepare_candidate_without_redeclaration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._import_findings(root, ("R001", "R002"))
+            (root / "README.md").write_text("# Exact current candidate\n", encoding="utf-8")
+            git(root, "add", "README.md")
+            git(root, "commit", "-m", "remediate findings")
+            head = git(root, "rev-parse", "HEAD")
+            evidence = evidence_add(
+                root,
+                change_id="C001",
+                command_id="manual-regression",
+                exit_code=0,
+                summary="PASS",
+                expected_revision=StateStore(root).load("C001")["state_revision"],
+                git_sha=head,
+                artifacts=[],
+                environment="fixture",
+                duration_seconds=0.1,
+                operation_id="current-head-evidence",
+            )
+            for finding_id, disposition in (("R001", "addressed"), ("R002", "note")):
+                finding_disposition(
+                    root,
+                    change_id="C001",
+                    finding_id=finding_id,
+                    disposition_status=disposition,
+                    rationale="Exact-current declaration.",
+                    expected_revision=StateStore(root).load("C001")["state_revision"],
+                    git_sha=head,
+                    evidence=(
+                        [evidence["evidence_path"]] if disposition == "addressed" else []
+                    ),
+                    actor="codex",
+                    prompt=None,
+                    response=None,
+                    operation_id=f"declare-{finding_id}",
+                )
+            ready = candidate_ready(
+                root,
+                change_id="C001",
+                base_ref=None,
+                addressed=[],
+                noted=[],
+                extra_commands=[],
+                operation_id=None,
+            )
+            self.assertEqual(ready["status"], "completed")
+            self.assertEqual(ready["declaration_source"], "current-head-state")
+            pack = json.loads((root / ready["review_pack_path"]).read_text())
+            dispositions = {
+                item["finding_id"]: item
+                for item in pack["finding_dispositions"]
+                if item.get("git_sha") == head
+            }
+            self.assertEqual(dispositions["R001"]["status"], "addressed")
+            self.assertEqual(dispositions["R002"]["status"], "note")
+
+    def test_candidate_status_never_promotes_historical_completed_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = self._initial_candidate(root)
+            completed = candidate_ready(
+                root,
+                change_id="C001",
+                base_ref=base,
+                addressed=[],
+                noted=[],
+                extra_commands=[],
+                operation_id=None,
+            )
+            (root / "README.md").write_text("# New head\n", encoding="utf-8")
+            git(root, "add", "README.md")
+            git(root, "commit", "-m", "advance head")
+            current = candidate_status(root, change_id="C001")
+            self.assertEqual(current["next_action"]["id"], "run-candidate-ready")
+            self.assertFalse(current["exact_head"])
+            self.assertFalse(current["prepared"])
+            historical = candidate_status(
+                root,
+                change_id="C001",
+                operation_id=completed["operation_id"],
+            )
+            self.assertEqual(historical["status"], "completed")
+            self.assertFalse(historical["exact_head"])
+            self.assertFalse(historical["prepared"])
+            self.assertNotEqual(historical["next_action"]["id"], "open-review-task")
+
+    def test_candidate_status_rejects_tampered_exact_head_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = self._initial_candidate(root)
+            completed = candidate_ready(
+                root,
+                change_id="C001",
+                base_ref=base,
+                addressed=[],
+                noted=[],
+                extra_commands=[],
+                operation_id=None,
+            )
+            pack_path = root / completed["review_pack_path"]
+            pack = json.loads(pack_path.read_text(encoding="utf-8"))
+            pack["head_sha"] = "0" * 40
+            pack_path.write_text(json.dumps(pack), encoding="utf-8")
+            with self.assertRaisesRegex(IntegrityError, "digest mismatch"):
+                candidate_status(root, change_id="C001")
     def test_exact_head_retry_reuses_operation_and_only_retries_failed_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

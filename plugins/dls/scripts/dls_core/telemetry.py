@@ -509,7 +509,13 @@ def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
     review = review_status(owner, change_id=change_id)
     cache = cache_status(owner, change_id=change_id)
     metrics = review_metrics(owner, change_id=change_id)
-    if review.get("status") == "running":
+    if review.get("status") in {
+        "running",
+        "preparing-candidate",
+        "failed",
+        "failed-finalize",
+        "ready",
+    }:
         next_action = review["next_action"]
     elif review.get("review_result_path"):
         if review.get("verdict") == "review-clear":
@@ -537,6 +543,10 @@ def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
         "owner_root": str(owner),
         "owner_selection": owner_selection,
         "head_sha": git_head(owner),
+        "current_head": candidate.get("current_head"),
+        "candidate_head": candidate.get("candidate_head"),
+        "exact_head": candidate.get("exact_head", False),
+        "prepared": candidate.get("prepared", False),
         "candidate": {
             "status": candidate.get("status"),
             "phase": candidate.get("phase"),

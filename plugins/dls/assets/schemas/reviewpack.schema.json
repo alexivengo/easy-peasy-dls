@@ -40,6 +40,7 @@
     "runner_contract": { "enum": ["dls-review-runner/v1", "dls-review-runner/v2"] },
     "context_contract": { "const": "dls-review-context/v2" },
     "economy_contract": { "const": "dls-review-economy/v1" },
+    "command_event_contract": { "const": "logical-invocations/v1" },
     "native_output_contract": { "const": "dls-native-review/v2" },
     "identifier_contract": { "const": "canonical-ticket-ids/v1" },
     "decision_repair_contract": { "const": "dls-decision-repair/v1" },

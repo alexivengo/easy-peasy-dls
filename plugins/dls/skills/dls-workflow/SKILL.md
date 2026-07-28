@@ -1,11 +1,13 @@
 ---
 name: dls-workflow
-description: Run the DLS v1 delivery process for a feature, change, refactor, spike, hotfix, specification, implementation, review handoff, remediation, or acceptance. Use only when the user explicitly invokes $dls-workflow. Route work to the smallest micro, routine, standard, roadmap, or critical path while preserving scoped human decisions, UI design provenance, evidence, and exact-revision review.
+description: Run the Easy Peasy DLS delivery process for a feature, change, refactor, spike, hotfix, specification, implementation, review, remediation, or acceptance. Use when the user explicitly selects or names DLS, when the current repository has DLS config/state, or when the request supplies a DLS ReviewIR, remediation manifest, review ID, or routable DLS change ID. Do not activate for generic coding or review without a DLS signal. Route work to the smallest risk-appropriate path while preserving human decisions, evidence, and exact-revision review.
 ---
 
 # DLS Workflow
 
 Use DLS as the process owner. Repository rules and domain skills may add technical expertise, but they cannot replace DLS state ownership, approvals, evidence, or gates.
+
+Before invoking the CLI, derive the plugin root only from this loaded `SKILL.md` (two directories above its directory). Read that root's `.codex-plugin/plugin.json`, invoke that root's `scripts/dls.py --version`, and require the versions to match. If the manifest or CLI is absent or mismatched, stop with `reinstall-dls-plugin`. Never fall back to `PATH`, another checkout, a sibling repository, the plugin source repository, or an R&D archive.
 
 ## Start
 
@@ -13,7 +15,7 @@ For an explicit code-review request, skip the generic repository doctor and foll
 
 For other work:
 
-1. Locate the repository root and run `dls doctor`. If DLS is absent, offer `dls init --dry-run` before changing the repository.
+1. Locate the repository root and run the plugin-local `dls doctor`. If DLS was explicitly selected but repository state is absent, offer `dls init --dry-run` before changing the repository. Automatic activation requires an existing repository signal or a routable DLS artifact/change ID.
 2. Restate the intended outcome in one sentence. Ask only questions whose answers change scope, risk, UX, architecture, or acceptance.
 3. Recommend a work kind, control level, and impact tags. The user may override the recommendation; record a rationale when lowering a material risk floor.
 4. If the repository already has a compatible canonical change or epic package, use `dls adopt` to register its files and current ticket states. Do not regenerate, normalize, or rewrite existing artifacts merely to fit DLS.
@@ -49,7 +51,7 @@ If accepted behavior, architecture, or acceptance criteria change, pause affecte
 
 ## Review and remediation
 
-For any code-review request, read and follow [review.md](references/review.md). After the user selects **Easy Peasy DLS: процесс**, a short request such as `Проведи code review EPIC-01.` is sufficient in a separate review task opened anywhere in the same Git repository when the epic worktree is registered.
+For any code-review request, read and follow [review.md](references/review.md). With an explicit skill selection or an unambiguous DLS context, a short request such as `Проведи code review EPIC-01.` is sufficient in a separate review task opened anywhere in the same Git repository when the epic worktree is registered.
 
 For a remediation request, read and follow [remediation.md](references/remediation.md). Start from the latest-only canonical manifest. Pass the complete `addressed` and `note` declaration only for the first candidate attempt. If validation requires a new commit, invoke `candidate-ready` again without repeating unchanged findings; pass only explicit status overrides. DLS binds the new SHA, reruns exact-HEAD evidence, and creates the next ReviewPack. Neither status creates `verified`.
 

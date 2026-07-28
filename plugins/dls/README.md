@@ -2,7 +2,8 @@
 
 Codex-плагин для управляемой, risk-adaptive доставки изменений в Apple, Android, web и backend репозиториях.
 
-В runtime остаются только два явно вызываемых skills:
+В runtime остаются два guarded skills: их можно выбрать явно, а основной workflow
+также активируется автоматически только при однозначном DLS-контексте:
 
 - `$dls-workflow` — функции, изменения, спецификации, implementation, review и acceptance;
 - `$dls-debug` — evidence-led поиск и исправление багов.
@@ -47,7 +48,10 @@ review остаются читаемыми, но не попадают в раб
 сохранённые digest-bound outputs и не вызывает модели заново.
 
 Implementation/remediation-задача не запускает review runner: после
-`review-ready` она передаёт candidate в отдельную read-only review-задачу.
+`candidate-ready` она передаёт candidate в отдельную read-only review-задачу.
+Если exact-HEAD remediation pack отсутствует, `review-run` может сам выполнить
+только доказуемую механику handoff: trusted validation и создание pack из уже
+записанных current-HEAD dispositions. Product source остаётся read-only.
 
 ReviewPack/ReviewIR v2 сохраняют читаемость исторических v1 artifacts, считают последний импортированный ReviewIR текущим canonical snapshot, делают закрытие finding ответственностью reviewer и требуют targeted remediation pass плюс финальный whole-change semantic pass перед повторным `review-clear`. Implementer `note` разрешает только независимое adjudication и сам finding не закрывает.
 

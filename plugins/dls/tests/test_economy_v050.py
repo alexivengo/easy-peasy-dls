@@ -15,7 +15,12 @@ from dls_core.economy import (
     review_budget,
     token_budget_failure,
 )
-from dls_core.operations import _run_bounded_command
+from dls_core.io import sha256_file
+from dls_core.operations import (
+    COMMAND_EVENT_CONTRACT,
+    _recover_legacy_double_counted_budget_attempt,
+    _run_bounded_command,
+)
 from dls_core.repo import allowed_environment
 from dls_core.state import StateStore
 from dls_core.telemetry import (
@@ -416,6 +421,90 @@ class EconomyV050Tests(unittest.TestCase):
             )
             self.assertTrue(result["budget_exceeded"])
             self.assertGreater(result["command_events"], 2)
+
+    def test_bounded_runner_counts_started_and_completed_as_one_invocation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = (
+                "import json\n"
+                "for i in range(2):\n"
+                " item={'id':f'item-{i}','type':'command_execution'}\n"
+                " print(json.dumps({'type':'item.started','item':item}), flush=True)\n"
+                " print(json.dumps({'type':'item.completed','item':item}), flush=True)\n"
+            )
+            result = _run_bounded_command(
+                [os.environ.get("PYTHON", "python3"), "-c", script],
+                cwd=root,
+                environment=allowed_environment([]),
+                timeout_seconds=5,
+                max_output_bytes=64 * 1024,
+                max_command_events=2,
+            )
+            self.assertFalse(result["budget_exceeded"])
+            self.assertEqual(result["command_events"], 2)
+            self.assertEqual(result["command_event_contract"], COMMAND_EVENT_CONTRACT)
+
+    def test_legacy_double_counted_budget_failure_is_reclassified_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            transcript = root / ".dls/cache/reviews/C001/review/native.jsonl"
+            transcript.parent.mkdir(parents=True, exist_ok=True)
+            lines = []
+            for index in range(17):
+                item = {"id": f"item-{index}", "type": "command_execution"}
+                lines.append(json.dumps({"type": "item.started", "item": item}))
+                lines.append(json.dumps({"type": "item.completed", "item": item}))
+            transcript.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            store = StateStore(root)
+            _, attempt, claimed = store.claim_review_lane(
+                "C001",
+                attempt={
+                    "review_id": "review",
+                    "kind": "native",
+                    "lane_key": "native",
+                    "attempt_id": "attempt-1",
+                    "attempt_ordinal": 1,
+                    "operation_id": "legacy-native",
+                    "runner_pid": 999999,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                },
+                operation_kind="review-start",
+            )
+            self.assertTrue(claimed)
+            store.finish_review_lane(
+                "C001",
+                attempt_id=attempt["attempt_id"],
+                expected_status="running",
+                updates={
+                    "status": "budget-exceeded",
+                    "attempt_ordinal": 1,
+                    "command_events": 34,
+                    "timed_out": False,
+                    "overflow": False,
+                    "transcript_truncated": False,
+                    "transcript_path": str(transcript.relative_to(root)),
+                    "transcript_digest": sha256_file(transcript),
+                    "budget": {"command_events": 32},
+                },
+            )
+            _, changed = _recover_legacy_double_counted_budget_attempt(
+                root,
+                state_store=store,
+                change_id="C001",
+                attempt=StateStore(root).load("C001")["reviews"][-1],
+            )
+            self.assertTrue(changed)
+            recovered = StateStore(root).load("C001")["reviews"][-1]
+            self.assertEqual(recovered["status"], "abandoned")
+            self.assertEqual(recovered["logical_command_events"], 17)
+            self.assertTrue(recovered["legacy_budget_reclassified"])
+            _, repeated = _recover_legacy_double_counted_budget_attempt(
+                root,
+                state_store=store,
+                change_id="C001",
+                attempt=recovered,
+            )
+            self.assertFalse(repeated)
 
     def test_bounded_runner_enforces_duration_and_transcript_budgets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

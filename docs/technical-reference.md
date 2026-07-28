@@ -149,7 +149,9 @@ source и command-contract digests и атомарно записывает disp
 ReviewPack. `candidate-status` читает phase, active/completed/remaining commands
 и typed next action, но не запускает процесс. По умолчанию он не возвращает
 логи; `--diagnostic` добавляет только последний bounded redacted validation
-failure. Только отдельная read-only review-задача запускает `review-run`.
+failure. Только отдельная read-only review-задача запускает `review-run`; она
+может достроить отсутствующий remediation handoff, но не редактирует product
+source и не создаёт semantic dispositions.
 
 ### Candidate continuation после нового commit
 
@@ -194,6 +196,34 @@ digests ReviewIR, manifest, definition, policy и declaration. State schema
 остаётся v1. Legacy runs читаются, но не используются для автоматического
 наследования. Явный operation ID нельзя повторно связать с другим candidate
 contract.
+
+### Guarded activation, runtime provenance и exact-HEAD status
+
+Workflow активируется без ручного skill-chip только при однозначном сигнале:
+repository-local DLS config/state, приложенном ReviewIR/remediation manifest,
+review ID или change ID, который разрешается зарегистрированным worktree.
+Обычная coding/review-задача без этих сигналов DLS не активирует.
+
+Runtime всегда вычисляется относительно реально загруженного `SKILL.md`.
+Plugin-local manifest и `scripts/dls.py --version` обязаны совпасть; иначе typed
+action — `reinstall-dls-plugin`. Поиск `dls` в `PATH`, sibling checkout,
+исходном plugin-репозитории или архиве запрещён. Каждый JSON payload содержит
+`dls_version`, поэтому происхождение ответа диагностируется без публикации
+локального пути.
+
+`candidate-status`, `review-status` и `delivery-status` используют один
+exact-HEAD resolver. Исторический completed candidate доступен по явному
+operation ID для аудита, но получает `exact_head: false`, `prepared: false` и
+никогда не предлагает `open-review-task`. Missing, tampered или wrong-HEAD pack
+не считается подготовленным.
+
+Для remediation без exact-HEAD pack `review-run` может вызвать внутренний
+`candidate-ready`: только если canonical ReviewIR/manifest целы, reviewed HEAD —
+предок текущего, definition approval и ticket readiness актуальны, product
+source clean, validation policy задана, а каждый actionable finding уже имеет
+current-HEAD `addressed` или `note`. Trusted commands выполняются заново, pack
+создаётся атомарно, затем тот же runner продолжает review. Первый review без base,
+неполная declaration, drift или tampering model calls не запускают.
 
 ### End-to-end runner
 
@@ -241,12 +271,13 @@ inputs в input-only workspace без product checkout.
 одинаковая пользовательская метка не смешивает attempts разных ревизий.
 `review-status` только читает state.
 
-Если для текущего HEAD нет ReviewPack, `review-status` и `review-run` возвращают
-`status: not-prepared` и `next_action: prepare-candidate`. Они не запускают
-legacy validation и не показывают прежний ReviewIR как результат текущего HEAD.
-Review-задача останавливается, а implementation/remediation-задача завершает
-один `candidate-ready`. Поля `prior_review_id` и `prior_review_result_path`
-остаются только явной исторической ссылкой.
+Если для текущего HEAD нет ReviewPack, `review-status` не показывает прежний
+ReviewIR как текущий. `review-run` пытается только guarded remediation recovery,
+показывая `candidate-transition: preflight | validating | prepared`. Во время
+единственного активного candidate run status — `preparing-candidate` и
+`wait-review`. Если доказуемое восстановление невозможно, runner возвращает один
+typed action без model calls. Поля `prior_review_id` и
+`prior_review_result_path` остаются только исторической ссылкой.
 
 ### Наблюдаемость и финализация
 
@@ -371,6 +402,16 @@ Model, effort, prompt, schema, context, pack, HEAD и repair input
 входят в digest lane contract. Completed lane переиспользуется только при точном
 совпадении этого digest.
 
+В `v0.5.0` command-event budget ошибочно считал `item.started` и
+`item.completed` одного Codex command как два вызова. На реальном EPIC-01 это
+превратило 17 логических команд в 34 события и ложно превысило critical cap 32.
+Контракт `logical-invocations/v1` дедуплицирует пары по immutable item ID;
+анонимные legacy events по-прежнему считаются отдельно. Старый budget failure
+может получить ровно один corrected retry только если сохранённый transcript и
+его digest доказывают этот точный double-count, а логическое число вызовов
+укладывается в исходный budget. Остальные budget failures не становятся
+retryable.
+
 Новые packs помечаются `runner_contract: dls-review-runner/v2`,
 `context_contract: dls-review-context/v2`, `economy_contract:
 dls-review-economy/v1` и `native_output_contract: dls-native-review/v2`. Для них import
@@ -399,6 +440,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.5.0`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.6.0`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

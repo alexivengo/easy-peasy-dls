@@ -7,7 +7,9 @@ atomic import.
 ## Run the end-to-end review
 
 Resolve `scripts/dls.py` relative to the loaded `SKILL.md`: the plugin root is two
-directories above the skill directory. Never probe `PATH` for `dls`.
+directories above the skill directory. Require its manifest version to equal the
+plugin-local CLI version. If either is missing or mismatched, return
+`reinstall-dls-plugin`. Never probe `PATH`, sibling/source checkouts, or archives.
 
 Invoke exactly one orchestration command:
 
@@ -22,7 +24,9 @@ sibling folders or infers branches.
 
 `review-run` owns:
 
-1. exact-HEAD ReviewPack selection prepared by `candidate-ready`;
+1. exact-HEAD ReviewPack selection prepared by `candidate-ready`, or guarded
+   mechanical recovery of a remediation handoff when current-HEAD dispositions
+   are already complete;
 2. native Terra/high structured review;
 3. at most three deterministic critical specialist lanes;
 4. independent Sol high/xhigh semantic review;
@@ -47,7 +51,9 @@ python3 <plugin-root>/scripts/dls.py --root <current-project> --json \
   review-status CHANGE_ID
 ```
 
-`review-status` is read-only and never launches a model. The normal stream never
+`review-status` is read-only and never launches a model. During guarded handoff
+recovery it reports `preparing-candidate` and `wait-review`; do not start a
+second process. The normal stream never
 contains raw transcripts or provisional findings. Report only its transitions,
 budget warning, final result, or one compact heartbeat. `inspect-review-budget`
 is a bounded execution failure: do not retry expensive lanes or invent a verdict.
@@ -91,10 +97,11 @@ replace `review_result_path`, finding IDs, ticket verdicts, or remediation state
   `remediation_manifest_path`. This is a successful runner execution, not an
   infrastructure failure.
 - `running`: wait or use only `review-status`.
-- `prepare-candidate`: stop this review task and return to the implementation
-  or remediation task. That task must commit the candidate and complete one
-  `candidate-ready`; do not run validation, `review-ready`, or `candidate-ready`
-  from the independent review task.
+- `prepare-candidate`: `review-run` first attempts guarded remediation recovery.
+  It may run trusted named validation and create DLS artifacts, but never edit
+  product source or invent dispositions. If recovery returns a typed human or
+  implementation action, stop and report it; a first review without a known base
+  still belongs to the implementation task.
 - `failed-finalize`: resume the same `review-run`; do not start an informal or
   replacement review.
 - `resume-review-repair`: call the same `review-run`; DLS resumes the single

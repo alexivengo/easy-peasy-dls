@@ -26,6 +26,7 @@ from .io import (
     utc_now,
 )
 from .operations import (
+    COMMAND_EVENT_CONTRACT,
     NATIVE_REVIEW_MAX_OUTPUT_BYTES,
     NATIVE_REVIEW_TIMEOUT_SECONDS,
     NATIVE_REVIEW_TRANSCRIPT_MAX_BYTES,
@@ -45,6 +46,7 @@ from .operations import (
     _review_lane_entries,
     _semantic_review_effort,
     _validate_review_pack_current,
+    _validate_review_pack,
     _validate_review_report,
     _run_bounded_command,
     review_import,
@@ -810,6 +812,7 @@ def review_status(
     active_lane = any(
         item.get("status") == "running" for item in latest_by_lane.values()
     )
+    candidate: dict[str, Any] | None = None
     if result_entry:
         status_value = "completed"
         next_action = {"id": "review-complete", "detail": result_entry["result_path"]}
@@ -865,8 +868,22 @@ def review_status(
             status_value = "ready"
             next_action = {"id": "start-review", "detail": pack_entry["pack_path"]}
     else:
-        latest_result = _latest_review_result(state)
-        if latest_result is None or review_id is not None:
+        latest_result = None
+        if review_id is None:
+            from .candidate_runner import candidate_status
+
+            candidate = candidate_status(owner, change_id=change_id)
+        if candidate is not None and candidate.get("status") == "running":
+            status_value = "preparing-candidate"
+            next_action = {
+                "id": "wait-review",
+                "detail": "trusted candidate preparation is active",
+            }
+        else:
+            latest_result = _latest_review_result(state)
+        if candidate is not None and candidate.get("status") == "running":
+            pass
+        elif latest_result is None or review_id is not None:
             status_value = "not-prepared"
             next_action = {
                 "id": "prepare-candidate",
@@ -923,6 +940,11 @@ def review_status(
         pack = read_json(
             safe_resolve(owner, provenance_pack_entry["pack_path"], must_exist=True)
         )
+        _validate_review_pack(pack, change_id)
+        if provenance_pack_entry.get("pack_digest") != pack.get("pack_digest"):
+            raise IntegrityError("ReviewPack digest does not match DLS state")
+        if pack_entry is provenance_pack_entry:
+            _validate_review_pack_current(owner, state=state, pack=pack)
         runner_contract = pack.get("runner_contract", runner_contract)
     presentation = None
     if result_entry is not None:
@@ -943,6 +965,9 @@ def review_status(
         "owner_root": str(owner),
         "owner_selection": owner_selection,
         "current_head": current_head,
+        "candidate_head": candidate.get("candidate_head") if candidate else None,
+        "exact_head": bool(pack_entry and pack_entry.get("head_sha") == current_head),
+        "prepared": bool(pack_entry),
         "review_id": selected_review_id,
         "prior_review_id": prior_review_id,
         "prior_review_result_path": prior_review_result_path,
@@ -1682,6 +1707,10 @@ def _execute_structured_lane(
                 "transcript_truncated": execution["overflow"],
                 "usage": usage,
                 "command_events": execution.get("command_events", 0),
+                "command_event_contract": execution.get(
+                    "command_event_contract",
+                    COMMAND_EVENT_CONTRACT,
+                ),
                 "budget": {
                     "aggregate_tokens": effective_budget.aggregate_tokens,
                     "lane_tokens": effective_budget.lane_tokens,
@@ -3032,6 +3061,17 @@ def review_run(
     dry_run: bool = False,
     stream_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    handoff_recovered = False
+    recovered_candidate_run_id: str | None = None
+    recovered_pack_created = False
+
+    def annotate_handoff(payload: dict[str, Any]) -> dict[str, Any]:
+        payload["handoff_recovered"] = handoff_recovered
+        payload["candidate_run_id"] = recovered_candidate_run_id
+        if recovered_pack_created:
+            payload["pack_created"] = True
+        return payload
+
     def emit(event: str, **values: Any) -> None:
         if stream_callback is None:
             return
@@ -3066,7 +3106,7 @@ def review_run(
             status=pending.get("status"),
             next_action=next_action.get("id"),
         )
-        return pending
+        return annotate_handoff(pending)
 
     effective_operation_id = operation_id or str(uuid.uuid4())
     emit("started", operation_id=effective_operation_id)
@@ -3093,7 +3133,24 @@ def review_run(
                 review_result_path=existing_status.get("review_result_path"),
                 next_action=existing_status.get("next_action", {}).get("id"),
             )
-            return existing_status
+            return annotate_handoff(existing_status)
+        if existing_status.get("status") == "preparing-candidate":
+            existing_status.update(
+                {
+                    "dry_run": dry_run,
+                    "operation_id": effective_operation_id,
+                    "review_pack_path": None,
+                    "pack_created": False,
+                    "review_result_path": None,
+                }
+            )
+            emit(
+                "completed",
+                review_id=None,
+                status="preparing-candidate",
+                next_action="wait-review",
+            )
+            return annotate_handoff(existing_status)
         if (
             existing_status["status"] == "failed-finalize"
             and isinstance(existing_status.get("review_id"), str)
@@ -3108,7 +3165,7 @@ def review_run(
                         "reused_completed_lanes": True,
                     }
                 )
-                return existing_status
+                return annotate_handoff(existing_status)
             recovery_owner = Path(existing_status["owner_root"])
             recovery_review_id = existing_status["review_id"]
             try:
@@ -3127,7 +3184,7 @@ def review_run(
                     review_result_path=recovered.get("review_result_path"),
                     next_action=recovered.get("next_action", {}).get("id"),
                 )
-                return recovered
+                return annotate_handoff(recovered)
             except IntegrityError as exc:
                 recovery_operation_id = (
                     f"{effective_operation_id}:{recovery_review_id}"
@@ -3161,24 +3218,112 @@ def review_run(
             "prepare-candidate",
             "recover-remediation-manifest",
         }:
-            existing_status.update(
-                {
-                    "dry_run": dry_run,
-                    "operation_id": effective_operation_id,
-                    "review_pack_path": None,
-                    "pack_created": False,
-                    "review_result_path": None,
-                    "verdict": None,
-                    "presentation": None,
-                }
+            recovery_owner = Path(existing_status["owner_root"])
+            can_recover_handoff = (
+                existing_status.get("next_action", {}).get("id") == "prepare-candidate"
+                and isinstance(existing_status.get("prior_review_id"), str)
+                and StateStore(recovery_owner).load(change_id).get("control_level")
+                in {"standard", "critical"}
             )
-            emit(
-                "completed",
-                review_id=existing_status.get("review_id"),
-                status=existing_status.get("status"),
-                next_action=existing_status.get("next_action", {}).get("id"),
-            )
-            return existing_status
+            if can_recover_handoff:
+                from .candidate_runner import candidate_ready
+                emit(
+                    "candidate-transition",
+                    review_id=None,
+                    phase="preflight",
+                )
+                emit(
+                    "candidate-transition",
+                    review_id=None,
+                    phase="validating",
+                )
+                candidate = candidate_ready(
+                    recovery_owner,
+                    change_id=change_id,
+                    base_ref=None,
+                    addressed=[],
+                    noted=[],
+                    extra_commands=[],
+                    operation_id=None,
+                    dry_run=dry_run,
+                )
+                recovered_candidate_run_id = candidate.get("run_id")
+                if candidate.get("status") == "completed" and isinstance(
+                    candidate.get("review_pack_path"), str
+                ):
+                    handoff_recovered = True
+                    recovered_pack_created = True
+                    if not dry_run and isinstance(recovered_candidate_run_id, str):
+                        StateStore(recovery_owner).update_candidate_run(
+                            change_id,
+                            run_id=recovered_candidate_run_id,
+                            updates={"handoff_recovered_by_review": True},
+                        )
+                    emit(
+                        "candidate-transition",
+                        review_id=candidate.get("review_id"),
+                        phase="prepared",
+                    )
+                    pack_path = str(
+                        safe_resolve(
+                            recovery_owner,
+                            candidate["review_pack_path"],
+                            must_exist=not dry_run,
+                        )
+                    )
+                    root = recovery_owner
+                else:
+                    action = candidate.get("next_action") or {
+                        "id": "wait-review",
+                        "detail": "candidate preparation is active",
+                    }
+                    status_value = (
+                        "preparing-candidate"
+                        if candidate.get("status") == "running"
+                        else candidate.get("status", "blocked")
+                    )
+                    blocked = {
+                        **existing_status,
+                        "dry_run": dry_run,
+                        "operation_id": effective_operation_id,
+                        "status": status_value,
+                        "review_pack_path": None,
+                        "pack_created": False,
+                        "review_result_path": None,
+                        "verdict": None,
+                        "presentation": None,
+                        "next_action": (
+                            {"id": "wait-review", "detail": action.get("detail", "")}
+                            if status_value == "preparing-candidate"
+                            else action
+                        ),
+                    }
+                    emit(
+                        "completed",
+                        review_id=None,
+                        status=status_value,
+                        next_action=blocked["next_action"].get("id"),
+                    )
+                    return annotate_handoff(blocked)
+            else:
+                existing_status.update(
+                    {
+                        "dry_run": dry_run,
+                        "operation_id": effective_operation_id,
+                        "review_pack_path": None,
+                        "pack_created": False,
+                        "review_result_path": None,
+                        "verdict": None,
+                        "presentation": None,
+                    }
+                )
+                emit(
+                    "completed",
+                    review_id=existing_status.get("review_id"),
+                    status=existing_status.get("status"),
+                    next_action=existing_status.get("next_action", {}).get("id"),
+                )
+                return annotate_handoff(existing_status)
     started = review_start(
         root,
         change_id=change_id,
@@ -3210,7 +3355,7 @@ def review_run(
             status=started.get("status"),
             next_action=started.get("next_action", {}).get("id"),
         )
-        return started
+        return annotate_handoff(started)
     if dry_run:
         started.update(
             {
@@ -3252,7 +3397,7 @@ def review_run(
             status="ready",
             next_action="start-review-run",
         )
-        return started
+        return annotate_handoff(started)
     owner = Path(started["owner_root"])
     state = StateStore(owner).load(change_id)
     relative_pack_path, pack = _pack_for_review(
@@ -3538,4 +3683,4 @@ def review_run(
         review_result_path=imported["review_result_path"],
         next_action=imported["next_action"]["id"],
     )
-    return result
+    return annotate_handoff(result)

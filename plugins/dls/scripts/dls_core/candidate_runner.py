@@ -16,9 +16,11 @@ from .io import read_json, safe_resolve, sha256_bytes, utc_now
 from .operations import (
     _active_prior_findings,
     _load_remediation_manifest,
+    _latest_dispositions,
     _process_is_alive,
     _prior_review_link,
     _review_pack_state_entry,
+    _validate_review_pack,
     review_pack,
     validate_command,
 )
@@ -254,6 +256,62 @@ def _eligible_declaration_run(
     return copy.deepcopy(min(eligible, key=lambda value: (value[0], value[1]))[2])
 
 
+def _current_head_declaration(
+    state: dict[str, Any],
+    *,
+    head_sha: str,
+    active_finding_ids: list[str],
+) -> dict[str, str] | None:
+    latest = _latest_dispositions(state)
+    statuses: dict[str, str] = {}
+    for finding_id in active_finding_ids:
+        disposition = latest.get(finding_id)
+        if (
+            not isinstance(disposition, dict)
+            or disposition.get("status") not in {"addressed", "note"}
+            or disposition.get("git_sha") != head_sha
+        ):
+            return None
+        statuses[finding_id] = disposition["status"]
+    return statuses
+
+
+def _exact_head_pack(
+    root: Path,
+    state: dict[str, Any],
+    *,
+    run: dict[str, Any],
+    current_head: str,
+) -> dict[str, Any] | None:
+    if run.get("status") != "completed" or run.get("head_sha") != current_head:
+        return None
+    relative = run.get("review_pack_path")
+    if not isinstance(relative, str):
+        raise IntegrityError("Completed candidate run is missing ReviewPack path")
+    pack = read_json(safe_resolve(root, relative, must_exist=True))
+    _validate_review_pack(pack, state["change_id"])
+    if (
+        pack.get("head_sha") != current_head
+        or pack.get("review_id") != run.get("review_id")
+        or pack.get("pack_digest") != run.get("pack_digest")
+    ):
+        raise IntegrityError("Candidate ReviewPack does not match its exact-HEAD run")
+    entry = next(
+        (
+            item
+            for item in state["reviews"]
+            if isinstance(item, dict)
+            and item.get("kind") == "pack"
+            and item.get("review_id") == pack["review_id"]
+            and item.get("pack_path") == relative
+        ),
+        None,
+    )
+    if entry is None or entry.get("pack_digest") != pack["pack_digest"]:
+        raise IntegrityError("Candidate ReviewPack is not intact in DLS state")
+    return pack
+
+
 def _validation_failure(
     *,
     command_id: str,
@@ -354,6 +412,9 @@ def _run_response(
     owner_selection: str,
     run: dict[str, Any],
     diagnostic: bool = False,
+    current_head: str | None = None,
+    exact_head: bool | None = None,
+    prepared: bool | None = None,
 ) -> dict[str, Any]:
     status = run.get("status", "running")
     if status == "completed":
@@ -389,6 +450,17 @@ def _run_response(
             elapsed_seconds = max(0.0, round((finished - started).total_seconds(), 3))
         except ValueError:
             elapsed_seconds = None
+    if current_head is None:
+        current_head = git_head(owner)
+    if exact_head is None:
+        exact_head = run.get("head_sha") == current_head
+    if prepared is None:
+        prepared = bool(status == "completed" and exact_head and run.get("review_pack_path"))
+    if status == "completed" and not prepared:
+        action = _next_action(
+            "run-candidate-ready",
+            "historical candidate run is not a prepared exact-HEAD handoff",
+        )
     result: dict[str, Any] = {
         "ok": True,
         "dry_run": False,
@@ -407,6 +479,10 @@ def _run_response(
         "remaining_commands": remaining,
         "review_pack_path": run.get("review_pack_path"),
         "review_id": run.get("review_id"),
+        "current_head": current_head,
+        "candidate_head": run.get("head_sha"),
+        "exact_head": exact_head,
+        "prepared": prepared,
         "failed_command": run.get("failed_command"),
         "next_action": action,
     }
@@ -595,6 +671,11 @@ def _candidate_ready_impl(
             noted=noted,
         )
         manifest_digest = remediation_manifest[1]["manifest_digest"]
+        current_head_statuses = _current_head_declaration(
+            state,
+            head_sha=head_sha,
+            active_finding_ids=active_finding_ids,
+        )
         parent_run = _eligible_declaration_run(
             owner,
             state,
@@ -608,6 +689,9 @@ def _candidate_ready_impl(
         )
         if set(overrides) == set(active_finding_ids):
             statuses = overrides
+        elif current_head_statuses is not None:
+            statuses = {**current_head_statuses, **overrides}
+            declaration_source = "current-head-state" if not overrides else "mixed"
         elif parent_run is not None:
             inherited = parent_run["finding_dispositions"]
             statuses = {**inherited, **overrides}
@@ -762,11 +846,23 @@ def _candidate_ready_impl(
                     change_id=change_id,
                     run=claimed_run,
                 )
+            prepared = False
+            if claimed_run.get("status") == "completed":
+                current_state = store.load(change_id)
+                prepared = _exact_head_pack(
+                    owner,
+                    current_state,
+                    run=claimed_run,
+                    current_head=head_sha,
+                ) is not None
             return _run_response(
                 change_id=change_id,
                 owner=owner,
                 owner_selection=owner_selection,
                 run=claimed_run,
+                current_head=head_sha,
+                exact_head=True,
+                prepared=prepared,
             )
     evidence_paths: list[str] = []
     for command_id in commands:
@@ -1120,9 +1216,12 @@ def candidate_status(
 ) -> dict[str, Any]:
     owner, owner_selection = _owner_root(root, change_id)
     state = StateStore(owner).load(change_id)
+    current_head = git_head(owner)
     runs = [item for item in state.get("candidate_runs", []) if isinstance(item, dict)]
     if operation_id is not None:
         runs = [item for item in runs if item.get("operation_id") == operation_id]
+    else:
+        runs = [item for item in runs if item.get("head_sha") == current_head]
     if not runs:
         return {
             "ok": True,
@@ -1137,12 +1236,29 @@ def candidate_status(
             "remaining_commands": [],
             "review_pack_path": None,
             "review_id": None,
+            "current_head": current_head,
+            "candidate_head": None,
+            "exact_head": False,
+            "prepared": False,
             "next_action": _next_action("run-candidate-ready", "no candidate run exists"),
         }
+    selected = runs[-1]
+    exact_head = selected.get("head_sha") == current_head
+    prepared = False
+    if exact_head and selected.get("status") == "completed":
+        prepared = _exact_head_pack(
+            owner,
+            state,
+            run=selected,
+            current_head=current_head,
+        ) is not None
     return _run_response(
         change_id=change_id,
         owner=owner,
         owner_selection=owner_selection,
-        run=runs[-1],
+        run=selected,
         diagnostic=diagnostic,
+        current_head=current_head,
+        exact_head=exact_head,
+        prepared=prepared,
     )

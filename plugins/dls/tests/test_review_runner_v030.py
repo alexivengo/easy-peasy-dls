@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import time
 import unittest
@@ -1016,11 +1017,119 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                 operation_id="must-not-start-models",
             )
             self.assertTrue(blocked["ok"])
-            self.assertEqual(blocked["status"], "not-prepared")
-            self.assertEqual(blocked["next_action"]["id"], "prepare-candidate")
+            self.assertEqual(blocked["status"], "blocked")
+            self.assertEqual(
+                blocked["next_action"]["id"],
+                "configure-review-commands",
+            )
             self.assertIsNone(blocked["review_result_path"])
             self.assertIsNone(blocked["review_pack_path"])
             self.assertEqual(counter.read_text(encoding="utf-8"), calls_before)
+
+    def test_review_run_self_heals_exact_head_remediation_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                reconciliation_blocker=True,
+            )
+            try:
+                first = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="first-review",
+                )
+                self.assertEqual(first["verdict"], "not-clear")
+                config = root / ".dls/config.toml"
+                config.write_text(
+                    config.read_text(encoding="utf-8").replace(
+                        "[policy]\n",
+                        '[policy]\nreview_required_commands = ["test"]\n',
+                        1,
+                    )
+                    + f"""
+
+[commands.test]
+argv = ["{sys.executable}", "-c", "print('pass')"]
+cwd = "."
+timeout_seconds = 5
+max_output_bytes = 4096
+env_allow = []
+""",
+                    encoding="utf-8",
+                )
+                (root / "README.md").write_text(
+                    "# Fixture\n\nRemediation ready without a pack.\n",
+                    encoding="utf-8",
+                )
+                git(root, "add", "README.md")
+                git(root, "commit", "-m", "remediate candidate")
+                head = git(root, "rev-parse", "HEAD")
+                evidence = evidence_add(
+                    root,
+                    change_id="C001",
+                    command_id="focused",
+                    exit_code=0,
+                    summary="PASS",
+                    expected_revision=StateStore(root).load("C001")["state_revision"],
+                    git_sha=head,
+                    artifacts=[],
+                    environment="fixture",
+                    duration_seconds=0.1,
+                    operation_id="focused-evidence",
+                )
+                finding_disposition(
+                    root,
+                    change_id="C001",
+                    finding_id="RNEW",
+                    disposition_status="addressed",
+                    rationale="The exact-current candidate addresses the finding.",
+                    expected_revision=StateStore(root).load("C001")["state_revision"],
+                    git_sha=head,
+                    evidence=[evidence["evidence_path"]],
+                    actor="codex",
+                    prompt=None,
+                    response=None,
+                    operation_id="address-current-head",
+                )
+                calls_before = counter.read_text(encoding="utf-8").splitlines()
+                events: list[dict] = []
+                completed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="self-healing-review",
+                    stream_callback=events.append,
+                )
+            finally:
+                self._restore_path(original)
+            self.assertEqual(completed["status"], "completed")
+            self.assertTrue(completed["review_result_path"])
+            self.assertTrue(completed["handoff_recovered"])
+            self.assertTrue(completed["pack_created"])
+            self.assertTrue(completed["candidate_run_id"])
+            state = StateStore(root).load("C001")
+            candidate = next(
+                item
+                for item in state["candidate_runs"]
+                if item.get("run_id") == completed["candidate_run_id"]
+            )
+            self.assertTrue(candidate["handoff_recovered_by_review"])
+            self.assertEqual(candidate["head_sha"], head)
+            self.assertEqual(
+                [
+                    event["phase"]
+                    for event in events
+                    if event.get("event") == "candidate-transition"
+                ],
+                ["preflight", "validating", "prepared"],
+            )
+            self.assertGreater(
+                len(counter.read_text(encoding="utf-8").splitlines()),
+                len(calls_before),
+            )
 
     def test_structurally_invalid_semantic_output_is_not_blindly_retried(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2137,8 +2246,13 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         self.assertIn("failed-finalize", review)
         self.assertIn("same stable operation ID", review)
         self.assertIn("prepare-candidate", review)
-        self.assertIn("return to the implementation", review)
-        self.assertIn("do not run validation", review)
+        self.assertIn("guarded remediation recovery", review)
+        self.assertIn("trusted named validation", review)
+        self.assertIn("reinstall-dls-plugin", combined)
+        self.assertIn("Do not activate for generic coding", skill)
+        self.assertIn("repository has DLS config/state", skill)
+        self.assertNotIn("Use only when the user explicitly invokes", skill)
+        self.assertNotIn("archive fallback", combined.lower())
         self.assertIn("open-review-task", remediation)
         self.assertIn("candidate-ready", remediation)
         self.assertIn("candidate-status", remediation)

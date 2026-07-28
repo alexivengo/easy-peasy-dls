@@ -68,10 +68,12 @@ definition, policy и finding set он наследует declaration из бл�
 ошибку можно безопасно восстановить через bounded diagnostic status без чтения
 полного лога.
 
-Если review-задача открыта раньше этого handoff или HEAD изменился после него,
-DLS возвращает `prepare-candidate` и не запускает модели. Проверки и подготовка
-пакета остаются в implementation-задаче; review-задача не пытается чинить
-процесс самостоятельно.
+Если review-задача открыта раньше handoff или HEAD изменился после него, DLS не
+показывает старый candidate как текущий. Для remediation `review-run` может сам
+достроить только механический handoff: убедиться, что current-HEAD dispositions
+полны, заново выполнить trusted validation и создать exact-HEAD pack. Он не
+редактирует product source и не угадывает semantic status findings. Первый review
+без известного base и любой человеческий boundary остаются в implementation.
 
 Implementer может отметить finding как `addressed`, но не как `verified`. Если finding спорный или попал не в тот gate, `note` передаёт его на независимое adjudication и ничего не закрывает. Проверка исправления и reclassification принадлежат reviewer.
 

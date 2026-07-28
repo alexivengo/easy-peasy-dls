@@ -443,10 +443,12 @@ def main(argv: list[str] | None = None) -> int:
     def emit_stream(event: dict[str, Any]) -> None:
         if not stream_enabled:
             return
+        event.setdefault("dls_version", VERSION)
         print(json.dumps(event, sort_keys=True, ensure_ascii=False), flush=True)
 
     try:
         result = dispatch(root, arguments, stream_callback=emit_stream)
+        result.setdefault("dls_version", VERSION)
     except DLSError as exc:
         if stream_enabled:
             emit_stream(
@@ -460,7 +462,12 @@ def main(argv: list[str] | None = None) -> int:
         if arguments.as_json:
             print(
                 json.dumps(
-                    {"ok": False, "error": exc.__class__.__name__, "message": str(exc)},
+                    {
+                        "ok": False,
+                        "dls_version": VERSION,
+                        "error": exc.__class__.__name__,
+                        "message": str(exc),
+                    },
                     sort_keys=True,
                     ensure_ascii=False,
                 )
@@ -481,7 +488,12 @@ def main(argv: list[str] | None = None) -> int:
         if arguments.as_json:
             print(
                 json.dumps(
-                    {"ok": False, "error": "OSError", "message": str(exc)},
+                    {
+                        "ok": False,
+                        "dls_version": VERSION,
+                        "error": "OSError",
+                        "message": str(exc),
+                    },
                     sort_keys=True,
                     ensure_ascii=False,
                 )
