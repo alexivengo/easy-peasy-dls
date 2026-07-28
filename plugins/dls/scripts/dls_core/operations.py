@@ -3580,6 +3580,101 @@ def _routine_plaintext_decision(
     }
 
 
+NATIVE_PLAINTEXT_PROJECTION_CONTRACT = "dls-native-plaintext/v1"
+
+
+def _native_plaintext_projection(text: str) -> dict[str, Any]:
+    """Project Codex' built-in review presentation into native-review/v2.
+
+    `codex exec review` may accept `--output-schema` while still writing its
+    human-facing presentation to `--output-last-message`.  This parser is
+    deliberately conservative: it accepts explicit clean markers or complete
+    P0-P3 review comments only.  The raw model output remains the provenance
+    artifact; this projection is DLS-owned and independently digest-bound.
+    """
+
+    stripped = text.strip()
+    if not stripped:
+        raise IntegrityError("native review plaintext is empty")
+    clean_match = re.match(
+        r"^(?:review[- ]clear|no findings(?: found)?|no actionable findings)"
+        r"\s*[:.\-—]?\s*(.*)$",
+        stripped,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if clean_match:
+        summary = clean_match.group(1).strip() or "No actionable review findings."
+        return {"summary": summary, "findings": []}
+
+    lines = stripped.splitlines()
+    comment_pattern = re.compile(
+        r"^-\s+\[P([0-3])\]\s+(.+?)\s+(?:—|-)\s+"
+        r"(.+?:[0-9]+(?:-[0-9]+)?)\s*$"
+    )
+    comment_starts: list[tuple[int, re.Match[str]]] = []
+    for index, line in enumerate(lines):
+        if match := comment_pattern.match(line):
+            comment_starts.append((index, match))
+        elif re.match(r"^-\s+\[P[0-3]\]", line):
+            raise IntegrityError(
+                "native review plaintext contains an unparseable review comment"
+            )
+    if not comment_starts:
+        raise IntegrityError(
+            "native review plaintext has neither an explicit clean marker nor "
+            "a complete P0-P3 review comment"
+        )
+
+    findings: list[dict[str, Any]] = []
+    for ordinal, (line_index, match) in enumerate(comment_starts):
+        next_index = (
+            comment_starts[ordinal + 1][0]
+            if ordinal + 1 < len(comment_starts)
+            else len(lines)
+        )
+        priority, title, location = match.groups()
+        body_lines = [
+            item.strip()
+            for item in lines[line_index + 1 : next_index]
+            if item.strip()
+        ]
+        body = " ".join(body_lines)
+        if not body:
+            raise IntegrityError(
+                "native review plaintext comment is missing its explanation"
+            )
+        if "/checkout/" in location:
+            location = location.split("/checkout/", 1)[1]
+        location = location.removeprefix("./")
+        severity = {
+            "0": "blocker",
+            "1": "blocker",
+            "2": "should-fix",
+            "3": "note",
+        }[priority]
+        findings.append(
+            {
+                "severity": severity,
+                "location": location,
+                "issue": title.strip(),
+                "impact": body,
+                "required_fix": body,
+            }
+        )
+
+    first_comment = comment_starts[0][0]
+    summary_parts = [
+        item.strip()
+        for item in lines[:first_comment]
+        if item.strip() and item.strip().casefold() != "review comment:"
+    ]
+    return {
+        "summary": " ".join(summary_parts)
+        or f"Native review reported {len(findings)} finding(s).",
+        "findings": findings,
+    }
+
+
 def _native_review_argv(
     pack: dict[str, Any],
     final_output_path: str,
@@ -3670,7 +3765,7 @@ def _successful_native_entry(
     return entry
 
 
-def _recover_routine_native_projection(
+def _recover_native_plaintext_projection(
     root: Path,
     *,
     state_store: StateStore,
@@ -3681,13 +3776,15 @@ def _recover_routine_native_projection(
     output_relative = entry.get("output_path")
     attempt_id = entry.get("attempt_id")
     if not isinstance(output_relative, str) or not isinstance(attempt_id, str):
-        raise IntegrityError("Routine native recovery metadata is incomplete")
+        raise IntegrityError("Native plaintext recovery metadata is incomplete")
     output_path = safe_resolve(root, output_relative, must_exist=True)
     if sha256_file(output_path) != entry.get("output_digest"):
-        raise IntegrityError("Routine native recovery raw output digest mismatch")
-    decision = _routine_plaintext_decision(
-        output_path.read_text(encoding="utf-8"),
-        pack=pack,
+        raise IntegrityError("Native plaintext recovery raw output digest mismatch")
+    raw_text = output_path.read_text(encoding="utf-8")
+    decision = (
+        _routine_plaintext_decision(raw_text, pack=pack)
+        if pack.get("control_level") == "routine"
+        else _native_plaintext_projection(raw_text)
     )
     normalized_relative = (
         f".dls/cache/reviews/{change_id}/{pack['review_id']}/"
@@ -3705,6 +3802,9 @@ def _recover_routine_native_projection(
                 "normalized_output_path": normalized_relative,
                 "normalized_output_digest": sha256_file(normalized_path),
                 "native_output_format": "codex-review-plaintext",
+                "native_plaintext_projection_contract": (
+                    NATIVE_PLAINTEXT_PROJECTION_CONTRACT
+                ),
                 "failure_reason": None,
                 "completed_at": utc_now(),
             },
@@ -4287,9 +4387,8 @@ def review_start(
             if (
                 terminal is not None
                 and terminal.get("status") == "invalid-output"
-                and pack.get("control_level") == "routine"
             ):
-                state, native_entry, recovered = _recover_routine_native_projection(
+                state, native_entry, recovered = _recover_native_plaintext_projection(
                     owner,
                     state_store=state_store,
                     change_id=change_id,
@@ -4546,6 +4645,7 @@ def review_start(
         status_value = "completed"
         failure_reason: str | None = native_failure_reason
         native_output_format: str | None = None
+        native_plaintext_projection_contract: str | None = None
         if native_failure_reason is not None:
             status_value = "failed"
         elif execution["timed_out"]:
@@ -4567,27 +4667,28 @@ def review_start(
             try:
                 native_payload = read_json(output_path)
             except (OSError, json.JSONDecodeError, IntegrityError) as exc:
-                if routine_review:
-                    try:
-                        native_payload = _routine_plaintext_decision(
-                            output_path.read_text(encoding="utf-8"),
-                            pack=pack,
-                        )
-                        atomic_write_json(
-                            normalized_output_path,
-                            native_payload,
-                            backup=False,
-                        )
-                        native_output_format = "codex-review-plaintext"
-                    except (OSError, UnicodeError, IntegrityError) as parse_exc:
-                        status_value = "invalid-output"
-                        failure_reason = (
-                            "native structured output is invalid and plaintext "
-                            f"fallback is unsafe: {parse_exc}"
-                        )
-                else:
+                try:
+                    raw_text = output_path.read_text(encoding="utf-8")
+                    native_payload = (
+                        _routine_plaintext_decision(raw_text, pack=pack)
+                        if routine_review
+                        else _native_plaintext_projection(raw_text)
+                    )
+                    atomic_write_json(
+                        normalized_output_path,
+                        native_payload,
+                        backup=False,
+                    )
+                    native_output_format = "codex-review-plaintext"
+                    native_plaintext_projection_contract = (
+                        NATIVE_PLAINTEXT_PROJECTION_CONTRACT
+                    )
+                except (OSError, UnicodeError, IntegrityError) as parse_exc:
                     status_value = "invalid-output"
-                    failure_reason = f"native structured output is invalid JSON: {exc}"
+                    failure_reason = (
+                        "native structured output is invalid and plaintext "
+                        f"fallback is unsafe: {parse_exc}; JSON error: {exc}"
+                    )
             else:
                 if routine_review and (
                     not isinstance(native_payload, dict)
@@ -4647,6 +4748,9 @@ def review_start(
                 else None
             ),
             "native_output_format": native_output_format,
+            "native_plaintext_projection_contract": (
+                native_plaintext_projection_contract
+            ),
             "exit_code": execution["exit_code"],
             "timed_out": execution["timed_out"],
             "overflow": output_overflow,

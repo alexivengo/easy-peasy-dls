@@ -17,6 +17,7 @@ from dls_core.operations import (
     REVIEW_IDENTIFIER_CONTRACT,
     REVIEW_RUNNER_CONTRACT,
     _codex_usage_from_output,
+    _native_plaintext_projection,
     _review_pack_digest,
     _routine_plaintext_decision,
     _validate_state_owned_review_provenance,
@@ -669,6 +670,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         invalid_ticket_once: bool = False,
         semantic_exit: int = 0,
         native_exit: int = 0,
+        native_plaintext: bool = False,
         reconciliation_blocker: bool = False,
         invalid_repair: bool = False,
         repair_exit: int = 0,
@@ -714,7 +716,14 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             "'findings': [], 'prior_finding_verdicts': []} "
             "if schema.endswith('review-decision.schema.json') else "
             "{'summary': 'No findings.', 'findings': []})\n"
-            "    output.write_text(json.dumps(payload))\n"
+            f"    if {native_plaintext!r}:\n"
+            "        output.write_text('Concurrent recovery can lose state.\\n\\n'\n"
+            "            'Review comment:\\n\\n'\n"
+            "            '- [P1] Exclude secured claims from stale sweeps — '\n"
+            "            '/private/tmp/dls/checkout/Sources/App/Ledger.swift:79-87\\n'\n"
+            "            '  A stale sweep can race the secured claim; skip it before recovery.')\n"
+            "    else:\n"
+            "        output.write_text(json.dumps(payload))\n"
             "else:\n"
             "    prompt = Path('.dls-review-input/prompt.md').read_text()\n"
             "    if prompt.startswith('# DLS decision-reference repair'):\n"
@@ -966,6 +975,89 @@ class ReviewRunnerV030Tests(unittest.TestCase):
                         "Use ticket IDs exactly as listed here",
                         (root / attempt["prompt_path"]).read_text(encoding="utf-8"),
                     )
+
+    def test_standard_native_plaintext_is_strictly_projected(self) -> None:
+        projection = _native_plaintext_projection(
+            "Concurrent stale-claim recovery can lose state.\n\n"
+            "Review comment:\n\n"
+            "- [P1] Exclude secured claims from stale sweeps — "
+            "/private/tmp/dls/checkout/Sources/App/Ledger.swift:79-87\n"
+            "  A stale sweep can race the secured claim; skip it before recovery."
+        )
+        self.assertEqual(projection["summary"], "Concurrent stale-claim recovery can lose state.")
+        self.assertEqual(len(projection["findings"]), 1)
+        finding = projection["findings"][0]
+        self.assertEqual(finding["severity"], "blocker")
+        self.assertEqual(finding["location"], "Sources/App/Ledger.swift:79-87")
+        self.assertEqual(finding["issue"], "Exclude secured claims from stale sweeps")
+        with self.assertRaisesRegex(IntegrityError, "neither an explicit clean marker"):
+            _native_plaintext_projection("The review probably looks fine.")
+        with self.assertRaisesRegex(IntegrityError, "unparseable review comment"):
+            _native_plaintext_projection("- [P1] Missing a location")
+
+    def test_cached_standard_native_plaintext_recovers_without_model_rerun(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                native_plaintext=True,
+                reconciliation_blocker=True,
+            )
+            try:
+                with mock.patch(
+                    "dls_core.operations._native_plaintext_projection",
+                    side_effect=IntegrityError("legacy runner expected JSON"),
+                ):
+                    with self.assertRaisesRegex(
+                        IntegrityError,
+                        "Native review did not complete: status=invalid-output",
+                    ):
+                        review_run(
+                            root,
+                            change_id="C001",
+                            pack_path=None,
+                            operation_id="native-plaintext-recovery",
+                        )
+                state_before = StateStore(root).load("C001")
+                native_before = [
+                    item
+                    for item in state_before["reviews"]
+                    if item.get("lane_key") == "native"
+                ]
+                self.assertEqual([item["status"] for item in native_before], ["invalid-output"])
+                raw_digest = native_before[0]["output_digest"]
+
+                completed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="native-plaintext-recovery",
+                )
+            finally:
+                self._restore_path(original)
+
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(completed["verdict"], "not-clear")
+            calls = counter.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(calls.count("native"), 1)
+            state_after = StateStore(root).load("C001")
+            native_after = [
+                item
+                for item in state_after["reviews"]
+                if item.get("lane_key") == "native"
+            ]
+            self.assertEqual(len(native_after), 1)
+            self.assertEqual(native_after[0]["status"], "completed")
+            self.assertEqual(native_after[0]["output_digest"], raw_digest)
+            self.assertEqual(
+                sha256_file(root / native_after[0]["output_path"]),
+                raw_digest,
+            )
+            self.assertEqual(
+                native_after[0]["native_plaintext_projection_contract"],
+                "dls-native-plaintext/v1",
+            )
 
     def test_review_run_returns_unprepared_candidate_to_implementation_task(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

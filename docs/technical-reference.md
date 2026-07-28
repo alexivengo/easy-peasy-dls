@@ -246,13 +246,15 @@ CLI запрещает сочетать positional review instructions и `--bas
 проверяются DLS до и после вызова.
 
 Во всех случаях DLS передаёт `--output-schema`. Некоторые текущие сборки Codex
-принимают этот флаг, но встроенный review presentation всё равно записывает
-человекочитаемый итог. Для routine DLS сохраняет такой raw output неизменным и
-строит отдельную bounded projection: P0-P3 review comments становятся findings,
-а успешное сообщение без review comments — `review-clear`. Нераспознанный,
-заблокированный или неоднозначный текст не импортируется. Повторный вызов после
-обновления DLS может построить projection из уже завершённого raw output без
-нового model call.
+принимают этот флаг, но встроенный `codex exec review` всё равно записывает
+человекочитаемый presentation. DLS сохраняет такой raw output и digest
+неизменными и строит отдельную bounded projection: полный P0-P3 review comment
+становится native finding, а только явный `review-clear`/`no findings` — чистым
+native результатом. Для routine projection также содержит итоговый verdict;
+для standard/critical она остаётся входом независимой semantic adjudication.
+Нераспознанный, заблокированный или неоднозначный текст не импортируется.
+Повторный вызов после обновления DLS может построить projection из уже
+завершённого raw output без нового native model call.
 
 Все DLS-owned semantic decisions используют repository-owned
 prompt templates и schemas. Перед модельным вызовом DLS локально проверяет

@@ -63,6 +63,7 @@ Exit criteria v0.4.4:
 | P35 | Performance / P0 | Guarded automatic activation | Явный skill-chip необязателен при однозначном DLS-контексте, generic задачи не перехватываются |
 | M56 | Must-be / P0 | Plugin-local runtime provenance | CLI и version берутся только из реально загруженного plugin bundle |
 | M57 | Must-be / P0 | Logical command budgeting | Paired start/completion telemetry считается одним вызовом и не создаёт ложный budget failure |
+| M58 | Must-be / P0 | Native presentation recovery | Официальный plaintext review строго проецируется без потери raw provenance и повторного model call |
 
 Exit criteria v0.6.0: exact-HEAD statuses согласованы, self-healing не запускает
 model calls при validation/integrity failure, generic задачи не активируют DLS,
