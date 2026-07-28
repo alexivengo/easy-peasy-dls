@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from .delivery_receipt import delivery_receipt
 from .errors import IntegrityError, LockError
 from .economy import ReviewBudget, processed_tokens, review_budget, token_budget_failure
 from .io import (
@@ -755,6 +756,7 @@ def review_status(
     change_id: str,
     review_id: str | None = None,
     verbose: bool = False,
+    _inspect_task_context: bool = True,
 ) -> dict[str, Any]:
     owner, owner_selection = _owner_root(root, change_id)
     state = StateStore(owner).load(change_id)
@@ -830,7 +832,11 @@ def review_status(
     )
     from .candidate_runner import candidate_status
 
-    candidate: dict[str, Any] | None = candidate_status(owner, change_id=change_id)
+    candidate: dict[str, Any] | None = candidate_status(
+        owner,
+        change_id=change_id,
+        _inspect_task_context=_inspect_task_context,
+    )
     if result_entry:
         status_value = "completed"
         next_action = {"id": "review-complete", "detail": result_entry["result_path"]}
@@ -979,19 +985,24 @@ def review_status(
         pipeline=pipeline,
         status_value=status_value,
     )
-    task_context = review_task_context(
-        owner,
-        change_id=change_id,
-        operation_id=str(
-            (pipeline or {}).get("operation_id") or selected_review_id or "review-status"
-        ),
-        review_id=pack.get("review_id") if isinstance(pack, dict) else None,
-        pack_digest=pack.get("pack_digest") if isinstance(pack, dict) else None,
-        record=False,
-        allow_cross_role=bool(
-            isinstance(pack, dict) and pack.get("control_level") == "routine"
-        ),
-    )
+    if _inspect_task_context:
+        task_context = review_task_context(
+            owner,
+            change_id=change_id,
+            operation_id=str(
+                (pipeline or {}).get("operation_id")
+                or selected_review_id
+                or "review-status"
+            ),
+            review_id=pack.get("review_id") if isinstance(pack, dict) else None,
+            pack_digest=pack.get("pack_digest") if isinstance(pack, dict) else None,
+            record=False,
+            allow_cross_role=bool(
+                isinstance(pack, dict) and pack.get("control_level") == "routine"
+            ),
+        )
+    else:
+        task_context = unavailable_task_context("review")
     pack_exact = bool(
         pack_entry
         and isinstance(pack, dict)
@@ -3260,7 +3271,7 @@ def _resume_failed_finalization(
         final_full_entry=final_full_entry,
         pipeline_operation_id=pipeline_operation_id,
     )
-    return {
+    result = {
         "ok": imported["review_result_path"] is not None,
         "dry_run": False,
         "changed": imported["changed"],
@@ -3283,6 +3294,8 @@ def _resume_failed_finalization(
         "reused_completed_lanes": True,
         "identifier_normalizations": report.get("identifier_normalizations", []),
     }
+    result["delivery_receipt"] = imported["delivery_receipt"]
+    return result
 
 
 def review_run(
@@ -3361,6 +3374,9 @@ def review_run(
                     "pack_created": False,
                 }
             )
+            existing_status["delivery_receipt"] = delivery_receipt(
+                Path(existing_status["owner_root"]), change_id=change_id
+            )
             emit(
                 "completed",
                 review_id=existing_status.get("review_id"),
@@ -3438,6 +3454,11 @@ def review_run(
                     review_id=recovery_review_id,
                     effective_operation_id=effective_operation_id,
                     owner_selection=existing_status["owner_selection"],
+                )
+                emit(
+                    "delivery-receipt",
+                    review_id=recovery_review_id,
+                    delivery_receipt=recovered["delivery_receipt"],
                 )
                 emit(
                     "completed",
@@ -3967,12 +3988,18 @@ def review_run(
         "presentation": presentation,
         "next_action": imported["next_action"],
     }
+    result["delivery_receipt"] = imported["delivery_receipt"]
     try:
         from .telemetry import cache_prune
 
         cache_prune(owner, change_id=change_id, apply=True)
     except Exception as exc:  # cleanup must never invalidate an imported review
         result["cleanup_warning"] = str(exc)
+    emit(
+        "delivery-receipt",
+        review_id=pack["review_id"],
+        delivery_receipt=result["delivery_receipt"],
+    )
     emit(
         "completed",
         review_id=pack["review_id"],

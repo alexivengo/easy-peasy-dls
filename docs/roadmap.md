@@ -2,14 +2,14 @@
 
 Срез: 28 июля 2026 года
 
-Текущая линия: `v0.7.1`
+Текущая линия: `v0.8.0`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
 ручную работу и повтор контекста, Attractive добавляет удобство только после
 стабилизации основного цикла.
 
-Полный реестр всех 145 реализованных, запланированных, отложенных и намеренно
+Полный реестр всех 146 реализованных, запланированных, отложенных и намеренно
 исключённых возможностей находится в [карте возможностей](capability-catalog.md).
 Этот файл остаётся короткой выборкой ближайших волн, а не вторым каталогом.
 
@@ -27,6 +27,8 @@ Must-be ядро реализовано и защищается regression-те�
   `review-run`;
 - read-only disposable review workspaces, single-flight и bounded recovery;
 - bounded review execution: risk budgets, compact context и ранняя остановка.
+- deterministic Delivery Receipt: read-only narrative и traceability одного
+  change без model call и нового source of truth.
 
 Ранее открытые gaps launcher/PATH, semantic write prevention, remediation
 launcher и единого review-ready handoff закрыты текущим CLI и skills.
@@ -122,7 +124,19 @@ native workspace, recorded argv не содержит owner/temp paths, Git comm
 remote не ведут обратно в owner checkout, а legacy owner-scoped attempt не
 может стать canonical native provenance.
 
-## Следующая волна v0.7.2: UI/UX platform pilot
+## v0.8.0 — Delivery Receipt
+
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| A03 | Attractive / P2 | Generated narrative changelog | Краткий русский narrative одного change вычисляется из canonical данных без LLM и не сохраняется |
+| P25 | Performance / P1 | Derived traceability view | Stable JSON связывает definition, tickets, current evidence, latest ReviewIR, acceptance и внешние границы |
+
+Exit criteria v0.8.0: повторный render byte-identical, Receipt не меняет state
+или файловый inventory, stale review/acceptance не доказывают текущий HEAD,
+release/production не выводятся из отсутствия findings, а successful import и
+accept автоматически возвращают один Receipt.
+
+## Следующая волна v0.8.1: UI/UX Attractive pilot
 
 - `M38–M39` — проверить Tier 1 precedent и Tier 2/3 versioned design artifact на
   реальном UI change;
@@ -136,14 +150,13 @@ remote не ведут обратно в owner checkout, а legacy owner-scoped 
 ## Позже, только по данным
 
 - P22 — следующий adapter только из реального web или Android pilot;
-- P25 — read-only derived status и traceability views;
 - A01 — Figma, Sketch или другой design connector после UI-пилота и решения
   privacy/versioning;
 - A06 — cross-project dashboard, только если CLI status перестанет справляться;
 - release/production profiles — после стабильного acceptance loop в нескольких
   типах проектов.
 
-Полный P2/P3 backlog, включая migration, repository cache, changelog, model/cost
+Полный P2/P3 backlog, включая migration, repository cache и model/cost
 recommendations и сохранённые anti-features, ведётся только в
 [карте возможностей](capability-catalog.md).
 

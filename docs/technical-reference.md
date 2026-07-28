@@ -59,6 +59,7 @@ python3 plugins/dls/scripts/dls.py --root /path/to/project doctor
 | `review-status` | Прочитать состояние review без запуска модели |
 | `review-start` | Native-only primitive для совместимости и диагностики |
 | `review-import` | Атомарно проверить и импортировать ReviewIR |
+| `delivery-receipt` | Вычислить read-only narrative и traceability view одного change без model call |
 | `finding` | Отметить addressed, waived, reopened или note |
 
 Для machine handoff используйте `--json`. Низкоуровневые mutations сохраняют
@@ -491,6 +492,35 @@ usage и task reuse status; внешний analytics service не использ
 remediation manifests и evidence не удаляются; raw cache хранит active,
 failed/recoverable runs, два последних completed reviews и всё моложе 14 дней.
 
+### Delivery Receipt
+
+`delivery-receipt CHANGE_ID` — чистая derived projection с контрактом
+`dls-delivery-receipt/v1`. Обычный CLI выводит русский Markdown до 4 KiB,
+`--json` — structured view до 16 KiB. Resolver читает state v1, authored
+artifacts, latest exact-HEAD evidence, последний canonical ReviewIR и derived
+approval statuses. Он не пишет state, cache или repository files и не запускает
+модель. Время генерации отсутствует, поэтому неизменный state даёт byte-identical
+Markdown, JSON и digests.
+
+`receipt_digest` считается по structured projection без Markdown и digest
+полей; `markdown_digest` — отдельно. Title берётся из первого H1 `CHANGE`,
+`EPIC` или `SPEC`, outcome — только из известной authored outcome-секции. При
+отсутствии outcome DLS не сочиняет текст. Raw transcripts, prompts, reasoning,
+model output, validation stdout, absolute paths и task IDs в Receipt не входят.
+Списки имеют bounded `items` и явный `omitted_count`.
+
+Latest canonical ReviewIR — единственный источник текущих findings; история
+показывается отдельными counts и не влияет на gates. Review считается current
+только для текущего clean HEAD. Acceptance действует только как current human
+approval этого HEAD. Release и production имеют лишь `blocked` или
+`not-evaluated`: отсутствие finding никогда не превращается в readiness.
+
+После успешного `review-import`/`review-run` Receipt добавляется к результату, а
+stream получает ровно одно событие `delivery-receipt` перед `completed`.
+`approve --decision accept` возвращает обновлённый accepted Receipt. Failure без
+канонического ReviewIR его не создаёт. Receipt остаётся presentation layer, а не
+новым approval, review result или canonical artifact.
+
 Подтверждённые `orphan`, `api-failure`, `output-cap` или missing output
 получают не более одной автоматической транспортной попытки. `invalid-output`
 никогда не повторяет исходный semantic-анализ: безопасная межполевая ошибка идёт
@@ -558,6 +588,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.7.0`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.8.0`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

@@ -15,9 +15,10 @@ flowchart LR
     F --> G["Independent review"]
     G -- "есть findings" --> H["Remediation"]
     H --> F
-    G -- "review-clear" --> I{"Accept?"}
+    G -- "review-clear" --> R["Delivery Receipt"]
+    R --> I{"Accept?"}
     I -- "нет" --> C
-    I -- "да" --> J["Accepted"]
+    I -- "да" --> J["Accepted Receipt"]
     J --> K["Отдельные release gates"]
 ```
 
@@ -144,6 +145,14 @@ Runner выбирает только pack текущего HEAD. Для повт
 или совмещение implementation и review в одной длинной задаче считаются reuse и
 дают одно неблокирующее предупреждение. Без `CODEX_THREAD_ID` процесс продолжает
 работать со статусом `unavailable`.
+
+После успешного импорта ReviewIR DLS без model call строит Delivery Receipt.
+Это краткий narrative и traceability view одного change: точный HEAD, состояние
+definition, candidate и tickets, последние актуальные required checks,
+канонический review, human acceptance и ещё не закрытые release/production
+границы. Он вычисляется заново при чтении, нигде не сохраняется и не меняет
+state revision. Повторный render на неизменном state byte-identical. При
+runner/integrity failure без ReviewIR Receipt не создаётся.
 
 ## Что остаётся за человеком
 

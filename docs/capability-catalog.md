@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
 Срез: 28 июля 2026 года
-Текущая линия: `v0.7.1`
+Текущая линия: `v0.8.0`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -77,8 +77,8 @@
 | M35 | Review не завершается без result path | ✅ | P0 | Успех требует canonical `review_result_path`; actionable result — remediation path |
 | M36 | Findings lifecycle | ✅ | P0 | Implementer ставит addressed/note; verified принадлежит independent review; waiver — человеку |
 | M37 | Latest-only remediation context | ✅ | P0 | Рабочий manifest строится только из последнего canonical ReviewIR |
-| M38 | UI/UX source prerequisite | 🟨 | P0 | Policy и approvals реализованы; реальный UI pilot перенесён в v0.7.2 |
-| M39 | Tiered UI policy | 🟨 | P0 | Tier 1 допускает precedent, Tier 2/3 требуют versioned artifact; реальный pilot перенесён в v0.7.2 |
+| M38 | UI/UX source prerequisite | 🟨 | P0 | Policy и approvals реализованы; реальный UI pilot перенесён в v0.8.1 |
+| M39 | Tiered UI policy | 🟨 | P0 | Tier 1 допускает precedent, Tier 2/3 требуют versioned artifact; реальный pilot перенесён в v0.8.1 |
 | M40 | Architecture decision до завершения SPEC | 🟨 | P0 | Critical E03 adoption и Draft/approval boundary дают backend preflight evidence; нужен полный approved definition/review lifecycle |
 | M41 | ADR только для долговечного решения | ✅ | P0 | ADR остаётся conditional artifact, а не ритуалом для каждого change |
 | M42 | Release/production evidence не подменяет review | ✅ | P0 | External gaps не блокируют code review без прямой ссылки на ticket DoD |
@@ -130,7 +130,7 @@
 | P22 | Полная platform profile suite | 🧊 | P2 | Не проектировать абстрактно до нескольких реальных adapters |
 | P23 | Semantic repository-discovery cache | 🧊 | P2 | Рассматривать только после измерения повторного discovery overhead |
 | P24 | Bulk migration legacy packages | 🧊 | P2 | `adopt` достаточен, пока нет повторяющегося migration volume |
-| P25 | Derived status/traceability views | 🧭 | P1 | Read-only views допустимы после platform pilots; не создавать второй source of truth |
+| P25 | Derived status/traceability views | ✅ | P1 | Delivery Receipt даёт stable read-only JSON/Markdown одного change из canonical данных без нового source of truth |
 | P26 | Release и production extensions | 🧊 | P2 | Отдельные profiles после стабильного acceptance loop на нескольких стеках |
 | P27 | Evidence/cache retention | ✅ | P1 | Canonical artifacts сохраняются; raw cache использует 14-day/two-review policy |
 | P28 | Conflict inventory и cleanup verification | 🟨 | P1 | Doctor обнаруживает конфликты; destructive cleanup остаётся user-authorized |
@@ -152,7 +152,7 @@
 |---|---|---:|---:|---|
 | A01 | Figma/Sketch/другой design connector | 🧊 | P2 | Реальный UI pilot, privacy contract и immutable version reference |
 | A02 | Автоматическое design provenance/version | 🧊 | P2 | Надёжный immutable source и явный выбор пользователя |
-| A03 | Generated narrative changelog | 🧊 | P2 | Только derived output из state/evidence, никогда не source of truth |
+| A03 | Generated narrative changelog | ✅ | P2 | Delivery Receipt детерминированно строит краткий русский narrative без LLM и не сохраняет его |
 | A04 | Model optimization по telemetry | 🧊 | P2 | Сопоставимые A/B данные на нескольких типах задач |
 | A05 | Cost-aware recommendation model/effort | 🧊 | P2 | Надёжный cost source; рекомендация вместо скрытого переключения |
 | A06 | Cross-project dashboard | 🧊 | P3 | Только если compact CLI status перестанет справляться |
@@ -224,15 +224,21 @@
 - `P35`: guarded workflow действительно доступен для implicit invocation по DLS-сигналу;
 - owner-scoped legacy native attempt получает bounded replacement вместо reuse.
 
-### v0.7.2 — UI/UX и полный architecture lifecycle
+### v0.8.0 — Delivery Receipt
+
+- `A03`: deterministic generated narrative одного change без LLM и persistence;
+- `P25`: stable derived traceability по definition, tickets, evidence, ReviewIR,
+  acceptance и отдельным release/production boundaries;
+- receipt автоматически возвращается после canonical review import и `accept`.
+
+### v0.8.1 — UI/UX и полный architecture lifecycle
 
 - `M38–M39`: UI tiers и immutable design source на реальном change;
 - `M40`: approved critical definition/review lifecycle;
 - `P30`, `P39`: сравнимые Swift/backend/UI routing и usage pilots.
 
-### Следующая P1-волна — derived product UX
+### Следующая P1-волна — platform и conflict UX
 
-- `P25`: read-only status, traceability и review-summary projections;
 - `P28`: повторяемый conflict inventory без автоматического destructive cleanup;
 - завершить cross-platform доказательство `P02`, `P08`, `P09` и `P39`.
 
@@ -242,7 +248,7 @@
 - `A01`, `A02`: versioned design connectors/provenance;
 - `P23`: semantic discovery cache;
 - `P24`, `A08`: guided migration;
-- `A03–A05`: changelog и model/cost recommendations на основе данных.
+- `A04–A05`: model/cost recommendations на основе данных.
 
 ### P3 — не планировать заранее
 

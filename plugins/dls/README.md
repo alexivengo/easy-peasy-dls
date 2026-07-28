@@ -55,6 +55,12 @@ Implementation/remediation-задача не запускает review runner: �
 
 ReviewPack/ReviewIR v2 сохраняют читаемость исторических v1 artifacts, считают последний импортированный ReviewIR текущим canonical snapshot, делают закрытие finding ответственностью reviewer и требуют targeted remediation pass плюс финальный whole-change semantic pass перед повторным `review-clear`. Implementer `note` разрешает только независимое adjudication и сам finding не закрывает.
 
+После canonical review import и human `accept` DLS автоматически возвращает
+Delivery Receipt: краткий русский Markdown и bounded JSON одного change. Он
+детерминированно выводится из state, exact-HEAD evidence, ReviewIR и approvals,
+не запускает модель, не записывается в cache или репозиторий и сохраняет
+отдельные границы review, acceptance, release и production.
+
 ## Структура
 
 - `.codex-plugin/plugin.json` — plugin metadata;

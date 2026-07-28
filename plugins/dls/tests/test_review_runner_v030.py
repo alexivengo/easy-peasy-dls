@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
+from dls_core.candidate_runner import candidate_ready
 from dls_core.errors import IntegrityError
 from dls_core.io import sha256_file, utc_now
 from dls_core.operations import (
@@ -287,9 +288,89 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertNotIn("reconciliation", report["lanes"])
             self.assertEqual(events[0]["event"], "started")
             self.assertEqual(events[-1]["event"], "completed")
+            self.assertEqual(result["delivery_receipt"]["lifecycle"], "review-clear")
+            receipt_events = [
+                item for item in events if item["event"] == "delivery-receipt"
+            ]
+            self.assertEqual(len(receipt_events), 1)
+            self.assertEqual(receipt_events[0]["review_id"], result["review_id"])
+            self.assertEqual(events[-2]["event"], "delivery-receipt")
             self.assertEqual(
                 [item["lane"] for item in events if item["event"] == "lane-transition"],
                 ["native"],
+            )
+
+    def test_routine_candidate_ready_returns_delivery_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base_sha = initialize_git(root)
+            initialize(root)
+            create_change(root, control="routine")
+            config = root / ".dls/config.toml"
+            config.write_text(
+                config.read_text(encoding="utf-8").replace(
+                    "[policy]\n",
+                    '[policy]\nreview_required_commands = ["test"]\n',
+                    1,
+                )
+                + f"""
+
+[commands.test]
+argv = ["{sys.executable}", "-c", "print('trusted pass')"]
+cwd = "."
+timeout_seconds = 5
+max_output_bytes = 4096
+env_allow = []
+""",
+                encoding="utf-8",
+            )
+            approve(
+                root,
+                change_id="C001",
+                decision="definition",
+                expected_revision=1,
+                actor="user",
+                prompt=None,
+                response=None,
+                git_sha=None,
+                conditions=None,
+                operation_id="routine-candidate-definition",
+            )
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "routine candidate")
+            original, _, _ = self._install_fake_codex(root)
+            try:
+                result = candidate_ready(
+                    root,
+                    change_id="C001",
+                    base_ref=base_sha,
+                    addressed=[],
+                    noted=[],
+                    extra_commands=[],
+                    operation_id=None,
+                )
+            finally:
+                self._restore_path(original)
+
+            self.assertEqual(result["status"], "completed", result)
+            self.assertEqual(result["verdict"], "review-clear")
+            attempts = [
+                item
+                for item in StateStore(root).load("C001")["reviews"]
+                if item.get("review_id") == result["review_id"]
+                and isinstance(item.get("lane_key"), str)
+            ]
+            self.assertEqual(
+                [item["lane_key"] for item in attempts],
+                ["native"],
+            )
+            self.assertEqual(
+                result["delivery_receipt"]["contract"],
+                "dls-delivery-receipt/v1",
+            )
+            self.assertEqual(
+                result["delivery_receipt"]["lifecycle"],
+                "review-clear",
             )
 
     def test_routine_plaintext_fallback_is_bounded_and_auditable(self) -> None:
@@ -925,6 +1006,15 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             )
             self.assertEqual(events[0]["event"], "started")
             self.assertEqual(events[-1]["event"], "completed")
+            receipt_events = [
+                item for item in events if item["event"] == "delivery-receipt"
+            ]
+            self.assertEqual(len(receipt_events), 1)
+            self.assertEqual(
+                completed["delivery_receipt"]["contract"],
+                "dls-delivery-receipt/v1",
+            )
+            self.assertEqual(events[-2]["event"], "delivery-receipt")
             self.assertEqual(
                 [
                     item["lane"]
@@ -2076,6 +2166,7 @@ env_allow = []
                 root,
                 semantic_exit=7,
             )
+            events: list[dict] = []
             try:
                 with self.assertRaisesRegex(
                     IntegrityError,
@@ -2086,6 +2177,7 @@ env_allow = []
                         change_id="C001",
                         pack_path=None,
                         operation_id="semantic-failure-root",
+                        stream_callback=events.append,
                     )
                 failed = review_status(root, change_id="C001", verbose=True)
             finally:
@@ -2104,6 +2196,9 @@ env_allow = []
             self.assertEqual(
                 counter.read_text(encoding="utf-8").splitlines(),
                 ["native", "semantic-independent", "semantic-independent"],
+            )
+            self.assertFalse(
+                any(item.get("event") == "delivery-receipt" for item in events)
             )
 
     def test_finalize_failure_is_visible_and_resume_reuses_completed_lanes(self) -> None:

@@ -960,20 +960,11 @@ def cache_prune(
     }
 
 
-def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
-    from .candidate_runner import candidate_status
-    from .review_runner import review_status
-
-    owner, owner_selection = _owner_root(root, change_id)
-    candidate = candidate_status(owner, change_id=change_id)
-    review = review_status(owner, change_id=change_id)
-    cache = cache_status(owner, change_id=change_id)
-    metrics = review_metrics(owner, change_id=change_id)
-    review_is_current = bool(
-        review.get("review_id")
-        and review.get("exact_head")
-        and review.get("candidate_head") == candidate.get("current_head")
-    )
+def resolve_delivery_next_action(
+    candidate: dict[str, Any],
+    review: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the single delivery action shared by status and Receipt."""
     if review.get("status") in {
         "running",
         "preparing-candidate",
@@ -1002,6 +993,24 @@ def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
         next_action = candidate["next_action"]
     else:
         next_action = candidate["next_action"]
+    return next_action
+
+
+def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
+    from .candidate_runner import candidate_status
+    from .review_runner import review_status
+
+    owner, owner_selection = _owner_root(root, change_id)
+    candidate = candidate_status(owner, change_id=change_id)
+    review = review_status(owner, change_id=change_id)
+    cache = cache_status(owner, change_id=change_id)
+    metrics = review_metrics(owner, change_id=change_id)
+    review_is_current = bool(
+        review.get("review_id")
+        and review.get("exact_head")
+        and review.get("candidate_head") == candidate.get("current_head")
+    )
+    next_action = resolve_delivery_next_action(candidate, review)
     result = {
         "ok": True,
         "change_id": change_id,

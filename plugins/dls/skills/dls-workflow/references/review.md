@@ -64,6 +64,12 @@ contains raw transcripts or provisional findings. Report only its transitions,
 budget warning, final result, or one compact heartbeat. `inspect-review-budget`
 is a bounded execution failure: do not retry expensive lanes or invent a verdict.
 
+After a canonical import, stream mode emits exactly one bounded
+`delivery-receipt` event immediately before `completed`. If the original stream
+was lost and `review-status` confirms an imported result, invoke the read-only
+`delivery-receipt CHANGE_ID` once. Never invoke it for a failed runner with no
+canonical ReviewIR.
+
 If all lanes completed but final assembly/import failed, `review-status` returns
 `failed-finalize` and `next_action: resume-review`. If a semantic decision is
 structurally valid but has an inconsistent reference, it returns
@@ -90,9 +96,15 @@ not a second review result.
 3. If `presentation.unplaced_findings` is non-empty, keep those findings in the
    Markdown summary and explicitly say that no safe inline location was derived.
 4. Never emit inline directives when `presentation.exact_head` is false.
+5. Show the returned `delivery_receipt` after the findings. For `review-clear`,
+   use its Russian Markdown as the primary lifecycle summary before human
+   acceptance. For `not-clear` or `blocked`, keep findings first, then the
+   Receipt, then the one-line remediation handoff.
 
 Inline comments are only a presentation of the canonical ReviewIR. They never
 replace `review_result_path`, finding IDs, ticket verdicts, or remediation state.
+The Receipt is likewise derived: it never replaces state, ReviewIR, evidence,
+approval, release, or production gates and never requires a model call.
 
 ## Handle outcomes
 

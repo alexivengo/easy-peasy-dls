@@ -10,6 +10,7 @@ from typing import Any
 
 from . import VERSION
 from .candidate_runner import candidate_ready, candidate_status
+from .delivery_receipt import delivery_receipt
 from .errors import DLSError, UsageError
 from .operations import (
     adopt_change,
@@ -369,6 +370,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     delivery_status_parser.add_argument("change_id")
 
+    delivery_receipt_parser = subparsers.add_parser(
+        "delivery-receipt",
+        help="Render a deterministic read-only Delivery Receipt.",
+    )
+    delivery_receipt_parser.add_argument("change_id")
+
     cache_status_parser = subparsers.add_parser(
         "cache-status", help="Read local ignored DLS cache size."
     )
@@ -723,6 +730,8 @@ def dispatch(
         )
     if command == "delivery-status":
         return delivery_status(root, change_id=args.change_id)
+    if command == "delivery-receipt":
+        return delivery_receipt(root, change_id=args.change_id)
     if command == "cache-status":
         return cache_status(root, change_id=args.change_id)
     if command == "cache-prune":
@@ -833,6 +842,8 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             f"path={result['manifest_path'] or 'not written'}"
         )
     if command == "approve":
+        if isinstance(result.get("delivery_receipt"), dict):
+            return result["delivery_receipt"]["markdown"]
         return prefix + (
             f"{result['change_id']} r{result['state_revision']}: "
             f"{result['approval']['decision']} {result['approval']['object_digest'][:8]}"
@@ -880,6 +891,8 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             f"next={result['next_action']['id']}"
         )
     if command == "candidate-ready":
+        if isinstance(result.get("delivery_receipt"), dict):
+            return result["delivery_receipt"]["markdown"]
         return prefix + (
             f"candidate {result.get('status')}; "
             f"phase={result.get('phase')}; "
@@ -932,11 +945,14 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
                 f"next={next_action.get('id', 'inspect')}; "
                 f"{next_action.get('detail', '')}"
             )
-        return prefix + (
+        summary = prefix + (
             f"review-run {result.get('status')}; "
             f"verdict={result.get('verdict') or 'pending'}; "
             f"result={result.get('review_result_path') or 'pending'}"
         )
+        if isinstance(result.get("delivery_receipt"), dict):
+            return summary + "\n\n" + result["delivery_receipt"]["markdown"]
+        return summary
     if command == "review-status":
         progress = result.get("progress", {})
         return (
@@ -961,6 +977,8 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             f"delivery {result['change_id']}; candidate={result['candidate']['status']}; "
             f"review={result['review']['status']}; next={result['next_action']['id']}"
         )
+    if command == "delivery-receipt":
+        return result["markdown"]
     if command == "cache-status":
         return f"cache files={result['files']}; bytes={result['bytes']}"
     if command == "cache-prune":
@@ -969,6 +987,8 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             f"{'applied' if not result['dry_run'] else 'dry-run'}"
         )
     if command == "review-import":
+        if isinstance(result.get("delivery_receipt"), dict):
+            return result["delivery_receipt"]["markdown"]
         return prefix + (
             f"review {result['verdict']}; findings="
             + ",".join(f"{key}:{value}" for key, value in result["finding_counts"].items())

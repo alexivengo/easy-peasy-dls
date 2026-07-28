@@ -61,6 +61,14 @@ DLS спроектирован так, чтобы меньше повторят�
 
 Это позволяет ответить не только «что сделал Codex?», но и «для какой версии это действительно проверено?».
 
+После канонического review DLS автоматически показывает **Delivery Receipt** —
+короткую русскую сводку для конкретного change. Она собирается на лету из
+state, exact-HEAD evidence, ReviewIR и human approvals: без LLM, без нового файла
+в репозитории и без второго source of truth. Receipt отдельно показывает
+definition, implementation, validation, review, acceptance, release и
+production, поэтому зелёный review не выглядит как готовый production release.
+Тот же Receipt обновляется после `accept`.
+
 ## Это не ещё одна виртуальная software-компания
 
 [Superpowers](https://github.com/obra/superpowers), [GSD Core](https://github.com/open-gsd/gsd-core) и [BMAD](https://github.com/bmad-code-org/BMAD-METHOD) решают более широкие задачи: предлагают полноценную методологию, фазовый процесс, специализированные роли или автономную работу агентов.
@@ -171,6 +179,11 @@ native output и другие review-драфты в этот вызов не п
 inline-комментарии непосредственно у проверенных строк. Комментарии строятся из
 канонического ReviewIR и выводятся только пока checkout остаётся на reviewed
 HEAD; они не становятся отдельным источником статуса review.
+
+Следом DLS показывает Delivery Receipt. При `not-clear` findings остаются
+первыми, затем идёт сводка и короткий remediation handoff. При `review-clear`
+Receipt становится основным итогом перед вашим `accept`. Отдельную команду для
+этого запускать не нужно.
 
 Если review находит проблемы, DLS в той же атомарной операции сохраняет
 канонический remediation-контекст. Исправления выполняются в implementation-

@@ -1290,6 +1290,7 @@ def candidate_status(
     change_id: str,
     operation_id: str | None = None,
     diagnostic: bool = False,
+    _inspect_task_context: bool = True,
 ) -> dict[str, Any]:
     owner, owner_selection = _owner_root(root, change_id)
     state = StateStore(owner).load(change_id)
@@ -1332,21 +1333,26 @@ def candidate_status(
             run=selected,
             current_head=current_head,
         ) is not None
-    from .telemetry import candidate_task_context
+    if _inspect_task_context:
+        from .telemetry import candidate_task_context
 
-    inspected_context = candidate_task_context(
-        owner,
-        change_id=change_id,
-        operation_id=str(selected.get("operation_id") or "candidate-status"),
-        definition_digest=selected.get("definition_digest"),
-        review_base_sha=selected.get("review_base_sha"),
-        canonical_review_id=selected.get("canonical_review_id"),
-        canonical_review_result_digest=selected.get(
-            "canonical_review_result_digest"
-        ),
-        remediation_manifest_digest=selected.get("remediation_manifest_digest"),
-        record=False,
-    )
+        inspected_context = candidate_task_context(
+            owner,
+            change_id=change_id,
+            operation_id=str(selected.get("operation_id") or "candidate-status"),
+            definition_digest=selected.get("definition_digest"),
+            review_base_sha=selected.get("review_base_sha"),
+            canonical_review_id=selected.get("canonical_review_id"),
+            canonical_review_result_digest=selected.get(
+                "canonical_review_result_digest"
+            ),
+            remediation_manifest_digest=selected.get("remediation_manifest_digest"),
+            record=False,
+        )
+    else:
+        from .telemetry import unavailable_task_context
+
+        inspected_context = unavailable_task_context("implementation")
     response = _run_response(
         change_id=change_id,
         owner=owner,

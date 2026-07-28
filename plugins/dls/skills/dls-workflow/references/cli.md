@@ -31,6 +31,7 @@ dls review-run
 dls review-status
 dls review-metrics
 dls delivery-status
+dls delivery-receipt
 dls cache-status
 dls cache-prune
 dls review-import
@@ -61,6 +62,7 @@ Rules:
 - `dls review-run CHANGE_ID --stream` is the public standard/critical review orchestration command. It selects the exact-HEAD pack, runs the risk-adaptive bounded pipeline with single-flight protection, creates ReviewIR, and imports it. The stream replaces status polling. A completed `not-clear` verdict exits successfully.
 - `dls review-metrics CHANGE_ID [--refresh] [--verbose]` reads sanitized child and controller usage. Active controller totals are lower bounds; unavailable native usage is never reported as zero.
 - `dls delivery-status CHANGE_ID` returns one compact typed next action. `cache-status` is read-only; `cache-prune` previews retention unless `--apply` is explicit.
+- `dls delivery-receipt CHANGE_ID` renders a deterministic Russian Markdown summary; global `--json` returns `dls-delivery-receipt/v1`. It reads only canonical state and immutable artifacts, writes nothing, launches no model, and never treats `review-clear`, `accept`, release, or production as the same boundary. Normal workflow shows it automatically after imported review and acceptance; the user does not run it manually.
 - `dls review-status CHANGE_ID [--review-id ID]` is read-only and compact by
   default. It never launches a model. `--verbose` adds full argv, paths, and
   provenance only for diagnostics.

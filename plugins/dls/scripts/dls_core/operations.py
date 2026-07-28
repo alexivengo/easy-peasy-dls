@@ -838,6 +838,13 @@ def approve(
             "operation_id": effective_operation_id,
             "approval": recorded,
         }
+        if decision == "accept":
+            from .delivery_receipt import delivery_receipt
+
+            result["delivery_receipt"] = delivery_receipt(
+                root, change_id=change_id
+            )
+        return result
     _require_revision(state, expected_revision)
     if state["lifecycle"] == "accepted" and decision != "exception":
         raise IntegrityError("Accepted work cannot receive another decision without a new change")
@@ -907,7 +914,7 @@ def approve(
         (item for item in updated["approvals"] if item.get("id") == approval_id),
         approval,
     )
-    return {
+    result = {
         "ok": True,
         "dry_run": False,
         "changed": changed,
@@ -916,6 +923,11 @@ def approve(
         "operation_id": effective_operation_id,
         "approval": recorded_approval,
     }
+    if decision == "accept":
+        from .delivery_receipt import delivery_receipt
+
+        result["delivery_receipt"] = delivery_receipt(root, change_id=change_id)
+    return result
 
 
 def revoke_approval(
@@ -5525,7 +5537,7 @@ def review_import(
                     ),
                 },
             )
-        return {
+        imported = {
             "ok": report["verdict"] == "review-clear",
             "dry_run": False,
             "changed": False,
@@ -5553,6 +5565,12 @@ def review_import(
                 "detail": remediation_path or relative_path,
             },
         }
+        from .delivery_receipt import delivery_receipt
+
+        imported["delivery_receipt"] = delivery_receipt(
+            root, change_id=change_id
+        )
+        return imported
     if existing_operation:
         raise IntegrityError(f"Review import operation has no matching result: {effective_operation_id}")
     _require_revision(state, expected_revision)
@@ -5675,7 +5693,7 @@ def review_import(
         artifacts=artifacts,
         mutator=mutate,
     )
-    return {
+    imported = {
         "ok": report["verdict"] == "review-clear",
         "dry_run": False,
         "changed": changed,
@@ -5699,6 +5717,10 @@ def review_import(
             "detail": remediation_path or relative_path,
         },
     }
+    from .delivery_receipt import delivery_receipt
+
+    imported["delivery_receipt"] = delivery_receipt(root, change_id=change_id)
+    return imported
 
 
 def finding_disposition(

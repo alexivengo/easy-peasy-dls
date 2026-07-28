@@ -68,9 +68,13 @@ On `failed-finalize` or `resume-review-repair`, invoke the same `review-run` wit
 
 When a completed exact-HEAD review returns DLS-owned `presentation.comments`, emit their prepared `::code-comment` directives verbatim after the severity-first summary. Do not invent inline comments from model transcripts or emit them for stale locations. During a long unchanged runner wait, avoid repeated narration: use the longest host wait available and provide at most one compact heartbeat per minute.
 
+Every successfully imported review also returns a deterministic `delivery_receipt`. It is a read-only projection, not a new artifact or approval. After `not-clear` or `blocked`, show findings first, then the Receipt and the short remediation handoff. After `review-clear`, make the Receipt the main summary before asking for acceptance. If the streamed process was lost after canonical import, call `delivery-receipt CHANGE_ID` once; do not reconstruct the lifecycle in prose or invoke a model/subagent for the narrative.
+
 ## Finish
 
 Run the acceptance gate. Ask a scoped `accept` question naming the exact short digest; for Git-backed work also name the reviewed head. Record acceptance only after the user's direct affirmative reply.
+
+After `approve --decision accept`, show the returned accepted Delivery Receipt. Do not ask the user to run another CLI command, and do not imply that accepted means released or in production.
 
 Report separately: implemented, validated, review-clear, accepted, and any release state. Stop DLS core at accepted.
 
