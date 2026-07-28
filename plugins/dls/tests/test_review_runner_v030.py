@@ -838,6 +838,8 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             "'provenance': ['reconciliation']}]\n"
             "    output.parent.mkdir(parents=True, exist_ok=True)\n"
             "    output.write_text(json.dumps(payload))\n"
+            "counter.parent.mkdir(parents=True, exist_ok=True)\n"
+            "with counter.open('a') as handle: handle.write(kind + '\\n')\n"
             f"if not native:\n"
             f"    for event_index in range({semantic_command_events!r}):\n"
             "        print(json.dumps({'type': 'item.started', 'item': "
@@ -847,8 +849,6 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             f"{{'input_tokens': {semantic_usage_tokens!r}, "
             "'cached_input_tokens': 0, 'output_tokens': 1, "
             "'reasoning_output_tokens': 0}}), flush=True)\n"
-            "counter.parent.mkdir(parents=True, exist_ok=True)\n"
-            "with counter.open('a') as handle: handle.write(kind + '\\n')\n"
             "print(json.dumps({'type': 'fake', 'lane': kind}))\n",
             encoding="utf-8",
         )
