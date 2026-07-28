@@ -675,6 +675,7 @@ class ReviewRunnerV030Tests(unittest.TestCase):
         invalid_repair: bool = False,
         repair_exit: int = 0,
         repair_sleep: float = 0.0,
+        semantic_command_events: int = 0,
     ) -> tuple[str | None, Path, Path]:
         fake_bin = root / ".dls" / "cache" / "runner-fake-bin"
         fake_bin.mkdir(parents=True, exist_ok=True)
@@ -835,6 +836,10 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             "'provenance': ['reconciliation']}]\n"
             "    output.parent.mkdir(parents=True, exist_ok=True)\n"
             "    output.write_text(json.dumps(payload))\n"
+            f"if not native:\n"
+            f"    for event_index in range({semantic_command_events!r}):\n"
+            "        print(json.dumps({'type': 'item.started', 'item': "
+            "{'id': f'command-{event_index}', 'type': 'command_execution'}}), flush=True)\n"
             "counter.parent.mkdir(parents=True, exist_ok=True)\n"
             "with counter.open('a') as handle: handle.write(kind + '\\n')\n"
             "print(json.dumps({'type': 'fake', 'lane': kind}))\n",
@@ -1057,6 +1062,67 @@ class ReviewRunnerV030Tests(unittest.TestCase):
             self.assertEqual(
                 native_after[0]["native_plaintext_projection_contract"],
                 "dls-native-plaintext/v1",
+            )
+
+    def test_semantic_budget_stop_is_typed_and_budget_change_is_new_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_standard(root)
+            config = root / ".dls/config.toml"
+            config.write_text(
+                config.read_text(encoding="utf-8")
+                + "\n[review_budgets.standard]\ncommand_events = 1\n",
+                encoding="utf-8",
+            )
+            original, counter, _ = self._install_fake_codex(
+                root,
+                semantic_command_events=2,
+            )
+            try:
+                failed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="semantic-budget-contract",
+                )
+                self.assertEqual(failed["status"], "failed")
+                self.assertEqual(
+                    failed["next_action"]["id"],
+                    "inspect-review-budget",
+                )
+                config.write_text(
+                    config.read_text(encoding="utf-8").replace(
+                        "command_events = 1",
+                        "command_events = 3",
+                    ),
+                    encoding="utf-8",
+                )
+                completed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="semantic-budget-contract",
+                )
+            finally:
+                self._restore_path(original)
+
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(completed["verdict"], "review-clear")
+            calls = counter.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(calls.count("native"), 1)
+            self.assertEqual(calls.count("semantic-independent"), 2)
+            semantic = [
+                item
+                for item in StateStore(root).load("C001")["reviews"]
+                if item.get("lane_key") == "semantic:full"
+            ]
+            self.assertEqual(
+                [item["status"] for item in semantic],
+                ["budget-exceeded", "completed"],
+            )
+            self.assertNotEqual(
+                semantic[0]["lane_contract_digest"],
+                semantic[1]["lane_contract_digest"],
             )
 
     def test_review_run_returns_unprepared_candidate_to_implementation_task(self) -> None:

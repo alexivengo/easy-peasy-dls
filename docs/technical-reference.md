@@ -401,8 +401,10 @@ processed child tokens, одну lane, command events, duration и transcript:
 routine 750k/10m, standard 3m/15m, critical 5m/20m с меньшими per-lane caps.
 Budget failure не создаёт ReviewIR и возвращает `inspect-review-budget`.
 Model, effort, prompt, schema, context, pack, HEAD и repair input
-входят в digest lane contract. Completed lane переиспользуется только при точном
-совпадении этого digest.
+входят в digest lane contract вместе с effective budget. Completed lane
+переиспользуется только при точном совпадении этого digest. Поэтому изменение
+bounded budget является явным новым execution contract, а не скрытым retry
+прежней попытки.
 
 В `v0.5.0` command-event budget ошибочно считал `item.started` и
 `item.completed` одного Codex command как два вызова. На реальном EPIC-01 это
@@ -413,6 +415,13 @@ Model, effort, prompt, schema, context, pack, HEAD и repair input
 его digest доказывают этот точный double-count, а логическое число вызовов
 укладывается в исходный budget. Остальные budget failures не становятся
 retryable.
+
+Первый real critical pilot после исправления double-count дошёл до 33
+логических команд и показал, что прежний cap 32 обрывает валидный targeted-pass
+на границе. В `v0.6.0` critical cap откалиброван до 48 command events и 1.5 MiB
+transcript; token и 20-минутный time budgets не расширялись. Terminal budget
+attempt не передаётся в decision-repair и возвращает типизированный
+`inspect-review-budget`, даже когда output artifact отсутствует.
 
 Новые packs помечаются `runner_contract: dls-review-runner/v2`,
 `context_contract: dls-review-context/v2`, `economy_contract:

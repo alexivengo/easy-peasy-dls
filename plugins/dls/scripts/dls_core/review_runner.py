@@ -411,6 +411,7 @@ def _lane_contract_digest(
     schema_digest: str,
     context_digest: str,
     input_bundle_digest: str | None = None,
+    budget: ReviewBudget,
 ) -> str:
     contract = {
         "runner_contract": pack.get("runner_contract", REVIEW_RUNNER_CONTRACT),
@@ -424,6 +425,13 @@ def _lane_contract_digest(
         "schema_digest": schema_digest,
         "context_digest": context_digest,
         "input_bundle_digest": input_bundle_digest,
+        "budget": {
+            "aggregate_tokens": budget.aggregate_tokens,
+            "lane_tokens": budget.lane_tokens,
+            "command_events": budget.command_events,
+            "timeout_seconds": budget.timeout_seconds,
+            "transcript_bytes": budget.transcript_bytes,
+        },
     }
     return sha256_bytes(
         json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1331,6 +1339,7 @@ def _execute_structured_lane(
         raise IntegrityError(
             "Input-only review bundle exceeds the 2 MiB large-context limit"
         )
+    effective_budget = budget or review_budget(owner, pack["control_level"])
     lane_contract_digest = _lane_contract_digest(
         pack=pack,
         lane_key=lane_key,
@@ -1340,10 +1349,10 @@ def _execute_structured_lane(
         schema_digest=schema_digest,
         context_digest=context_digest,
         input_bundle_digest=input_bundle_digest,
+        budget=effective_budget,
     )
     while True:
         state = state_store.load(change_id)
-        effective_budget = budget or review_budget(owner, pack["control_level"])
         aggregate_before = sum(
             value
             for item in state.get("reviews", [])
@@ -2315,6 +2324,12 @@ def _execute_decision_lane(
         )
         if decision is not None or entry.get("status") == "running":
             return entry, decision
+        if entry.get("status") != "invalid-output":
+            return entry, None
+        if not isinstance(entry.get("output_path"), str):
+            raise IntegrityError(
+                "Invalid semantic output is missing its immutable output artifact"
+            )
         output_path = safe_resolve(owner, entry["output_path"], must_exist=True)
         raw_decision = read_json(output_path)
         try:
