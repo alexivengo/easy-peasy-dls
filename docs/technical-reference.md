@@ -106,6 +106,14 @@ dependencies. Его evidence vocabulary не становится gates авт�
 Vapor/Linux routing не включает Apple UI, App Store или Apple release gates;
 Swift architecture/concurrency/testing остаются применимыми по фактическому коду.
 
+Первый локальный Vapor/Linux preflight использовал E03 HEAD `f3c581f` и
+repository-owned `bash scripts/ci.sh`. Trusted validation завершилась за
+`69.051 s`, записала `25 586` bytes output metadata без overflow и exact-HEAD
+evidence. Bounded implementation context составил `143 365` bytes / `17 144`
+words. Draft definition остановил pipeline на `approve-definition`; ReviewPack,
+candidate run и model call не создавались. Эти числа не являются backend token
+baseline и не обосновывают изменение default budgets или model routing.
+
 ## Review integrity
 
 ReviewPack v2 связывает:

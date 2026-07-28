@@ -102,6 +102,14 @@ profile drift инвалидирует candidate/pack, `canonical-ci` созда
 evidence, а E03 preflight честно останавливается на `approve-definition` без
 ReviewPack и model calls. Models и default budgets не меняются.
 
+Локальный backend pilot на E03 HEAD `f3c581f` дал следующие абсолютные данные:
+`canonical-ci` завершился за `69.051 s`, сохранил `25 586` bytes bounded output
+без overflow; implementation context составил `143 365` bytes и `17 144` words
+(`18 856–30 856` грубо оценённых tokens). Создан один exact-HEAD evidence record,
+но `0` ReviewPack, `0` candidate runs и `0` model calls: preflight корректно
+вернул `approve-definition`. Поэтому это profile/runtime доказательство, а не
+backend review-usage baseline для настройки budgets или моделей.
+
 ## Следующая волна v0.7.1: UI/UX platform pilot
 
 - `M38–M39` — проверить Tier 1 precedent и Tier 2/3 versioned design artifact на
