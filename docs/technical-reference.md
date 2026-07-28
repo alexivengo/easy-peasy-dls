@@ -77,6 +77,35 @@ python3 plugins/dls/scripts/dls.py --root /path/to/project doctor
 
 Cache, locks, temporary files и сырые model transcripts не должны попадать в Git. Canonical artifacts и политика их хранения зависят от профиля проекта.
 
+### Platform profile runtime
+
+`default_profile` выбирается только явно. DLS сначала ищет
+`.dls/profiles/<name>.toml`, затем bundled profile. `extends` разрешается
+рекурсивно до восьми уровней: списки объединяются parent-first с
+дедупликацией, scalar-поля ребёнка переопределяют родителя. Cycle, filename/name
+mismatch, traversal, symlink, oversized input и неизвестные поля являются
+integrity/config failure.
+
+Контракт `dls-platform-profile/v1` поддерживает только discovery hints,
+common/platform evidence types, domain capabilities и advisory domain skills.
+`process_owner` всегда `dls`; профиль не может задавать argv, shell, approvals,
+gates, models или budgets. Resolved projection ограничена по размеру и получает
+детерминированный digest.
+
+Digest входит в candidate contract. Profile drift на том же HEAD создаёт новый
+candidate run, повторяет trusted validation и делает старый ReviewPack
+неподготовленным. Новый ReviewPack v2 хранит только compact
+`platform_profile {contract,name,digest}`; context manifest содержит bounded
+resolved projection, а `doctor` и `review-metrics` — безопасную provenance без
+абсолютных profile paths. Legacy artifacts без marker остаются читаемыми.
+
+Bundled `server-backend` наследует `generic` и покрывает API/compatibility,
+persistence/migrations/rollback, background work/retries/idempotency,
+concurrency/reliability, containers/deployment, observability, privacy и external
+dependencies. Его evidence vocabulary не становится gates автоматически.
+Vapor/Linux routing не включает Apple UI, App Store или Apple release gates;
+Swift architecture/concurrency/testing остаются применимыми по фактическому коду.
+
 ## Review integrity
 
 ReviewPack v2 связывает:
@@ -497,9 +526,11 @@ python3 scripts/validate_public_repo.py
   marker читаются исторически.
 - Generic profile предназначен для разных стеков.
 - Apple profile — первый углублённо проверенный platform adapter.
+- Server-backend profile — второй runtime adapter, проверенный локальным
+  Vapor/Linux preflight без live model review.
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.6.1`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.7.0`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

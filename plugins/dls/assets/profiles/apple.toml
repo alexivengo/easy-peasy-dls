@@ -10,6 +10,13 @@ hints = [
 ]
 
 [routing]
+domain_capabilities = [
+  "apple-architecture",
+  "swift-concurrency",
+  "swift-testing",
+  "native-user-interface",
+  "accessibility"
+]
 domain_skills = [
   "swift-architecture-skill",
   "swift-concurrency",

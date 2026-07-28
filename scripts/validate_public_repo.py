@@ -211,6 +211,31 @@ def validate_skills() -> None:
             fail(f"{skill_name}: отсутствует description")
 
 
+def validate_platform_profiles() -> None:
+    sys.path.insert(0, str(PLUGIN / "scripts"))
+    try:
+        from dls_core.repo import PROFILE_CONTRACT, resolve_profile
+
+        names = {path.stem for path in (PLUGIN / "assets" / "profiles").glob("*.toml")}
+        if names != {"generic", "apple", "server-backend"}:
+            fail("Публичный profile set должен содержать generic, apple и server-backend")
+        for name in sorted(names):
+            profile = resolve_profile(ROOT, config={"default_profile": name})
+            if profile.get("contract") != PROFILE_CONTRACT:
+                fail(f"Profile {name} использует неизвестный runtime contract")
+        backend = resolve_profile(ROOT, config={"default_profile": "server-backend"})
+        projection = json.dumps(backend, ensure_ascii=False).lower()
+        if "backend-architecture" not in projection or "rollback-drill" not in projection:
+            fail("server-backend profile не содержит обязательную backend vocabulary")
+        if "app-store" in projection or "swiftui" in projection:
+            fail("server-backend profile содержит Apple-only routing")
+    finally:
+        try:
+            sys.path.remove(str(PLUGIN / "scripts"))
+        except ValueError:
+            pass
+
+
 def validate_capability_catalog() -> None:
     catalog = ROOT / "docs" / "capability-catalog.md"
     text = catalog.read_text(encoding="utf-8")
@@ -262,6 +287,7 @@ def main() -> int:
         validate_json_files,
         validate_model_output_schemas,
         validate_skills,
+        validate_platform_profiles,
         validate_capability_catalog,
         validate_public_surface,
     )

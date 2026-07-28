@@ -35,6 +35,7 @@ from .io import (
 )
 from .repo import (
     PLUGIN_ROOT,
+    PROFILE_CONTRACT,
     PROFILES_ROOT,
     SCHEMAS_ROOT,
     TEMPLATES_ROOT,
@@ -49,6 +50,7 @@ from .repo import (
     git_source_snapshot_digest,
     is_git_repo,
     load_config,
+    resolve_profile,
     render_template,
     run_git,
 )
@@ -1388,7 +1390,9 @@ def build_context(
         raise UsageError(f"Invalid context phase: {phase}")
     state = StateStore(root).load(change_id)
     current_head = git_head(root)
-    profile = load_config(root)["default_profile"]
+    config = load_config(root)
+    platform_profile = resolve_profile(root, config=config)
+    profile = platform_profile["name"]
     selected: dict[str, str] = {}
     required_paths: set[str] = set()
     for key, metadata in state["artifacts"].items():
@@ -1473,6 +1477,7 @@ def build_context(
             "schema_version": SCHEMA_VERSION,
             "dls_version": VERSION,
             "profile": profile,
+            "platform_profile": platform_profile,
             "change_id": change_id,
             "phase": phase,
             "state_revision": state["state_revision"],
@@ -1488,6 +1493,7 @@ def build_context(
         "schema_version": SCHEMA_VERSION,
         "dls_version": VERSION,
         "profile": profile,
+        "platform_profile": platform_profile,
         "change_id": change_id,
         "phase": phase,
         "generated_at": utc_now(),
@@ -1573,6 +1579,7 @@ def _review_context_v2(
         "head_sha": pack["head_sha"],
         "pack_digest": pack["pack_digest"],
         "definition_digest": pack["definition_digest"],
+        "platform_profile": legacy.get("platform_profile"),
         "tickets": pack["tickets"],
         "required_prior_findings": pack.get("required_prior_findings", []),
         "finding_dispositions": pack.get("finding_dispositions", []),
@@ -1649,6 +1656,7 @@ def _review_context_v2(
         "contract": REVIEW_CONTEXT_CONTRACT,
         "dls_version": VERSION,
         "profile": legacy["profile"],
+        "platform_profile": legacy.get("platform_profile"),
         "change_id": change_id,
         "phase": "review",
         "generated_at": utc_now(),
@@ -2475,6 +2483,20 @@ def _validate_review_pack(pack: dict[str, Any], change_id: str) -> None:
                 "Unsupported ReviewPack decision repair contract: "
                 f"{decision_repair_contract}"
             )
+        platform_profile = pack.get("platform_profile")
+        if platform_profile is not None:
+            if not isinstance(platform_profile, dict):
+                raise IntegrityError("ReviewPack platform_profile must be an object")
+            if set(platform_profile) != {"contract", "name", "digest"}:
+                raise IntegrityError("ReviewPack platform_profile fields are invalid")
+            if platform_profile.get("contract") != PROFILE_CONTRACT:
+                raise IntegrityError("Unsupported ReviewPack platform profile contract")
+            if not all(
+                isinstance(platform_profile.get(field), str)
+                and bool(platform_profile[field])
+                for field in ("name", "digest")
+            ):
+                raise IntegrityError("ReviewPack platform profile identity is invalid")
         v2_required = {
             "review_mode",
             "epic_base_sha",
@@ -2875,6 +2897,7 @@ def review_pack(
         if _prior_report is not None
         else []
     )
+    platform_profile = resolve_profile(root, config=load_config(root))
     pack = {
         "schema_version": REVIEW_PACK_SCHEMA_VERSION,
         "runner_contract": REVIEW_RUNNER_CONTRACT,
@@ -2884,6 +2907,11 @@ def review_pack(
         "native_output_contract": NATIVE_OUTPUT_CONTRACT,
         "identifier_contract": REVIEW_IDENTIFIER_CONTRACT,
         "decision_repair_contract": REVIEW_DECISION_REPAIR_CONTRACT,
+        "platform_profile": {
+            "contract": platform_profile["contract"],
+            "name": platform_profile["name"],
+            "digest": platform_profile["digest"],
+        },
         "review_id": review_id,
         "change_id": change_id,
         "mode": mode,
@@ -3290,6 +3318,11 @@ def _validate_review_pack_current(
     current_definition = current_definition_digest(root, state)
     if current_definition != pack["definition_digest"]:
         raise IntegrityError("ReviewPack definition digest is stale")
+    pack_profile = pack.get("platform_profile")
+    if isinstance(pack_profile, dict):
+        current_profile = resolve_profile(root, config=load_config(root))
+        if pack_profile.get("digest") != current_profile["digest"]:
+            raise IntegrityError("ReviewPack platform profile is stale")
     current_approval = next(
         (
             item
@@ -5694,10 +5727,13 @@ def doctor(root: Path) -> dict[str, Any]:
     profile_ok = True
     for profile_path in sorted(PROFILES_ROOT.glob("*.toml")):
         try:
-            __import__("tomllib").loads(profile_path.read_text(encoding="utf-8"))
-        except Exception:
+            resolve_profile(
+                root,
+                config={"default_profile": profile_path.stem},
+            )
+        except ConfigError:
             profile_ok = False
-    checks.append(_check("profiles:toml", profile_ok, str(PROFILES_ROOT)))
+    checks.append(_check("profiles:runtime", profile_ok, str(PROFILES_ROOT)))
     active_skills: list[str] = []
     skill_metadata_ok = True
     for skill_path in sorted((PLUGIN_ROOT / "skills").glob("*/SKILL.md")):
@@ -5729,9 +5765,11 @@ def doctor(root: Path) -> dict[str, Any]:
     checks.append(_check("git:repository", is_git_repo(root), str(root)))
     config_path = root / ".dls" / "config.toml"
     config_ok = False
+    platform_profile: dict[str, Any] | None = None
     if config_path.is_file():
         try:
-            load_config(root)
+            config = load_config(root)
+            platform_profile = resolve_profile(root, config=config)
             config_ok = True
         except ConfigError:
             config_ok = False
@@ -5763,6 +5801,18 @@ def doctor(root: Path) -> dict[str, Any]:
         "runtime_manifest_sha256": runtime_digest,
         "runtime_matches_source": runtime_match,
         "active_skills": active_skills,
+        "platform_profile": (
+            {
+                "contract": platform_profile["contract"],
+                "name": platform_profile["name"],
+                "digest": platform_profile["digest"],
+                "source": platform_profile["source"],
+                "inheritance_chain": platform_profile["inheritance_chain"],
+                "domain_capabilities": platform_profile["domain_capabilities"],
+            }
+            if platform_profile is not None
+            else None
+        ),
         "checks": checks,
         "global_conflicts": conflicts,
     }
@@ -5910,6 +5960,7 @@ def _context_manifest_content_digest(manifest: dict[str, Any]) -> str:
             "schema_version": manifest.get("schema_version"),
             "dls_version": manifest.get("dls_version"),
             "profile": manifest.get("profile"),
+            "platform_profile": manifest.get("platform_profile"),
             "change_id": manifest.get("change_id"),
             "phase": manifest.get("phase"),
             "state_revision": manifest.get("state_revision"),

@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
 Срез: 28 июля 2026 года
-Текущая линия: `v0.6.1`
+Текущая линия: `v0.7.0`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -77,9 +77,9 @@
 | M35 | Review не завершается без result path | ✅ | P0 | Успех требует canonical `review_result_path`; actionable result — remediation path |
 | M36 | Findings lifecycle | ✅ | P0 | Implementer ставит addressed/note; verified принадлежит independent review; waiver — человеку |
 | M37 | Latest-only remediation context | ✅ | P0 | Рабочий manifest строится только из последнего canonical ReviewIR |
-| M38 | UI/UX source prerequisite | 🟨 | P0 | Policy и approvals реализованы; нужен реальный UI pilot вне текущего Swift transport проекта |
-| M39 | Tiered UI policy | 🟨 | P0 | Tier 1 допускает precedent, Tier 2/3 требуют versioned artifact; нужен pilot |
-| M40 | Architecture decision до завершения SPEC | 🟨 | P0 | Early architecture decision и scoped approval поддержаны; нужен critical definition pilot |
+| M38 | UI/UX source prerequisite | 🟨 | P0 | Policy и approvals реализованы; реальный UI pilot перенесён в v0.7.1 |
+| M39 | Tiered UI policy | 🟨 | P0 | Tier 1 допускает precedent, Tier 2/3 требуют versioned artifact; реальный pilot перенесён в v0.7.1 |
+| M40 | Architecture decision до завершения SPEC | 🟨 | P0 | Critical E03 adoption и Draft/approval boundary дают backend preflight evidence; нужен полный approved definition/review lifecycle |
 | M41 | ADR только для долговечного решения | ✅ | P0 | ADR остаётся conditional artifact, а не ритуалом для каждого change |
 | M42 | Release/production evidence не подменяет review | ✅ | P0 | External gaps не блокируют code review без прямой ссылки на ticket DoD |
 | M43 | Doctor и runtime/source drift diagnostics | ✅ | P0 | Проверяются plugin provenance, config, schemas, Git и конфликтующие process plugins |
@@ -125,7 +125,7 @@
 | P18 | Compact status и next action | ✅ | P1 | `delivery-status` возвращает один согласованный action; продолжать usability pilots |
 | P19 | Generic composable platform core | ✅ | P0 | Core не содержит iOS-only lifecycle assumptions |
 | P20 | Первый Apple adapter | ✅ | P1 | Bundled Apple profile существует и проверяется глубже generic |
-| P21 | Второй platform adapter | 🧭 | P1 | `v0.7` pilot на web, backend или Android определит реальный contract |
+| P21 | Второй platform adapter | ✅ | P1 | `server-backend` — runtime profile с inheritance, provenance, candidate invalidation и Vapor/Linux preflight |
 | P22 | Полная platform profile suite | 🧊 | P2 | Не проектировать абстрактно до нескольких реальных adapters |
 | P23 | Semantic repository-discovery cache | 🧊 | P2 | Рассматривать только после измерения повторного discovery overhead |
 | P24 | Bulk migration legacy packages | 🧊 | P2 | `adopt` достаточен, пока нет повторяющегося migration volume |
@@ -134,7 +134,7 @@
 | P27 | Evidence/cache retention | ✅ | P1 | Canonical artifacts сохраняются; raw cache использует 14-day/two-review policy |
 | P28 | Conflict inventory и cleanup verification | 🟨 | P1 | Doctor обнаруживает конфликты; destructive cleanup остаётся user-authorized |
 | P29 | Risk-adaptive debugging | ✅ | P0 | `dls-debug` ведёт reproduction → RCA → minimal patch → regression proof |
-| P30 | Conditional domain-skill routing | 🟨 | P1 | Impact-based routing есть в policy; нужна telemetry пользы на разных стеках |
+| P30 | Conditional domain-skill routing | 🟨 | P1 | Backend capabilities и advisory skills передаются без Apple-only routing; нужна telemetry пользы на model reviews нескольких стеков |
 | P31 | Выборочный перенос полезных механизмов | ✅ | P0 | Сохранены focused questions, trade-offs, YAGNI, root-cause-first и verification-before-completion |
 | P32 | Одна команда review-ready | ↪ | P0 | Пользовательский handoff заменён `candidate-ready`; `review-ready` остаётся low-level primitive |
 | P33 | Краткий delivery status | ✅ | P1 | Compact payload показывает current candidate/review, usage completeness и cache size |
@@ -143,7 +143,7 @@
 | P36 | Обнаружение reuse длинных задач | ✅ | P0 | Fresh, continued, reused и unavailable определяются без блокировки delivery |
 | P37 | Controller/context telemetry | ✅ | P0 | Event counts, usage source и context metadata не читают содержимое сообщений |
 | P38 | Короткий handoff между задачами | ✅ | P0 | Передаётся одна пользовательская команда без manifest, SHA и paths |
-| P39 | Измерение targeted-review | 🟨 | P1 | Сбор baseline включён; настройка prompt/model/budget ждёт нескольких platform pilots |
+| P39 | Измерение targeted-review | 🟨 | P1 | Metrics содержат profile provenance; backend preflight намеренно не создаёт model usage, поэтому нужен approved review pilot |
 
 ## Attractive — полезно после стабилизации core
 
@@ -210,12 +210,18 @@
 
 Это порядок проверки гипотез, а не обещание конкретных дат.
 
-### v0.7 — platform pilots и калибровка
+### v0.7.0 — platform profile runtime и backend preflight
 
-- `P21`, `P39`: второй adapter и измерение targeted-review на web/backend/Android;
-- `M38–M40`: UI tiers и early architecture decision на реальных changes;
-- `P02`, `P04`, `P18`, `P30`: routine/standard UX, ticket policy, status и domain routing;
-- `P10`, `P12`: калибровать budgets и только затем тестировать model routing.
+- `P21` закрыт bundled `server-backend` adapter и Vapor/Linux E03 preflight;
+- `M40`, `P30`, `P39` получили дополнительные доказательства, но остаются partial;
+- `P12` остаётся planned: models и default budgets не меняются без
+  сопоставимого backend model-review baseline.
+
+### v0.7.1 — UI/UX и полный architecture lifecycle
+
+- `M38–M39`: UI tiers и immutable design source на реальном change;
+- `M40`: approved critical definition/review lifecycle;
+- `P30`, `P39`: сравнимые Swift/backend/UI routing и usage pilots.
 
 ### Следующая P1-волна — derived product UX
 

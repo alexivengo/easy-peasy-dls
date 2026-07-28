@@ -13,7 +13,7 @@ from typing import Any, Iterable
 
 from .errors import IntegrityError, LockError
 from .io import FileLock, atomic_write_json, read_json, safe_resolve, utc_now
-from .operations import _codex_usage_from_output
+from .operations import _codex_usage_from_output, _validate_review_pack
 from .repo import git_head
 from .state import StateStore
 from .worktrees import resolve_registered_worktree
@@ -613,6 +613,28 @@ def review_metrics(
     owner, owner_selection = _owner_root(root, change_id)
     state = StateStore(owner).load(change_id)
     selected, result_entry = _review_selection(state, review_id)
+    pack_entry = next(
+        (
+            item
+            for item in reversed(state.get("reviews", []))
+            if isinstance(item, dict)
+            and item.get("kind") == "pack"
+            and item.get("review_id") == selected
+            and isinstance(item.get("pack_path"), str)
+        ),
+        None,
+    )
+    platform_profile: dict[str, str] | None = None
+    if pack_entry is not None:
+        pack = read_json(safe_resolve(owner, pack_entry["pack_path"], must_exist=True))
+        _validate_review_pack(pack, change_id)
+        candidate_profile = pack.get("platform_profile")
+        if isinstance(candidate_profile, dict):
+            platform_profile = {
+                "contract": candidate_profile["contract"],
+                "name": candidate_profile["name"],
+                "digest": candidate_profile["digest"],
+            }
     attempts = [
         item
         for item in state.get("reviews", [])
@@ -756,6 +778,7 @@ def review_metrics(
         "owner_selection": owner_selection,
         "review_id": selected,
         "review_completed": result_entry is not None,
+        "platform_profile": platform_profile,
         "usage_status": usage_status,
         "completeness_reasons": sorted(set(completeness_reasons)),
         "child_usage": child_usage,

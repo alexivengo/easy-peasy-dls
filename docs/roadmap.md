@@ -2,7 +2,7 @@
 
 Срез: 28 июля 2026 года
 
-Текущая линия: `v0.6.1`
+Текущая линия: `v0.7.0`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
@@ -88,20 +88,34 @@ Exit criteria v0.6.1: reuse даёт одно advisory-предупрежден�
 покидают ignored cache, native zero остаётся unavailable/reported-zero, а status
 и metrics сохраняют прежние payload limits. Review-алгоритм не меняется.
 
-## Следующая волна v0.7.0: platform pilots и настройка budgets
+## v0.7.0 — рабочие platform profiles и backend pilot
 
-- `P21`, `P39` — второй platform adapter и targeted-review baseline на web,
-  backend или Android;
-- `M38–M40` — реальные UI/UX tiers и early architecture-decision pilot;
-- `P02`, `P04`, `P18`, `P30` — проверить routine/standard UX, ticket policy,
-  compact status и domain-skill routing;
-- `P10`, `P12` — настраивать budgets и model routing только по накопленным
-  абсолютным данным;
-- не публиковать процент экономии до сопоставимых повторяемых pilots.
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| P21 | Performance / P1 | Второй platform adapter | `server-backend` стал runtime profile с bounded inheritance, digest-bound provenance и Vapor/Linux preflight |
+| M40 | Must-be / P0 | Architecture decision lifecycle | Critical E03 adoption и Draft/approval boundary проверены; полный backend definition/review lifecycle ещё нужен |
+| P30 | Performance / P1 | Conditional domain routing | Backend capabilities и advisory skills попадают в context без Apple UI/App Store routing; польза на model review ещё не измерена |
+| P39 | Performance / P1 | Targeted-review baseline | Profile provenance добавлена в metrics; backend model usage намеренно отсутствует до approval |
+
+Exit criteria v0.7.0: repository profile безопасно перекрывает bundled,
+profile drift инвалидирует candidate/pack, `canonical-ci` создаёт exact-HEAD
+evidence, а E03 preflight честно останавливается на `approve-definition` без
+ReviewPack и model calls. Models и default budgets не меняются.
+
+## Следующая волна v0.7.1: UI/UX platform pilot
+
+- `M38–M39` — проверить Tier 1 precedent и Tier 2/3 versioned design artifact на
+  реальном UI change;
+- `M40` — завершить early architecture decision lifecycle на approved critical
+  change;
+- `P30`, `P39` — сравнить routing/context/usage на разрешённых Swift и backend
+  reviews;
+- `P10`, `P12` — менять budgets или model routing только после сопоставимых
+  абсолютных baseline, без публичного процента экономии по одному pilot.
 
 ## Позже, только по данным
 
-- P21 — второй platform adapter из реального web, backend или Android pilot;
+- P22 — следующий adapter только из реального web или Android pilot;
 - P25 — read-only derived status и traceability views;
 - A01 — Figma, Sketch или другой design connector после UI-пилота и решения
   privacy/versioning;

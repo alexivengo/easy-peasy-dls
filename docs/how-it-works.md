@@ -33,6 +33,18 @@ DLS сначала определяет масштаб и риск:
 - `roadmap` — несколько связанных delivery slices;
 - `critical` — высокий риск для безопасности, данных, concurrency, migration, архитектуры или ключевого пользовательского пути.
 
+Явно выбранный `default_profile` дополняет discovery конкретным словарём платформы.
+Bundled `server-backend` направляет внимание на API compatibility,
+persistence/migrations, retries/idempotency, deployment, observability и privacy;
+`apple` — на затронутые Apple/Swift boundaries. Repository-local профиль может
+переопределить bundled профиль. После bounded inheritance DLS фиксирует digest
+resolved profile в context, candidate contract, ReviewPack и metrics.
+
+Профиль остаётся подсказкой, а не скрытой методологией: он не содержит argv,
+gates, approvals, models или budgets. Domain skills advisory и применяются по
+реальному коду; например Vapor/Linux может использовать Swift architecture,
+concurrency и testing без Apple UI или App Store gates.
+
 Документы создаются не «потому что так положено». Они появляются только когда разделяют ответственность:
 
 - `CHANGE.md` удерживает небольшое изменение целиком;

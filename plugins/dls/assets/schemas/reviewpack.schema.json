@@ -44,6 +44,16 @@
     "native_output_contract": { "const": "dls-native-review/v2" },
     "identifier_contract": { "const": "canonical-ticket-ids/v1" },
     "decision_repair_contract": { "const": "dls-decision-repair/v1" },
+    "platform_profile": {
+      "type": "object",
+      "required": ["contract", "name", "digest"],
+      "properties": {
+        "contract": { "const": "dls-platform-profile/v1" },
+        "name": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
     "review_id": { "type": "string", "minLength": 1 },
     "change_id": { "type": "string", "minLength": 1 },
     "mode": { "enum": ["acceptance-grade", "advisory-dirty"] },

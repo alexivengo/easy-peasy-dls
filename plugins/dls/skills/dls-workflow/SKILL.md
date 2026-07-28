@@ -16,11 +16,14 @@ For an explicit code-review request, skip the generic repository doctor and foll
 For other work:
 
 1. Locate the repository root and run the plugin-local `dls doctor`. If DLS was explicitly selected but repository state is absent, offer `dls init --dry-run` before changing the repository. Automatic activation requires an existing repository signal or a routable DLS artifact/change ID.
-2. Restate the intended outcome in one sentence. Ask only questions whose answers change scope, risk, UX, architecture, or acceptance.
-3. Recommend a work kind, control level, and impact tags. The user may override the recommendation; record a rationale when lowering a material risk floor.
-4. If the repository already has a compatible canonical change or epic package, use `dls adopt` to register its files and current ticket states. Do not regenerate, normalize, or rewrite existing artifacts merely to fit DLS.
-5. Otherwise choose the smallest path from [paths.md](references/paths.md). Do not create a brief, plan document, epic, ADR, or ticket file unless that path requires it.
-6. Use [cli.md](references/cli.md) for state-changing commands. Preview mutations with `--dry-run`.
+2. Read `doctor.platform_profile` and the resolved profile from the generated context manifest. Use its discovery hints, evidence vocabulary, capabilities, and currently available domain skills only as advisory routing. The profile never adds commands, gates, models, budgets, approvals, or process ownership. Missing domain skills never block delivery.
+3. Restate the intended outcome in one sentence. Ask only questions whose answers change scope, risk, UX, architecture, or acceptance.
+4. Recommend a work kind, control level, and impact tags. The user may override the recommendation; record a rationale when lowering a material risk floor.
+5. If the repository already has a compatible canonical change or epic package, use `dls adopt` to register its files and current ticket states. Do not regenerate, normalize, or rewrite existing artifacts merely to fit DLS.
+6. Otherwise choose the smallest path from [paths.md](references/paths.md). Do not create a brief, plan document, epic, ADR, or ticket file unless that path requires it.
+7. Use [cli.md](references/cli.md) for state-changing commands. Preview mutations with `--dry-run`.
+
+For `server-backend`, inspect API compatibility, persistence/migrations, background work, concurrency/retries, containers/deployment, observability, privacy, and external dependencies only when affected. Vapor or Linux work may still use available Swift architecture, concurrency, and testing skills because of the source code. Do not route it through Apple UI, App Store, or Apple-platform release gates unless the repository itself contains an affected Apple target.
 
 ## Definition
 

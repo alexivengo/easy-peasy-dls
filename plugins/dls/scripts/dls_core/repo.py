@@ -19,6 +19,27 @@ TEMPLATES_ROOT = ASSETS_ROOT / "templates"
 SCHEMAS_ROOT = ASSETS_ROOT / "schemas"
 PROFILES_ROOT = ASSETS_ROOT / "profiles"
 PLACEHOLDER_PATTERN = re.compile(r"\{\{[A-Z0-9_]+\}\}")
+PROFILE_CONTRACT = "dls-platform-profile/v1"
+PROFILE_NAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+PROFILE_VALUE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
+PROFILE_TYPE_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+PROFILE_MAX_BYTES = 64 * 1024
+PROFILE_MAX_DEPTH = 8
+PROFILE_MAX_LIST_ITEMS = 64
+PROFILE_MAX_TEXT_BYTES = 512
+PROFILE_MAX_PROJECTION_BYTES = 16 * 1024
+
+_PROFILE_TOP_LEVEL_KEYS = {"schema_version", "name", "extends", "discovery", "evidence", "routing"}
+_PROFILE_SECTION_KEYS = {
+    "discovery": {"hints"},
+    "evidence": {"common_types", "platform_types"},
+    "routing": {
+        "domain_capabilities",
+        "domain_skills",
+        "domain_skills_are_advisory",
+        "process_owner",
+    },
+}
 
 
 def find_repo_root(start: Path) -> Path:
@@ -48,12 +69,8 @@ def load_config(root: Path) -> dict[str, Any]:
         raise ConfigError("config.docs_root must be a non-empty relative path")
     safe_resolve(root, docs_root)
     profile = config.get("default_profile")
-    if not isinstance(profile, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", profile):
+    if not isinstance(profile, str) or not PROFILE_NAME_PATTERN.fullmatch(profile):
         raise ConfigError("config.default_profile must be a safe profile name")
-    repository_profile = root / ".dls" / "profiles" / f"{profile}.toml"
-    bundled_profile = PROFILES_ROOT / f"{profile}.toml"
-    if not repository_profile.is_file() and not bundled_profile.is_file():
-        raise ConfigError(f"Unknown DLS profile: {profile}")
     policy = config.get("policy", {})
     if not isinstance(policy, dict):
         raise ConfigError("config.policy must be a table")
@@ -72,7 +89,225 @@ def load_config(root: Path) -> dict[str, Any]:
             raise ConfigError(
                 f"policy.{key} references unknown commands: {', '.join(unknown)}"
             )
+    resolve_profile(root, config=config)
     return config
+
+
+def _profile_source(root: Path, name: str) -> tuple[Path, str]:
+    if not PROFILE_NAME_PATTERN.fullmatch(name):
+        raise ConfigError(f"Invalid DLS profile name: {name!r}")
+    relative = Path(".dls") / "profiles" / f"{name}.toml"
+    repository_candidate = root.resolve() / relative
+    if repository_candidate.is_symlink():
+        raise ConfigError(f"DLS profile must not be a symlink: {name}")
+    repository_profile = safe_resolve(root, relative)
+    if repository_profile.is_file():
+        return repository_profile, "repository"
+    bundled_profile = PROFILES_ROOT / f"{name}.toml"
+    if bundled_profile.is_file():
+        return bundled_profile, "bundled"
+    raise ConfigError(f"Unknown DLS profile: {name}")
+
+
+def _profile_string_list(
+    value: object,
+    *,
+    location: str,
+    pattern: re.Pattern[str] | None = None,
+) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > PROFILE_MAX_LIST_ITEMS:
+        raise ConfigError(
+            f"{location} must be an array with at most {PROFILE_MAX_LIST_ITEMS} items"
+        )
+    output: list[str] = []
+    for item in value:
+        if (
+            not isinstance(item, str)
+            or not item
+            or len(item.encode("utf-8")) > PROFILE_MAX_TEXT_BYTES
+            or (pattern is not None and not pattern.fullmatch(item))
+        ):
+            raise ConfigError(f"{location} contains an invalid string")
+        if item not in output:
+            output.append(item)
+    return output
+
+
+def _read_profile(root: Path, name: str) -> tuple[dict[str, Any], str]:
+    path, source = _profile_source(root, name)
+    if path.is_symlink():
+        raise ConfigError(f"DLS profile must not be a symlink: {name}")
+    if path.stat().st_size > PROFILE_MAX_BYTES:
+        raise ConfigError(f"DLS profile exceeds {PROFILE_MAX_BYTES} bytes: {name}")
+    try:
+        payload = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigError(f"Invalid DLS profile {name}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ConfigError(f"DLS profile must be a TOML table: {name}")
+    unknown_top = sorted(set(payload) - _PROFILE_TOP_LEVEL_KEYS)
+    if unknown_top:
+        raise ConfigError(
+            f"DLS profile {name} has unknown fields: {', '.join(unknown_top)}"
+        )
+    if payload.get("schema_version") != 1:
+        raise ConfigError(f"Unsupported DLS profile schema: {payload.get('schema_version')!r}")
+    if payload.get("name") != name:
+        raise ConfigError(f"DLS profile name must match its filename: {name}")
+    parent = payload.get("extends")
+    if parent is not None and (
+        not isinstance(parent, str) or not PROFILE_NAME_PATTERN.fullmatch(parent)
+    ):
+        raise ConfigError(f"DLS profile {name}.extends must be a safe profile name")
+
+    for section_name, allowed_keys in _PROFILE_SECTION_KEYS.items():
+        section = payload.get(section_name, {})
+        if not isinstance(section, dict):
+            raise ConfigError(f"DLS profile {name}.{section_name} must be a table")
+        unknown = sorted(set(section) - allowed_keys)
+        if unknown:
+            raise ConfigError(
+                f"DLS profile {name}.{section_name} has unknown fields: "
+                + ", ".join(unknown)
+            )
+
+    discovery = payload.get("discovery", {})
+    evidence = payload.get("evidence", {})
+    routing = payload.get("routing", {})
+    advisory = routing.get("domain_skills_are_advisory")
+    if advisory is not None and advisory is not True:
+        raise ConfigError("DLS profile domain skills must remain advisory")
+    process_owner = routing.get("process_owner")
+    if process_owner is not None and process_owner != "dls":
+        raise ConfigError("DLS profile process_owner must be dls")
+    normalized = {
+        "name": name,
+        "extends": parent,
+        "discovery_hints": _profile_string_list(
+            discovery.get("hints"),
+            location=f"profile.{name}.discovery.hints",
+        ),
+        "common_evidence_types": _profile_string_list(
+            evidence.get("common_types"),
+            location=f"profile.{name}.evidence.common_types",
+            pattern=PROFILE_TYPE_PATTERN,
+        ),
+        "platform_evidence_types": _profile_string_list(
+            evidence.get("platform_types"),
+            location=f"profile.{name}.evidence.platform_types",
+            pattern=PROFILE_TYPE_PATTERN,
+        ),
+        "domain_capabilities": _profile_string_list(
+            routing.get("domain_capabilities"),
+            location=f"profile.{name}.routing.domain_capabilities",
+            pattern=PROFILE_TYPE_PATTERN,
+        ),
+        "domain_skills": _profile_string_list(
+            routing.get("domain_skills"),
+            location=f"profile.{name}.routing.domain_skills",
+            pattern=PROFILE_VALUE_PATTERN,
+        ),
+        "domain_skills_are_advisory": advisory,
+        "process_owner": process_owner,
+    }
+    return normalized, source
+
+
+def _extend_unique(target: list[str], values: list[str]) -> None:
+    for value in values:
+        if value not in target:
+            target.append(value)
+
+
+def resolve_profile(
+    root: Path,
+    *,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve one bounded repository-selected platform profile."""
+
+    effective_config = config
+    if effective_config is None:
+        path = root / ".dls" / "config.toml"
+        if not path.is_file():
+            raise ConfigError(f"DLS is not initialized: {path}")
+        try:
+            effective_config = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+            raise ConfigError(f"Invalid DLS config {path}: {exc}") from exc
+    selected = effective_config.get("default_profile")
+    if not isinstance(selected, str) or not PROFILE_NAME_PATTERN.fullmatch(selected):
+        raise ConfigError("config.default_profile must be a safe profile name")
+
+    chain: list[tuple[dict[str, Any], str]] = []
+    seen: set[str] = set()
+    current: str | None = selected
+    while current is not None:
+        if current in seen:
+            raise ConfigError(f"DLS profile inheritance cycle includes: {current}")
+        if len(chain) >= PROFILE_MAX_DEPTH:
+            raise ConfigError(
+                f"DLS profile inheritance exceeds depth {PROFILE_MAX_DEPTH}"
+            )
+        seen.add(current)
+        document, source = _read_profile(root, current)
+        chain.append((document, source))
+        current = document["extends"]
+
+    merged = {
+        "discovery_hints": [],
+        "common_evidence_types": [],
+        "platform_evidence_types": [],
+        "domain_capabilities": [],
+        "domain_skills": [],
+        "domain_skills_are_advisory": True,
+        "process_owner": "dls",
+    }
+    for document, _ in reversed(chain):
+        for key in (
+            "discovery_hints",
+            "common_evidence_types",
+            "platform_evidence_types",
+            "domain_capabilities",
+            "domain_skills",
+        ):
+            _extend_unique(merged[key], document[key])
+        if document["domain_skills_are_advisory"] is not None:
+            merged["domain_skills_are_advisory"] = document[
+                "domain_skills_are_advisory"
+            ]
+        if document["process_owner"] is not None:
+            merged["process_owner"] = document["process_owner"]
+    if merged["domain_skills_are_advisory"] is not True:
+        raise ConfigError("Resolved DLS profile domain skills must remain advisory")
+    if merged["process_owner"] != "dls":
+        raise ConfigError("Resolved DLS profile process_owner must be dls")
+
+    resolved = {
+        "contract": PROFILE_CONTRACT,
+        "name": selected,
+        "source": chain[0][1],
+        "inheritance_chain": [document["name"] for document, _ in reversed(chain)],
+        **merged,
+    }
+    digest_basis = {
+        key: value
+        for key, value in resolved.items()
+        if key not in {"source", "inheritance_chain"}
+    }
+    encoded = json.dumps(
+        digest_basis,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(encoded) > PROFILE_MAX_PROJECTION_BYTES:
+        raise ConfigError(
+            f"Resolved DLS profile exceeds {PROFILE_MAX_PROJECTION_BYTES} bytes"
+        )
+    return {**resolved, "digest": sha256_bytes(encoded)}
 
 
 def render_template(name: str, values: dict[str, str]) -> str:

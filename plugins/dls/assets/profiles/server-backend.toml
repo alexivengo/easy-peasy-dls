@@ -1,0 +1,34 @@
+schema_version = 1
+name = "server-backend"
+extends = "generic"
+
+[discovery]
+hints = [
+  "Inspect runtime manifests, API contracts, CI, container, deployment, and operational configuration.",
+  "Map public and internal API compatibility, authentication, proxy, and trust boundaries only when affected.",
+  "Inspect persistence ownership, migrations, transactions, rollback, retention, and data-loss boundaries only when affected.",
+  "Map background work, retries, idempotency, concurrency, timeouts, and failure recovery only when affected.",
+  "Keep observability, privacy, external dependencies, release, and production gates distinct from local code review."
+]
+
+[routing]
+domain_capabilities = [
+  "backend-architecture",
+  "api-contracts",
+  "persistence-migrations",
+  "reliability-operations",
+  "security-privacy",
+  "deployment-runtime"
+]
+process_owner = "dls"
+
+[evidence]
+platform_types = [
+  "api-contract-test",
+  "database-migration-test",
+  "fault-injection",
+  "load-soak",
+  "container-image",
+  "deployment-smoke",
+  "rollback-drill"
+]

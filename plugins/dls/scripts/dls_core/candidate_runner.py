@@ -32,6 +32,7 @@ from .repo import (
     git_source_snapshot_digest,
     is_git_repo,
     load_config,
+    resolve_profile,
     run_git,
 )
 from .state import StateStore, current_definition_digest, derived_approval_statuses
@@ -228,6 +229,7 @@ def _eligible_declaration_run(
     prior_review_result_digest: str,
     manifest_digest: str,
     policy_digest: str,
+    profile_digest: str,
     active_finding_ids: list[str],
 ) -> dict[str, Any] | None:
     eligible: list[tuple[int, int, dict[str, Any]]] = []
@@ -246,6 +248,7 @@ def _eligible_declaration_run(
             or item.get("remediation_manifest_digest") != manifest_digest
             or item.get("definition_digest") != definition_digest
             or item.get("policy_digest") != policy_digest
+            or item.get("platform_profile_digest") != profile_digest
             or item.get("active_finding_ids") != active_finding_ids
             or not isinstance(run_head, str)
             or not isinstance(statuses, dict)
@@ -296,6 +299,19 @@ def _exact_head_pack(
         raise IntegrityError("Completed candidate run is missing ReviewPack path")
     pack = read_json(safe_resolve(root, relative, must_exist=True))
     _validate_review_pack(pack, state["change_id"])
+    current_profile = resolve_profile(root, config=load_config(root))
+    recorded_profile_digest = run.get("platform_profile_digest")
+    pack_profile = pack.get("platform_profile")
+    if (
+        isinstance(recorded_profile_digest, str)
+        and recorded_profile_digest != current_profile["digest"]
+    ):
+        return None
+    if (
+        isinstance(pack_profile, dict)
+        and pack_profile.get("digest") != current_profile["digest"]
+    ):
+        return None
     if (
         pack.get("head_sha") != current_head
         or pack.get("review_id") != run.get("review_id")
@@ -392,6 +408,7 @@ def _run_contract(
     prior_review_id: str | None,
     manifest_digest: str | None,
     policy_digest: str,
+    profile_digest: str,
     statuses: dict[str, str],
 ) -> tuple[str, str]:
     value = {
@@ -403,6 +420,7 @@ def _run_contract(
         "prior_review_id": prior_review_id,
         "manifest_digest": manifest_digest,
         "policy_digest": policy_digest,
+        "profile_digest": profile_digest,
         "finding_dispositions": statuses,
     }
     digest = sha256_bytes(
@@ -639,6 +657,15 @@ def _candidate_ready_impl(
             detail="policy.review_required_commands must list trusted command IDs",
             dry_run=dry_run,
         )
+    platform_profile = resolve_profile(owner, config=load_config(owner))
+    profile_digest = platform_profile["digest"]
+    profile_drifted = any(
+        isinstance(item, dict)
+        and item.get("head_sha") == head_sha
+        and isinstance(item.get("platform_profile_digest"), str)
+        and item.get("platform_profile_digest") != profile_digest
+        for item in state.get("candidate_runs", [])
+    )
     prior_review, prior_report = _prior_review_link(owner, state)
     review_mode = "remediation" if prior_review is not None else "full"
     effective_base = base_ref
@@ -700,6 +727,7 @@ def _candidate_ready_impl(
             prior_review_result_digest=prior_review["result_digest"],
             manifest_digest=manifest_digest,
             policy_digest=policy_digest,
+            profile_digest=profile_digest,
             active_finding_ids=active_finding_ids,
         )
         if set(overrides) == set(active_finding_ids):
@@ -741,6 +769,7 @@ def _candidate_ready_impl(
         prior_review_id=prior_review.get("review_id") if prior_review else None,
         manifest_digest=manifest_digest,
         policy_digest=policy_digest,
+        profile_digest=profile_digest,
         statuses=statuses,
     )
     effective_operation_id = operation_id or f"candidate-ready:{run_id}"
@@ -836,6 +865,9 @@ def _candidate_ready_impl(
             ),
             "remediation_manifest_digest": manifest_digest,
             "policy_digest": policy_digest,
+            "platform_profile_contract": platform_profile["contract"],
+            "platform_profile_name": platform_profile["name"],
+            "platform_profile_digest": profile_digest,
             "active_finding_ids": active_finding_ids,
             "declaration_digest": declaration_digest,
             "declaration_source": declaration_source,
@@ -902,14 +934,16 @@ def _candidate_ready_impl(
     for command_id in commands:
         state = store.load(change_id)
         contract = command_contract_digest(owner, command_id)
-        reusable = _successful_evidence(
-            owner,
-            state,
-            command_id=command_id,
-            head_sha=head_sha,
-            source_digest=source_digest,
-            contract_digest=contract,
-        )
+        reusable = None
+        if not profile_drifted:
+            reusable = _successful_evidence(
+                owner,
+                state,
+                command_id=command_id,
+                head_sha=head_sha,
+                source_digest=source_digest,
+                contract_digest=contract,
+            )
         if reusable is not None:
             evidence_paths.append(reusable[0])
             _, claimed_run, _ = store.update_candidate_run(
@@ -1060,11 +1094,16 @@ def _candidate_ready_impl(
         )
     state = store.load(change_id)
     _, current_policy_digest = _policy_commands(owner, extra_commands)
+    current_profile_digest = resolve_profile(
+        owner,
+        config=load_config(owner),
+    )["digest"]
     if (
         git_head(owner) != head_sha
         or git_source_snapshot_digest(owner) != source_digest
         or current_definition_digest(owner, state) != definition_digest
         or current_policy_digest != policy_digest
+        or current_profile_digest != profile_digest
     ):
         store.update_candidate_run(
             change_id,

@@ -189,7 +189,11 @@ review запускается в отдельной задаче только д
 ## Границы Public Preview
 
 - DLS пока ориентирован на Codex.
-- Generic profile подходит для разных стеков; Apple profile проверен глубже остальных.
+- Platform profiles теперь участвуют в runtime: `generic`, `apple` и
+  `server-backend` дают discovery/evidence vocabulary и advisory domain routing,
+  но не могут добавлять команды, gates, approvals, модели или budgets.
+- `server-backend` проверен локальным Vapor/Linux pilot; полноценный backend
+  model-review baseline и UI-пилоты ещё впереди.
 - Для работы с существующим проектом нужен Git.
 - DLS не заменяет CI, продуктовую аналитику, security assessment или release-процесс.
 - Установка в общий OpenAI Plugins Directory пока не выполнялась.
