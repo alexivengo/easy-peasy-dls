@@ -41,7 +41,7 @@ python3 plugins/dls/scripts/dls.py --root /path/to/project doctor
 | `doctor` | Проверить готовность плагина и репозитория |
 | `new` | Создать минимальный change package |
 | `adopt` | Зарегистрировать совместимый существующий пакет без переписывания |
-| `worktree create/register/...` | Создать selective linked worktree и явно связать change ID с owner checkout |
+| `worktree create/prepare/register/...` | Создать selective linked worktree и атомарно передать approved change его owner checkout |
 | `dependency set/list/remove` | Управлять stage-aware same-repository dependencies |
 | `delivery-map` | Прочитать bounded карту активных changes, dependencies и overlap |
 | `status` | Показать производное состояние изменения |
@@ -160,6 +160,31 @@ typed action. `continue-definition`, dependency/approval/rebase boundary или
 `codex/<change-id>-<purpose>`. Matching worktree распознаётся идемпотентно;
 collision отклоняется. Инициализация DLS, `new`/`adopt`, регистрация, rebase,
 merge и удаление не являются скрытыми side effects этой команды.
+
+`worktree prepare` — обязательный implementation handoff для параллельного
+standard/critical change. Approval разрешён только после Git-коммита всех
+authored definition artifacts. Команда одним fail-closed шагом создаёт worktree,
+переносит state, current approval, dependencies и immutable DLS references,
+сверяет definition digest и только затем записывает canonical owner в registry.
+Registry имеет приоритет над переносимой копией state в старом checkout. При
+ошибке новый worktree откатывается; существующий локальный state никогда не
+перезаписывается. Fallback через `init`/`adopt` или продолжение в исходном
+checkout запрещены.
+
+Definition digest `dls-definition-digest/v2` включает только authored scope,
+behavior, requirements, architecture и acceptance criteria плюс dependency
+contract. Changelog, validation evidence, findings и generated regions имеют
+роль `execution` и не инвалидируют approval. Legacy approval проецируется на
+v2 только когда записанный Git SHA воспроизводит исходный пакет и текущие
+authored inputs; потерянное dirty-состояние не восстанавливается догадкой.
+
+RCA v0.9.3: прежний workflow мог записать approval на незакоммиченные документы,
+создать новый worktree без переноса approval/dependencies, а затем считать
+changelog evidence изменением definition. Неоднозначный `run-candidate-ready`
+подталкивал модель продолжать в неверном checkout. Новый контракт возвращает
+раздельные `prepare-owner-worktree`, `continue-implementation`,
+`run-candidate-ready` и `approve-definition` и применяет те же guards в status,
+context и candidate runtime.
 
 Overlap contract `dls-change-overlap/v1` сравнивает repository-relative product
 paths между recorded worktree base и current HEAD. Общий каталог — advisory

@@ -144,6 +144,12 @@ semantic passes, соберёт ReviewIR и импортирует его. Пе�
 subagents или вручную собирать provenance не нужно. Human approval DLS всё равно
 не запишет без вашего прямого подтверждения.
 
+Для параллельного standard/critical change DLS сначала требует закоммитировать
+authored definition, а затем одним атомарным handoff создаёт owner worktree и
+переносит туда approval, dependencies и state. Повторно инициализировать change
+или копировать документы не нужно. Changelog и validation evidence не считаются
+изменением спецификации и не вызывают ложный запрос нового approval.
+
 Если встроенный `codex exec review` завершился успешно, но вместо обещанного
 structured JSON вернул обычный итоговый текст, DLS не объявляет такой ответ
 чистым review. Для standard/critical change runner сверяет его с неизменяемым

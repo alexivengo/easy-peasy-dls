@@ -553,6 +553,8 @@ env_allow = []
         base_sha = initialize_git(root)
         initialize(root)
         create_change(root, control="standard")
+        git(root, "add", ".dls", "docs")
+        git(root, "commit", "-m", "approved definition")
         approve(
             root,
             change_id="C001",
@@ -565,8 +567,6 @@ env_allow = []
             conditions=None,
             operation_id="definition",
         )
-        git(root, "add", ".dls", "docs")
-        git(root, "commit", "-m", "review candidate")
         head_sha = git(root, "rev-parse", "HEAD")
         evidence_add(
             root,
@@ -2132,6 +2132,8 @@ env_allow = []
                 ],
                 tickets=True,
             )
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "critical definition")
             approve(
                 root,
                 change_id="C001",
@@ -2162,8 +2164,6 @@ env_allow = []
                 note=None,
                 operation_id="ticket-implemented",
             )
-            git(root, "add", ".dls", "docs")
-            git(root, "commit", "-m", "critical candidate")
             head_sha = git(root, "rev-parse", "HEAD")
             evidence_add(
                 root,

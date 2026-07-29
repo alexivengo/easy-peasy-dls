@@ -37,6 +37,8 @@ class ReviewLoopV13Tests(unittest.TestCase):
         base_sha = initialize_git(root)
         initialize(root)
         create_change(root, control="standard")
+        git(root, "add", ".dls", "docs")
+        git(root, "commit", "-m", "candidate one definition")
         approve(
             root,
             change_id="C001",
@@ -49,8 +51,6 @@ class ReviewLoopV13Tests(unittest.TestCase):
             conditions=None,
             operation_id="definition-1",
         )
-        git(root, "add", ".dls", "docs")
-        git(root, "commit", "-m", "candidate one")
         head_sha = git(root, "rev-parse", "HEAD")
         evidence_add(
             root,
@@ -432,6 +432,8 @@ class ReviewLoopV13Tests(unittest.TestCase):
             )
             config_path.write_text(config, encoding="utf-8")
             create_change(root, control="standard")
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "candidate definition")
             approve(
                 root,
                 change_id="C001",
@@ -444,8 +446,6 @@ class ReviewLoopV13Tests(unittest.TestCase):
                 conditions=None,
                 operation_id="definition-1",
             )
-            git(root, "add", ".dls", "docs")
-            git(root, "commit", "-m", "candidate")
             head_sha = git(root, "rev-parse", "HEAD")
             first_test = evidence_add(
                 root,

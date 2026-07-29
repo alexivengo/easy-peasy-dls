@@ -3034,7 +3034,7 @@ def _update_pipeline(
     failure_reason: str | None = None,
     failure_kind: str | None = None,
     task_context: dict[str, Any] | None = None,
-) -> None:
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
     updates: dict[str, Any] = {
         "status": status,
         "stage": stage,
@@ -3051,14 +3051,14 @@ def _update_pipeline(
         updates["completed_at"] = utc_now()
     for lock_attempt in range(21):
         try:
-            StateStore(owner).update_review_pipeline(
+            result = StateStore(owner).update_review_pipeline(
                 change_id,
                 review_id=review_id,
                 operation_id=operation_id,
                 updates=updates,
                 create=create,
             )
-            return
+            return result
         except LockError:
             if lock_attempt == 20:
                 raise
@@ -4063,6 +4063,46 @@ def review_run(
             recommendation="open-fresh-task",
             reuse_reason=task_context.get("reuse_reason"),
         )
+    pipeline_operation_id = (
+        f"{effective_operation_id}:{context_pack['review_id']}"
+    )
+    if not dry_run:
+        _, active_pipeline, claimed_pipeline = _update_pipeline(
+            context_owner,
+            change_id=change_id,
+            review_id=context_pack["review_id"],
+            operation_id=pipeline_operation_id,
+            stage="native",
+            create=True,
+            task_context=task_context,
+        )
+        if (
+            not claimed_pipeline
+            and active_pipeline.get("operation_id") != pipeline_operation_id
+        ):
+            running = review_status(
+                context_owner,
+                change_id=change_id,
+                review_id=context_pack["review_id"],
+            )
+            running.update(
+                {
+                    "dry_run": False,
+                    "operation_id": effective_operation_id,
+                    "review_result_path": None,
+                    "next_action": {
+                        "id": "wait-review",
+                        "detail": "review pipeline is active",
+                    },
+                }
+            )
+            emit(
+                "completed",
+                review_id=context_pack["review_id"],
+                status="running",
+                next_action="wait-review",
+            )
+            return annotate_handoff(running)
     if not dry_run:
         record_review_task_reference(
             context_owner,
@@ -4071,15 +4111,43 @@ def review_run(
             operation_id=effective_operation_id,
             task_context=task_context,
         )
-    started = review_start(
-        root,
-        change_id=change_id,
-        pack_path=pack_path,
-        operation_id=f"{effective_operation_id}:native",
-        dry_run=dry_run,
-        stream_callback=(lambda event: emit(event.pop("event"), **event)) if stream_callback else None,
-    )
+    try:
+        started = review_start(
+            root,
+            change_id=change_id,
+            pack_path=pack_path,
+            operation_id=f"{effective_operation_id}:native",
+            dry_run=dry_run,
+            stream_callback=(lambda event: emit(event.pop("event"), **event)) if stream_callback else None,
+        )
+    except Exception as exc:
+        if not dry_run:
+            _update_pipeline(
+                context_owner,
+                change_id=change_id,
+                review_id=context_pack["review_id"],
+                operation_id=pipeline_operation_id,
+                stage="native",
+                status="failed",
+                failure_reason=f"{type(exc).__name__}: {exc}",
+                failure_kind="native-start",
+            )
+        raise
     if not started.get("ok") or started.get("status") in {"running", "failed"}:
+        if not dry_run:
+            _update_pipeline(
+                context_owner,
+                change_id=change_id,
+                review_id=context_pack["review_id"],
+                operation_id=pipeline_operation_id,
+                stage="native",
+                status="failed",
+                failure_reason=(
+                    started.get("next_action", {}).get("detail")
+                    or f"native review returned {started.get('status')}"
+                ),
+                failure_kind="native-start",
+            )
         if isinstance(started.get("review_id"), str) and isinstance(
             started.get("owner_root"), str
         ):

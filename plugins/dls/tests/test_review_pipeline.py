@@ -47,6 +47,8 @@ class ReviewPipelineTests(unittest.TestCase):
         base_sha = initialize_git(root)
         initialize(root)
         create_change(root, control="standard", tickets=tickets)
+        git(root, "add", ".dls", "docs")
+        git(root, "commit", "-m", "approved definition")
         approve(
             root,
             change_id="C001",
@@ -81,8 +83,6 @@ class ReviewPipelineTests(unittest.TestCase):
                 operation_id="ticket-implemented",
             )
             revision += 1
-        git(root, "add", ".dls", "docs")
-        git(root, "commit", "-m", "approved candidate")
         head_sha = git(root, "rev-parse", "HEAD")
         evidence_add(
             root,
@@ -156,6 +156,8 @@ class ReviewPipelineTests(unittest.TestCase):
         git(base, "worktree", "add", "-b", "codex/C001", str(owner))
         initialize(owner)
         create_change(owner, control="standard")
+        git(owner, "add", ".dls", "docs")
+        git(owner, "commit", "-m", "linked worktree definition")
         approve(
             owner,
             change_id="C001",
@@ -168,8 +170,6 @@ class ReviewPipelineTests(unittest.TestCase):
             conditions=None,
             operation_id="definition-linked",
         )
-        git(owner, "add", ".dls", "docs")
-        git(owner, "commit", "-m", "linked worktree candidate")
         head_sha = git(owner, "rev-parse", "HEAD")
         evidence_add(
             owner,

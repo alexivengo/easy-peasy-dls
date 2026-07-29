@@ -36,6 +36,8 @@ class ReviewRecoveryV021Tests(unittest.TestCase):
         base_sha = initialize_git(root)
         initialize(root)
         create_change(root, control="standard")
+        git(root, "add", ".dls", "docs")
+        git(root, "commit", "-m", "candidate one definition")
         approve(
             root,
             change_id="C001",
@@ -48,8 +50,6 @@ class ReviewRecoveryV021Tests(unittest.TestCase):
             conditions=None,
             operation_id="definition-1",
         )
-        git(root, "add", ".dls", "docs")
-        git(root, "commit", "-m", "candidate one")
         head_sha = git(root, "rev-parse", "HEAD")
         evidence_add(
             root,
@@ -158,6 +158,8 @@ class ReviewRecoveryV021Tests(unittest.TestCase):
             initialize_git(root)
             initialize(root)
             create_change(root, control="standard")
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "candidate definition")
             approve(
                 root,
                 change_id="C001",
@@ -170,9 +172,6 @@ class ReviewRecoveryV021Tests(unittest.TestCase):
                 conditions=None,
                 operation_id="definition-1",
             )
-            git(root, "add", ".dls", "docs")
-            git(root, "commit", "-m", "candidate")
-
             result = review_start(
                 root,
                 change_id="C001",

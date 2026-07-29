@@ -17,6 +17,7 @@ from .repo import (
     git_product_tree_digest,
     git_source_dirty_paths,
     package_digest,
+    package_digest_at_revision,
     run_git,
 )
 
@@ -47,6 +48,42 @@ DEPENDENCY_REQUIREMENTS = {
     "accepted",
     "accepted-in-base",
 }
+DEFINITION_DIGEST_CONTRACT = "dls-definition-digest/v2"
+ARTIFACT_ROLES = {"definition", "execution"}
+EXECUTION_ARTIFACT_KEYS = {
+    "changelog",
+    "delivery-receipt",
+    "evidence",
+    "release-evidence",
+    "validation",
+}
+
+
+def artifact_role(name: str, metadata: dict[str, Any]) -> str:
+    explicit = metadata.get("role")
+    if explicit is not None:
+        if explicit not in ARTIFACT_ROLES:
+            raise IntegrityError(f"Invalid artifact role: {name}={explicit!r}")
+        return explicit
+    relative = str(metadata.get("path") or "").lower()
+    normalized_name = name.lower().replace("_", "-")
+    filename = Path(relative).name
+    if (
+        normalized_name in EXECUTION_ARTIFACT_KEYS
+        or "changelog" in normalized_name
+        or filename.startswith("changelog")
+    ):
+        return "execution"
+    return "definition"
+
+
+def definition_artifacts(state: dict[str, Any]) -> dict[str, Any]:
+    """Return authored inputs that a human definition approval governs."""
+    return {
+        name: copy.deepcopy(metadata)
+        for name, metadata in state["artifacts"].items()
+        if artifact_role(name, metadata) == "definition"
+    }
 
 
 def validate_change_id(change_id: str) -> str:
@@ -65,6 +102,10 @@ def initial_state(
     artifacts: dict[str, dict[str, str]],
     operation_id: str,
 ) -> dict[str, Any]:
+    normalized_artifacts = {
+        name: {**copy.deepcopy(metadata), "role": artifact_role(name, metadata)}
+        for name, metadata in artifacts.items()
+    }
     state = {
         "schema_version": 1,
         "state_revision": 1,
@@ -75,7 +116,8 @@ def initial_state(
         "impact_tags": sorted(set(impact_tags)),
         "phase": "definition",
         "lifecycle": "draft",
-        "artifacts": artifacts,
+        "artifacts": normalized_artifacts,
+        "definition_digest_contract": DEFINITION_DIGEST_CONTRACT,
         "approvals": [],
         "tickets": {},
         "reviews": [],
@@ -134,6 +176,17 @@ def validate_state(state: dict[str, Any]) -> None:
     ):
         if not isinstance(state.get(key), expected_type):
             raise IntegrityError(f"state.{key} must be {expected_type.__name__}")
+    definition_contract = state.get("definition_digest_contract")
+    if definition_contract is not None and definition_contract != DEFINITION_DIGEST_CONTRACT:
+        raise IntegrityError(
+            f"Unsupported definition digest contract: {definition_contract!r}"
+        )
+    for name, metadata in state["artifacts"].items():
+        if not isinstance(name, str) or not isinstance(metadata, dict):
+            raise IntegrityError("state.artifacts entries must be metadata objects")
+        if not isinstance(metadata.get("path"), str):
+            raise IntegrityError(f"Artifact path must be a string: {name}")
+        artifact_role(name, metadata)
     if "candidate_runs" in state and not isinstance(state["candidate_runs"], list):
         raise IntegrityError("state.candidate_runs must be list")
     dependencies = state.get("dependencies", [])
@@ -543,6 +596,29 @@ class StateStore:
                 raise IntegrityError(
                     f"Unknown review pipeline: {review_id}/{operation_id}"
                 )
+            if index is None and create:
+                running = next(
+                    (
+                        item
+                        for item in reversed(state["reviews"])
+                        if isinstance(item, dict)
+                        and item.get("kind") == "pipeline"
+                        and item.get("review_id") == review_id
+                        and item.get("status") == "running"
+                    ),
+                    None,
+                )
+                if running is not None:
+                    runner_pid = running.get("runner_pid")
+                    alive = False
+                    if isinstance(runner_pid, int) and runner_pid > 0:
+                        try:
+                            os.kill(runner_pid, 0)
+                            alive = True
+                        except OSError:
+                            alive = False
+                    if alive:
+                        return state, copy.deepcopy(running), False
             updated = copy.deepcopy(state)
             if index is None:
                 record = {
@@ -835,11 +911,11 @@ class StateStore:
             return updated, copy.deepcopy(recorded), True
 
 
-def current_definition_digest(root: Path, state: dict[str, Any]) -> str:
-    artifact_digest = package_digest(root, state["artifacts"])
-    dependencies = state.get("dependencies", [])
+def _definition_digest(
+    artifact_digest: str,
+    dependencies: list[dict[str, Any]],
+) -> str:
     if not dependencies:
-        # Preserve every legacy approval digest byte-for-byte.
         return artifact_digest
     normalized = [
         {
@@ -865,6 +941,59 @@ def current_definition_digest(root: Path, state: dict[str, Any]) -> str:
     )
 
 
+def current_definition_digest(root: Path, state: dict[str, Any]) -> str:
+    artifact_digest = package_digest(root, definition_artifacts(state))
+    dependencies = state.get("dependencies", [])
+    return _definition_digest(artifact_digest, dependencies)
+
+
+def definition_digest_at_revision(
+    root: Path,
+    state: dict[str, Any],
+    revision: str,
+    *,
+    include_execution: bool = False,
+) -> str | None:
+    selected = state["artifacts"] if include_execution else definition_artifacts(state)
+    artifact_digest = package_digest_at_revision(root, selected, revision)
+    if artifact_digest is None:
+        return None
+    return _definition_digest(artifact_digest, state.get("dependencies", []))
+
+
+def _legacy_approval_matches_definition(
+    root: Path,
+    state: dict[str, Any],
+    approval: dict[str, Any],
+    current_digest: str,
+) -> bool:
+    if approval.get("definition_digest_contract") is not None:
+        return False
+    recorded = approval.get("object_digest")
+    if not isinstance(recorded, str):
+        return False
+    legacy_current = _definition_digest(
+        package_digest(root, state["artifacts"]),
+        state.get("dependencies", []),
+    )
+    if recorded == legacy_current:
+        return True
+    git_sha = approval.get("git_sha")
+    if not isinstance(git_sha, str) or not git_sha:
+        return False
+    legacy_at_revision = definition_digest_at_revision(
+        root,
+        state,
+        git_sha,
+        include_execution=True,
+    )
+    authored_at_revision = definition_digest_at_revision(root, state, git_sha)
+    return (
+        legacy_at_revision == recorded
+        and authored_at_revision == current_digest
+    )
+
+
 def derived_approval_statuses(root: Path, state: dict[str, Any]) -> list[dict[str, Any]]:
     definition_digest = current_definition_digest(root, state)
     head = git_head(root)
@@ -883,6 +1012,19 @@ def derived_approval_statuses(root: Path, state: dict[str, Any]) -> list[dict[st
             approvals.append(item)
             continue
         decision = item.get("decision")
+        if (
+            decision in {"definition", "design", "architecture", "exception", "accept"}
+            and item.get("object_digest") != definition_digest
+            and _legacy_approval_matches_definition(
+                root,
+                state,
+                item,
+                definition_digest,
+            )
+        ):
+            item["recorded_object_digest"] = item["object_digest"]
+            item["object_digest"] = definition_digest
+            item["definition_digest_contract"] = "legacy-projected-to-v2"
         if decision in {"definition", "design", "architecture", "exception"} and (
             item.get("object_digest") != definition_digest
         ):

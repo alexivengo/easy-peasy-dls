@@ -45,8 +45,33 @@
     },
     "phase": { "type": "string" },
     "lifecycle": { "type": "string" },
-    "artifacts": { "type": "object" },
-    "approvals": { "type": "array" },
+    "definition_digest_contract": {
+      "const": "dls-definition-digest/v2"
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "role": { "enum": ["definition", "execution"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "approvals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "definition_digest_contract": {
+            "const": "dls-definition-digest/v2"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
     "tickets": { "type": "object" },
     "reviews": { "type": "array" },
     "candidate_runs": { "type": "array" },

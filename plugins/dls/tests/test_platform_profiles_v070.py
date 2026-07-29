@@ -46,6 +46,8 @@ env_allow = []
 """,
             encoding="utf-8",
         )
+        git(root, "add", ".dls", "docs")
+        git(root, "commit", "-m", "candidate definition")
         approve(
             root,
             change_id="C001",
@@ -58,8 +60,6 @@ env_allow = []
             conditions=None,
             operation_id="approve-definition",
         )
-        git(root, "add", ".dls", "docs")
-        git(root, "commit", "-m", "candidate")
         return root, base
 
     def _write_profile(self, root: Path, name: str, body: str) -> None:

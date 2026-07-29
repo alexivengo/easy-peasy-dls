@@ -41,6 +41,7 @@ from .parallel_delivery import delivery_map
 from .worktrees import (
     worktree_create,
     worktree_list,
+    worktree_prepare,
     worktree_register,
     worktree_unregister,
     worktree_verify,
@@ -156,6 +157,18 @@ def build_parser() -> argparse.ArgumentParser:
     worktree_create_parser.add_argument("--path", type=Path)
     worktree_create_parser.add_argument("--branch")
     _dry_run(worktree_create_parser)
+    worktree_prepare_parser = worktree_subparsers.add_parser(
+        "prepare",
+        help="Atomically create, transfer, and register an implementation owner.",
+    )
+    worktree_prepare_parser.add_argument("change_id")
+    worktree_prepare_parser.add_argument("--base", required=True)
+    worktree_prepare_parser.add_argument(
+        "--purpose", default="implementation", choices=("implementation",)
+    )
+    worktree_prepare_parser.add_argument("--path", type=Path)
+    worktree_prepare_parser.add_argument("--branch")
+    _dry_run(worktree_prepare_parser)
     worktree_subparsers.add_parser(
         "list",
         help="List registered worktrees and their current validity.",
@@ -639,6 +652,16 @@ def dispatch(
             branch=args.branch,
             dry_run=args.dry_run,
         )
+    if command == "worktree" and args.worktree_command == "prepare":
+        return worktree_prepare(
+            root,
+            change_id=args.change_id,
+            base_ref=args.base,
+            purpose=args.purpose,
+            owner_path=args.path,
+            branch=args.branch,
+            dry_run=args.dry_run,
+        )
     if command == "worktree" and args.worktree_command == "list":
         return worktree_list(root)
     if command == "worktree" and args.worktree_command == "verify":
@@ -903,11 +926,11 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
                 f"{result['change_id']} -> {result['worktree']['owner_root']}; "
                 f"{'registered' if result['changed'] else 'unchanged'}"
             )
-        if args.worktree_command == "create":
+        if args.worktree_command in {"create", "prepare"}:
             return prefix + (
                 f"{result['change_id']} -> {result['branch']} at {result['owner_root']}; "
                 f"base={result['base_sha'][:8]}; "
-                f"{'created' if result['changed'] else 'unchanged'}"
+                f"{'prepared' if args.worktree_command == 'prepare' else 'created' if result['changed'] else 'unchanged'}"
             )
         if args.worktree_command == "verify":
             return (

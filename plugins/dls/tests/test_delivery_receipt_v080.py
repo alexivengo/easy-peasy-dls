@@ -51,6 +51,8 @@ class DeliveryReceiptV080Tests(unittest.TestCase):
         base_sha = initialize_git(root)
         initialize(root)
         create_change(root, control="standard")
+        git(root, "add", ".dls", "docs")
+        git(root, "commit", "-m", "definition")
         approve(
             root,
             change_id="C001",
@@ -63,8 +65,6 @@ class DeliveryReceiptV080Tests(unittest.TestCase):
             conditions=None,
             operation_id="definition-1",
         )
-        git(root, "add", ".dls", "docs")
-        git(root, "commit", "-m", "approved definition")
         head_sha = git(root, "rev-parse", "HEAD")
         evidence_add(
             root,
@@ -331,6 +331,8 @@ env_allow = []
 """,
                 encoding="utf-8",
             )
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "definition")
             approve(
                 root,
                 change_id="C001",
@@ -343,8 +345,6 @@ env_allow = []
                 conditions=None,
                 operation_id="definition-1",
             )
-            git(root, "add", ".dls", "docs")
-            git(root, "commit", "-m", "candidate")
             prepared = candidate_ready(
                 root,
                 change_id="C001",
@@ -372,6 +372,8 @@ env_allow = []
             initialize_git(root)
             initialize(root)
             create_change(root, control="standard")
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "legacy reviewed head")
             approve(
                 root,
                 change_id="C001",
@@ -384,8 +386,6 @@ env_allow = []
                 conditions=None,
                 operation_id="definition-1",
             )
-            git(root, "add", ".dls", "docs")
-            git(root, "commit", "-m", "legacy reviewed head")
             head_sha = git(root, "rev-parse", "HEAD")
             report = {
                 "schema_version": 1,

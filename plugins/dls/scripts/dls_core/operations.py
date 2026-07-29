@@ -40,6 +40,7 @@ from .repo import (
     SCHEMAS_ROOT,
     TEMPLATES_ROOT,
     allowed_environment,
+    artifact_paths_matching_revision,
     command_config,
     command_contract_digest,
     copy_asset,
@@ -57,15 +58,22 @@ from .repo import (
 )
 from .state import (
     CONTROL_LEVELS,
+    DEFINITION_DIGEST_CONTRACT,
     IMPACT_TAGS,
     WORK_KINDS,
     StateStore,
+    artifact_role,
     current_definition_digest,
+    definition_artifacts,
     derived_approval_statuses,
     initial_state,
     validate_change_id,
 )
-from .worktrees import resolve_change_root, resolve_registered_worktree
+from .worktrees import (
+    owner_preparation_required,
+    resolve_change_root,
+    resolve_registered_worktree,
+)
 
 AFFIRMATIVE_PATTERN = re.compile(
     r"^\s*(yes|y|approve|approved|confirm|confirmed|да|ок|фиксируем|"
@@ -678,6 +686,8 @@ def check(root: Path, *, change_id: str, gate: str) -> dict[str, Any]:
     requirements: set[str] = set()
     ticket_requirement_links: set[str] = set()
     for key, text in artifact_texts.items():
+        if artifact_role(key, state["artifacts"][key]) == "execution":
+            continue
         ids = set(requirement_pattern.findall(text))
         if key == "tickets":
             ticket_requirement_links.update(ids)
@@ -938,6 +948,29 @@ def approve(
     object_digest = current_definition_digest(root, state)
     current_head = git_head(root)
     acceptance_source_digest: str | None = None
+    if (
+        decision in {"definition", "design", "architecture"}
+        and state["control_level"] in {"standard", "critical"}
+    ):
+        if not current_head:
+            raise IntegrityError(
+                "Standard and critical definition approval requires Git"
+            )
+        if git_sha and git_sha != current_head:
+            raise IntegrityError(
+                f"Definition approval SHA is not current HEAD: {git_sha} != {current_head}"
+            )
+        reproducible, dirty_artifacts = artifact_paths_matching_revision(
+            root,
+            definition_artifacts(state),
+            current_head,
+        )
+        if not reproducible:
+            raise IntegrityError(
+                "Definition approval requires committed authored artifacts: "
+                + ", ".join(dirty_artifacts)
+            )
+        git_sha = current_head
     if decision == "accept":
         strict_path = state["control_level"] in {"standard", "critical"}
         if strict_path and not current_head:
@@ -970,6 +1003,8 @@ def approve(
         "prompt": prompt,
         "response": response,
     }
+    if decision in {"definition", "design", "architecture", "accept"}:
+        approval["definition_digest_contract"] = DEFINITION_DIGEST_CONTRACT
     if decision == "accept" and acceptance_source_digest is not None:
         approval["source_digest"] = acceptance_source_digest
     if dry_run:
@@ -1532,6 +1567,21 @@ def build_context(
                     "detail": current_definition_digest(root, state)[:12],
                 },
             }
+        if owner_preparation_required(root, change_id=change_id, state=state):
+            return {
+                "ok": True,
+                "dry_run": dry_run,
+                "changed": False,
+                "change_id": change_id,
+                "phase": phase,
+                "status": "blocked",
+                "manifest": None,
+                "manifest_path": None,
+                "next_action": {
+                    "id": "prepare-owner-worktree",
+                    "detail": "parallel standard/critical change requires an atomic owner handoff",
+                },
+            }
     from .parallel_delivery import change_readiness
 
     readiness_stage = "review" if phase == "review" else "implementation"
@@ -1562,6 +1612,8 @@ def build_context(
     selected: dict[str, str] = {}
     required_paths: set[str] = set()
     for key, metadata in state["artifacts"].items():
+        if artifact_role(key, metadata) == "execution":
+            continue
         selected[metadata["path"]] = f"canonical-{key}"
         required_paths.add(metadata["path"])
     config_path = ".dls/config.toml"
@@ -1869,12 +1921,8 @@ def _review_context_v2(
 
 def _change_owner_root(root: Path, change_id: str) -> tuple[Path, str]:
     candidate = root.resolve()
-    if (
-        (candidate / ".dls" / "config.toml").is_file()
-        and StateStore(candidate).path(change_id).is_file()
-    ):
-        return candidate, "current-checkout"
-    return resolve_registered_worktree(candidate, change_id), "registered-worktree"
+    owner = resolve_change_root(candidate, change_id)
+    return owner, "current-checkout" if owner == candidate else "registered-worktree"
 
 
 def _canonical_remediation_manifest_path(change_id: str, review_id: str) -> str:

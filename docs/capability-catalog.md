@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
 Срез: 29 июля 2026 года
-Текущая линия: `v0.9.2`
+Текущая линия: `v0.9.3`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -49,8 +49,8 @@
 | M07 | Единственный canonical owner каждого факта | ✅ | P0 | Authored requirements, state, approvals и Git/evidence разделены по ответственности |
 | M08 | Adoption существующего пакета | ✅ | P0 | `dls adopt` регистрирует совместимый пакет без semantic rewrite документов |
 | M09 | Детерминированные structural/traceability checks | ✅ | P0 | Gates, links и lifecycle проверяются без model calls |
-| M10 | Scoped human approval | ✅ | P0 | Approval требует конкретного decision и digest |
-| M11 | Digest-bound approval staleness | ✅ | P0 | Authored change инвалидирует approval; generated regions не меняют definition digest |
+| M10 | Scoped human approval | ✅ | P0 | Standard/critical approval требует конкретного decision, committed authored package, digest и exact Git SHA |
+| M11 | Digest-bound approval staleness | ✅ | P0 | Authored change инвалидирует approval; changelog/evidence/findings/generated regions относятся к execution и не меняют definition digest |
 | M12 | Human approval отделён от model verdict | ✅ | P0 | `review-clear`, `accepted`, release и production остаются разными решениями |
 | M13 | Точная lifecycle vocabulary | ✅ | P0 | Implemented, validated, review-clear, accepted, release-ready, released и production-verified не смешиваются |
 | M14 | Atomic state store | ✅ | P0 | Lock, CAS, operation ID, atomic replace и backup покрыты fault-тестами |
@@ -103,7 +103,7 @@
 | M61 | Standalone native workspace provenance | ✅ | P0 | Native review запускается в clean exact-HEAD clone; owner-local `.dls` и попытки без workspace marker не входят в canonical provenance |
 | M62 | Indeterminate native recovery | ✅ | P0 | Transcript-verified prose не объявляется clean, не повторяет native call и обязательно проходит semantic reconciliation |
 | M63 | Stage-aware change dependencies | ✅ | P0 | Dependency блокирует только названную и последующие стадии; `accepted-in-base` проверяет human acceptance и Git ancestry |
-| M64 | Change-scoped one-writer | ✅ | P0 | Один owner и single-flight сохраняются внутри change, независимые worktrees не получают global lock |
+| M64 | Change-scoped one-writer | ✅ | P0 | Atomic handoff переносит approved state до registry switch; один owner/single-flight остаётся внутри change без global lock |
 | M65 | Completed-output budget recovery | ✅ | P0 | Валидный exact-HEAD output внутри bounded ceiling импортируется без повторного model call; hard limits остаются terminal |
 
 ## Performance — экономия времени, контекста и ручной работы
@@ -149,7 +149,7 @@
 | P37 | Controller/context telemetry | ✅ | P0 | Event counts, usage source и context metadata не читают содержимое сообщений |
 | P38 | Короткий handoff между задачами | ✅ | P0 | Передаётся одна пользовательская команда без manifest, SHA и paths |
 | P39 | Измерение targeted-review | 🟨 | P1 | Metrics содержат profile provenance; backend preflight намеренно не создаёт model usage, поэтому нужен approved review pilot |
-| P40 | Selective worktree preparation | ✅ | P1 | Parallel standard/critical owner создаётся от explicit SHA без sibling scan, rebase или autonomous task creation |
+| P40 | Selective worktree preparation | ✅ | P1 | `worktree prepare` создаёт owner от approved exact SHA и переносит governance state без ручного init/adopt, sibling scan или autonomous task |
 | P41 | Overlap/conflict preflight | ✅ | P1 | Exact file overlap блокирует поздний candidate handoff, proximity остаётся advisory |
 | P42 | Active delivery map | ✅ | P1 | Bounded read-only карта показывает dependencies, parallel groups, integration order и один typed action на change |
 | P43 | Input-only final-full | ✅ | P0 | Exact patch/coverage bundle заменяет unrestricted checkout; oversized change получает explicit scope split |

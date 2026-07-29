@@ -16,7 +16,7 @@ from .io import FileLock, atomic_write_json, read_json, safe_resolve, utc_now
 from .operations import _codex_usage_from_output, _validate_review_pack
 from .repo import git_head
 from .state import StateStore, derived_approval_statuses
-from .worktrees import resolve_registered_worktree
+from .worktrees import resolve_change_root
 
 METRICS_CONTRACT = "dls-review-metrics/v1"
 TASK_CONTEXT_CONTRACT = "dls-task-context/v1"
@@ -286,9 +286,8 @@ def review_task_context(
 
 def _owner_root(root: Path, change_id: str) -> tuple[Path, str]:
     candidate = root.resolve()
-    if StateStore(candidate).path(change_id).is_file():
-        return candidate, "current-checkout"
-    return resolve_registered_worktree(candidate, change_id), "registered-worktree"
+    owner = resolve_change_root(candidate, change_id)
+    return owner, "current-checkout" if owner == candidate else "registered-worktree"
 
 
 def _normalize_usage(value: object) -> dict[str, int] | None:

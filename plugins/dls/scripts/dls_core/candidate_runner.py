@@ -36,7 +36,7 @@ from .repo import (
     run_git,
 )
 from .state import StateStore, current_definition_digest, derived_approval_statuses
-from .worktrees import resolve_registered_worktree
+from .worktrees import owner_preparation_required, resolve_change_root
 
 
 CANDIDATE_RUN_CONTRACT = "dls-candidate-run/v2"
@@ -46,12 +46,11 @@ CANDIDATE_FAILURE_EXCERPT_LIMIT = 4 * 1024
 
 def _owner_root(root: Path, change_id: str) -> tuple[Path, str]:
     candidate = root.resolve()
-    if (
-        (candidate / ".dls" / "config.toml").is_file()
-        and StateStore(candidate).path(change_id).is_file()
-    ):
-        return candidate, "current-checkout"
-    return resolve_registered_worktree(candidate, change_id), "registered-worktree"
+    owner = resolve_change_root(candidate, change_id)
+    return (
+        owner,
+        "current-checkout" if owner == candidate else "registered-worktree",
+    )
 
 
 def _next_action(identifier: str, detail: str) -> dict[str, str]:
@@ -160,6 +159,57 @@ def _current_definition_approval(root: Path, state: dict[str, Any]) -> dict[str,
         ),
         None,
     )
+
+
+def _idle_candidate_action(
+    owner: Path,
+    *,
+    change_id: str,
+    state: dict[str, Any],
+    delivery_readiness: dict[str, Any],
+    current_head: str | None,
+) -> dict[str, str]:
+    if delivery_readiness["next_action"] is not None:
+        return delivery_readiness["next_action"]
+    approval = _current_definition_approval(owner, state)
+    if state.get("control_level") in {"standard", "critical"} and approval is None:
+        return _next_action(
+            "approve-definition",
+            f"definition_digest={current_definition_digest(owner, state)}",
+        )
+    if state.get("phase") == "definition":
+        return _next_action("continue-definition", "definition work is ready")
+    if owner_preparation_required(
+        owner,
+        change_id=change_id,
+        state=state,
+    ):
+        return _next_action(
+            "prepare-owner-worktree",
+            "parallel standard/critical implementation requires a canonical owner",
+        )
+    incomplete = sorted(
+        ticket_id
+        for ticket_id, ticket in state.get("tickets", {}).items()
+        if ticket.get("status") not in {"implemented", "validated", "done"}
+    )
+    if incomplete:
+        return _next_action(
+            "continue-implementation",
+            "incomplete=" + ",".join(incomplete),
+        )
+    if git_source_dirty_paths(owner):
+        return _next_action(
+            "continue-implementation",
+            "implementation changes are not committed",
+        )
+    approved_head = approval.get("git_sha") if approval is not None else None
+    if current_head and approved_head == current_head:
+        return _next_action(
+            "continue-implementation",
+            "HEAD still equals the approved definition revision",
+        )
+    return _next_action("run-candidate-ready", "committed candidate needs handoff")
 
 
 def _finding_overrides(
@@ -611,6 +661,15 @@ def _candidate_ready_impl(
         raise IntegrityError("Candidate readiness requires Git")
     store = StateStore(owner)
     state = store.load(change_id)
+    if owner_preparation_required(owner, change_id=change_id, state=state):
+        return _blocked(
+            change_id=change_id,
+            owner=owner,
+            owner_selection=owner_selection,
+            action="prepare-owner-worktree",
+            detail="parallel standard/critical change requires an atomic owner handoff",
+            dry_run=dry_run,
+        )
     from .parallel_delivery import change_readiness
 
     delivery_readiness = change_readiness(
@@ -1366,9 +1425,12 @@ def candidate_status(
             "candidate_head": None,
             "exact_head": False,
             "prepared": False,
-            "next_action": (
-                delivery_readiness["next_action"]
-                or _next_action("run-candidate-ready", "no candidate run exists")
+            "next_action": _idle_candidate_action(
+                owner,
+                change_id=change_id,
+                state=state,
+                delivery_readiness=delivery_readiness,
+                current_head=current_head,
             ),
             "task_context": unavailable_task_context("implementation"),
         }

@@ -66,6 +66,13 @@ concurrency и testing без Apple UI или App Store gates.
 - умеет зарегистрировать отдельный worktree без добавления каждого worktree как проекта Codex;
 - возвращает одно типизированное `next_action`, когда следующий шаг пока невозможен.
 
+Для параллельного standard/critical change approval сначала привязывается к
+закоммиченным authored-документам. Затем один атомарный handoff создаёт owner
+worktree и переносит туда approval, dependencies и state без повторного
+`init`/`adopt`. Если handoff не доказан, работа не продолжается в другом checkout.
+Changelog и evidence относятся к исполнению и не заставляют повторно утверждать
+неизменившуюся спецификацию.
+
 После committed candidate один `candidate-ready` автоматически завершает
 механическую часть implementation: выполняет обязательные review-команды,
 создаёт exact-HEAD evidence, записывает заявленные dispositions и атомарно

@@ -13,7 +13,7 @@ dls init
 dls doctor
 dls new
 dls adopt
-dls worktree create|register|list|verify|unregister
+dls worktree create|prepare|register|list|verify|unregister
 dls dependency set|list|remove
 dls delivery-map
 dls status
@@ -54,7 +54,8 @@ Rules:
 - Evidence summaries must be concise and secret-free. Large raw output belongs only in ignored cache and is bounded by the runner.
 - Resolve this CLI from the loaded skill location as `<plugin-root>/scripts/dls.py`. Never probe `PATH` for `dls`.
 - Review model runs store the bounded final structured result separately from the JSONL diagnostic transcript. Transcript truncation is diagnostic metadata, not a review failure.
-- `dls worktree create CHANGE_ID --base REF --purpose definition|implementation` resolves the exact base commit before mutation and creates only the requested linked worktree. It never initializes/adopts the change, registers it, rebases it, deletes it, or searches other branches. The skill completes initialization and registration after state exists.
+- `dls worktree create CHANGE_ID --base REF --purpose definition|implementation` is the low-level Git-only primitive. It resolves the exact base commit and creates only the requested linked worktree.
+- `dls worktree prepare CHANGE_ID --base REF --purpose implementation` is the standard/critical implementation handoff. It requires a committed current definition approval, transfers state/approval/dependencies and immutable DLS references, verifies the same authored digest, registers one canonical owner, and returns `continue-implementation`. On failure it rolls back a newly-created worktree and never falls back to `adopt` or another checkout.
 - `dls worktree register CHANGE_ID /absolute/path [--base REF] [--purpose ...]` stores local routing under the repository's Git common-dir. Registration requires the same Git repository, a real linked worktree, unchanged branch identity, initialized DLS state, and the named change.
 - `dls dependency set CHANGE_ID --on OTHER --blocks STAGE --requires STATE --rationale TEXT` records a stage-aware same-repository dependency. Earlier stages continue. `accepted-in-base` requires current human acceptance plus Git ancestry, unless an exact scoped human exception names both SHAs and the dependency digest.
 - `dls dependency list|remove` are deterministic state operations. Dependency changes stale the dependent definition approval, context, candidate contract, and ReviewPack.

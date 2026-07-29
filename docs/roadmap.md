@@ -2,7 +2,7 @@
 
 Срез: 29 июля 2026 года
 
-Текущая линия: `v0.9.2`
+Текущая линия: `v0.9.3`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
@@ -188,6 +188,19 @@ Exit criteria v0.9.2: реальный EPIC-01 остаётся accepted пос�
 `.dls/**`-коммитов, EPIC-02a больше не получает ложный dependency blocker, а
 неподтверждённая standard/critical definition возвращает компактный
 `approve-definition` без context manifest.
+
+## v0.9.3 — воспроизводимый approval и атомарный owner handoff
+
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| M10 | Must-be / P0 | Reproducible definition approval | Standard/critical approval существует только для committed authored package и exact Git SHA |
+| M11 | Must-be / P0 | Definition/execution boundary | Changelog, evidence, findings и generated regions не инвалидируют неизменившийся authored contract |
+| M64 | Must-be / P0 | Atomic change ownership | Owner worktree получает state, approval и dependencies до authoritative registry switch; fallback в другой checkout запрещён |
+| P40 | Performance / P1 | One-step implementation handoff | Один `worktree prepare` заменяет ручные `create → init → adopt → register` |
+
+Exit criteria v0.9.3: approved definition воспроизводится из Git, перенос в owner
+не теряет governance state, execution evidence не вызывает ложный reapproval,
+а status/context/candidate возвращают один и тот же stage-correct action.
 
 ## Следующая волна v0.10.0: UI/UX Attractive pilot
 

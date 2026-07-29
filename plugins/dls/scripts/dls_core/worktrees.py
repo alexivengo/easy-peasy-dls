@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
 
 from .errors import IntegrityError, UsageError
-from .io import FileLock, atomic_write_json, read_json, utc_now
-from .repo import is_git_repo, run_git
-from .state import StateStore, validate_change_id
+from .io import FileLock, atomic_write_json, atomic_write_text, read_json, utc_now
+from .repo import git_head, is_git_repo, run_git
+from .state import (
+    StateStore,
+    current_definition_digest,
+    definition_digest_at_revision,
+    derived_approval_statuses,
+    validate_change_id,
+)
 
 REGISTRY_SCHEMA_VERSION = 1
 REGISTRY_DIRECTORY = "dls"
@@ -88,6 +95,26 @@ def resolve_change_root(root: Path, change_id: str) -> Path:
 
 def worktree_registry_path(root: Path) -> Path:
     return git_common_dir(root) / REGISTRY_DIRECTORY / REGISTRY_FILENAME
+
+
+def owner_preparation_required(
+    root: Path,
+    *,
+    change_id: str,
+    state: dict[str, Any],
+) -> bool:
+    """Return whether parallel standard/critical work still lacks an owner."""
+    if state.get("control_level") not in {"standard", "critical"}:
+        return False
+    caller = git_toplevel(root)
+    _, registry = _load_registry(caller, required=False)
+    registered = registry["worktrees"].get(change_id)
+    if isinstance(registered, dict):
+        return Path(str(registered.get("owner_root", ""))).resolve() != caller
+    return any(
+        other_change != change_id and isinstance(entry, dict)
+        for other_change, entry in registry["worktrees"].items()
+    )
 
 
 def _empty_registry(common_dir: Path) -> dict[str, Any]:
@@ -366,7 +393,10 @@ def worktree_create(
             "branch": branch_name,
             "owner_root": str(target),
             "head_sha": existing_head,
-            "next_action": {"id": "initialize-change", "detail": "worktree already exists"},
+            "next_action": {
+                "id": "prepare-owner-worktree",
+                "detail": "complete DLS state handoff and owner registration",
+            },
         }
     if target.exists():
         raise IntegrityError(f"Worktree path already exists: {target}")
@@ -383,7 +413,10 @@ def worktree_create(
         "branch": branch_name,
         "owner_root": str(target),
         "head_sha": base_sha,
-        "next_action": {"id": "initialize-change", "detail": "initialize DLS state and register owner"},
+        "next_action": {
+            "id": "prepare-owner-worktree",
+            "detail": "complete DLS state handoff and owner registration",
+        },
     }
     if dry_run:
         projected["changed"] = False
@@ -398,6 +431,329 @@ def worktree_create(
         base_sha,
     )
     return projected
+
+
+def _copy_if_identical_or_missing(source: Path, target: Path) -> list[tuple[Path, str]]:
+    payload = source.read_text(encoding="utf-8")
+    if target.exists():
+        if not target.is_file() or target.read_text(encoding="utf-8") != payload:
+            raise IntegrityError(f"Prepared worktree configuration differs: {target}")
+        return []
+    return [(target, payload)]
+
+
+def _copy_tree_immutable(source: Path, target: Path) -> list[tuple[Path, str]]:
+    if not source.exists():
+        return []
+    planned: list[tuple[Path, str]] = []
+    for path in sorted(source.rglob("*")):
+        if path.is_symlink():
+            raise IntegrityError(f"DLS handoff refuses symlinked metadata: {path}")
+        if not path.is_file():
+            continue
+        relative = path.relative_to(source)
+        destination = target / relative
+        payload = path.read_text(encoding="utf-8")
+        if destination.exists() and destination.read_text(encoding="utf-8") != payload:
+            raise IntegrityError(
+                f"DLS handoff immutable artifact differs: {destination}"
+            )
+        if not destination.exists():
+            planned.append((destination, payload))
+    return planned
+
+
+def _rollback_transfer(journal: dict[str, Any]) -> None:
+    for path, previous in reversed(journal["files"]):
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(path, previous, backup=False)
+    if journal.get("cache_created"):
+        try:
+            journal["cache_path"].rmdir()
+        except OSError:
+            pass
+
+
+def _transfer_change_metadata(
+    source: Path,
+    target: Path,
+    *,
+    change_id: str,
+    allow_committed_snapshot_replacement: bool,
+) -> dict[str, Any]:
+    source_dls = source / ".dls"
+    target_dls = target / ".dls"
+    planned = _copy_if_identical_or_missing(
+        source_dls / "config.toml", target_dls / "config.toml"
+    )
+    source_ignore = source_dls / ".gitignore"
+    if source_ignore.is_file():
+        planned.extend(
+            _copy_if_identical_or_missing(source_ignore, target_dls / ".gitignore")
+        )
+    source_profiles = source_dls / "profiles"
+    if source_profiles.is_dir():
+        planned.extend(_copy_tree_immutable(source_profiles, target_dls / "profiles"))
+
+    source_state = StateStore(source).load(change_id)
+    target_state_path = StateStore(target).path(change_id)
+    if target_state_path.is_file():
+        existing = read_json(target_state_path)
+        if (
+            existing.get("change_id") != change_id
+            or existing.get("artifacts") != source_state.get("artifacts")
+            or existing.get("work_kind") != source_state.get("work_kind")
+            or existing.get("control_level") != source_state.get("control_level")
+        ):
+            raise IntegrityError(
+                "Prepared worktree contains a different DLS change state"
+            )
+        if existing != source_state and not allow_committed_snapshot_replacement:
+            relative = target_state_path.relative_to(target).as_posix()
+            committed = run_git(
+                target,
+                "show",
+                f"HEAD:{relative}",
+                check=False,
+            )
+            try:
+                committed_state = (
+                    json.loads(committed.stdout)
+                    if committed.returncode == 0
+                    else None
+                )
+            except json.JSONDecodeError:
+                committed_state = None
+            if committed_state != existing:
+                raise IntegrityError(
+                    "Prepared worktree contains newer local DLS state; refusing to overwrite it"
+                )
+    for category in ("evidence", "reviews"):
+        planned.extend(
+            _copy_tree_immutable(
+                source_dls / category / change_id,
+                target_dls / category / change_id,
+            )
+        )
+    unique_destinations = {path for path, _ in planned}
+    unique_destinations.add(target_state_path)
+    journal = {
+        "files": [
+            (
+                path,
+                path.read_text(encoding="utf-8") if path.is_file() else None,
+            )
+            for path in sorted(unique_destinations)
+        ],
+        "cache_path": target_dls / "cache",
+        "cache_created": not (target_dls / "cache").exists(),
+    }
+    try:
+        for destination, payload in planned:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(destination, payload, backup=False)
+        atomic_write_json(target_state_path, source_state, backup=False)
+        journal["cache_path"].mkdir(parents=True, exist_ok=True)
+    except Exception:
+        _rollback_transfer(journal)
+        raise
+    return journal
+
+
+def _register_prepared_owner(
+    caller_root: Path,
+    *,
+    source_root: Path,
+    target: Path,
+    change_id: str,
+    base_sha: str,
+    purpose: str,
+) -> tuple[dict[str, Any], bool]:
+    path, _ = _load_registry(caller_root, required=False)
+    entry = {
+        "owner_root": str(target),
+        "git_common_dir": str(git_common_dir(caller_root)),
+        "branch": git_branch(target),
+        "base_sha": base_sha,
+        "purpose": purpose,
+        "registered_at": utc_now(),
+    }
+    validated_entry = _validated_entry(
+        caller_root,
+        change_id=change_id,
+        entry=entry,
+    )
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with FileLock(lock_path):
+        _, current = _load_registry(caller_root, required=False)
+        existing = current["worktrees"].get(change_id)
+        if isinstance(existing, dict):
+            existing_owner = Path(str(existing.get("owner_root", ""))).resolve()
+            if existing_owner == target:
+                if any(
+                    existing.get(key) != entry.get(key)
+                    for key in ("git_common_dir", "branch", "base_sha", "purpose")
+                ):
+                    raise IntegrityError(
+                        f"{change_id} owner registration metadata differs from the prepared handoff"
+                    )
+                return _validated_entry(
+                    caller_root,
+                    change_id=change_id,
+                    entry=existing,
+                ), False
+            if existing_owner != source_root:
+                raise IntegrityError(
+                    f"{change_id} already has another canonical owner: {existing_owner}"
+                )
+        current["worktrees"][change_id] = entry
+        atomic_write_json(path, current, backup=False)
+    return validated_entry, True
+
+
+def worktree_prepare(
+    root: Path,
+    *,
+    change_id: str,
+    base_ref: str,
+    purpose: str,
+    owner_path: Path | None = None,
+    branch: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Create and register one owner while preserving approved DLS state.
+
+    This is the implementation handoff primitive.  It refuses to reconstruct
+    state through ``adopt`` and rolls back a newly-created worktree if metadata
+    transfer or registration cannot be proven complete.
+    """
+    if purpose != "implementation":
+        raise UsageError("Atomic worktree preparation currently owns implementation handoff")
+    change_id = validate_change_id(change_id)
+    caller_root = git_toplevel(root)
+    source_root = resolve_change_root(caller_root, change_id)
+    source_state = StateStore(source_root).load(change_id)
+    if source_state.get("control_level") not in {"standard", "critical"}:
+        raise UsageError("Atomic owner preparation is only for standard or critical work")
+    approval = next(
+        (
+            item
+            for item in reversed(derived_approval_statuses(source_root, source_state))
+            if item.get("decision") == "definition" and item.get("status") == "current"
+        ),
+        None,
+    )
+    if approval is None:
+        raise IntegrityError("Owner worktree preparation requires current definition approval")
+    base_sha = run_git(
+        caller_root,
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        f"{base_ref}^{{commit}}",
+    ).stdout.strip()
+    expected_digest = current_definition_digest(source_root, source_state)
+    base_digest = definition_digest_at_revision(source_root, source_state, base_sha)
+    if base_digest != expected_digest:
+        raise IntegrityError(
+            "Owner worktree base does not reproduce the approved definition"
+        )
+    preview = worktree_create(
+        caller_root,
+        change_id=change_id,
+        base_ref=base_sha,
+        purpose=purpose,
+        owner_path=owner_path,
+        branch=branch,
+        dry_run=True,
+    )
+    if dry_run:
+        return {
+            **preview,
+            "status": "projected",
+            "definition_digest": expected_digest,
+            "approval_id": approval.get("id"),
+            "next_action": {
+                "id": "continue-implementation",
+                "detail": "approved owner handoff can be completed",
+            },
+        }
+
+    created = worktree_create(
+        caller_root,
+        change_id=change_id,
+        base_ref=base_sha,
+        purpose=purpose,
+        owner_path=owner_path,
+        branch=branch,
+        dry_run=False,
+    )
+    target = Path(created["owner_root"]).resolve()
+    created_here = bool(created["changed"])
+    transfer_journal: dict[str, Any] | None = None
+    try:
+        transfer_journal = _transfer_change_metadata(
+            source_root,
+            target,
+            change_id=change_id,
+            allow_committed_snapshot_replacement=created_here,
+        )
+        transferred_state = StateStore(target).load(change_id)
+        if current_definition_digest(target, transferred_state) != expected_digest:
+            raise IntegrityError("Transferred owner changed the approved definition digest")
+        transferred_approval = next(
+            (
+                item
+                for item in reversed(derived_approval_statuses(target, transferred_state))
+                if item.get("decision") == "definition"
+                and item.get("status") == "current"
+            ),
+            None,
+        )
+        if transferred_approval is None:
+            raise IntegrityError("Transferred owner lost definition approval")
+        validated, registration_changed = _register_prepared_owner(
+            caller_root,
+            source_root=source_root,
+            target=target,
+            change_id=change_id,
+            base_sha=base_sha,
+            purpose=purpose,
+        )
+    except Exception:
+        if created_here:
+            run_git(caller_root, "worktree", "remove", "--force", str(target), check=False)
+            run_git(
+                caller_root,
+                "branch",
+                "-D",
+                str(created["branch"]),
+                check=False,
+            )
+        elif transfer_journal is not None:
+            _rollback_transfer(transfer_journal)
+        raise
+    return {
+        "ok": True,
+        "dry_run": False,
+        "changed": created_here or registration_changed,
+        "change_id": change_id,
+        "purpose": purpose,
+        "base_sha": base_sha,
+        "branch": created["branch"],
+        "owner_root": str(target),
+        "head_sha": git_head(target),
+        "definition_digest": expected_digest,
+        "approval_id": transferred_approval.get("id"),
+        "worktree": validated,
+        "next_action": {
+            "id": "continue-implementation",
+            "detail": "canonical owner is ready",
+        },
+    }
 
 
 def worktree_list(root: Path) -> dict[str, Any]:

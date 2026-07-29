@@ -59,6 +59,8 @@ env_allow = []
 """,
             encoding="utf-8",
         )
+        git(root, "add", ".dls", "docs")
+        git(root, "commit", "-m", "approved definition")
         approve(
             root,
             change_id="C001",
@@ -71,7 +73,8 @@ env_allow = []
             conditions=None,
             operation_id="approve-definition",
         )
-        git(root, "add", ".dls", "docs")
+        (root / "README.md").write_text("# Fixture\n\nImplementation candidate.\n", encoding="utf-8")
+        git(root, "add", ".dls", "README.md")
         git(root, "commit", "-m", "implementation candidate")
         return base
 
@@ -283,6 +286,8 @@ env_allow = []
             base = initialize_git(root)
             initialize(root)
             create_change(root, control="standard")
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "approved definition")
             approve(
                 root,
                 change_id="C001",
@@ -295,7 +300,8 @@ env_allow = []
                 conditions=None,
                 operation_id="approve-definition",
             )
-            git(root, "add", ".dls", "docs")
+            (root / "README.md").write_text("# Fixture\n\nCandidate.\n", encoding="utf-8")
+            git(root, "add", ".dls", "README.md")
             git(root, "commit", "-m", "candidate")
             result = candidate_ready(
                 root,
@@ -1268,6 +1274,8 @@ env_allow = []
 """,
                 encoding="utf-8",
             )
+            git(owner, "add", ".dls", "docs")
+            git(owner, "commit", "-m", "approved definition")
             approve(
                 owner,
                 change_id="C001",
@@ -1280,7 +1288,8 @@ env_allow = []
                 conditions=None,
                 operation_id="approve-definition",
             )
-            git(owner, "add", ".dls", "docs")
+            (owner / "README.md").write_text("# Fixture\n\nCandidate.\n", encoding="utf-8")
+            git(owner, "add", ".dls", "README.md")
             git(owner, "commit", "-m", "candidate")
             worktree_register(base_root, change_id="C001", owner_path=owner)
             result = candidate_ready(

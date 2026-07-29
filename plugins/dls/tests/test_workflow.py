@@ -250,8 +250,11 @@ class WorkflowTests(unittest.TestCase):
     def test_scoped_approval_and_authored_digest_staleness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            initialize_git(root)
             initialize(root)
             create_change(root, control="standard")
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "committed definition")
             current = status(root, change_id="C001")
             digest = current["definition_digest"]
             with self.assertRaises(IntegrityError):
@@ -376,8 +379,11 @@ class WorkflowTests(unittest.TestCase):
     def test_approval_revocation_is_scoped_and_retained(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            initialize_git(root)
             initialize(root)
             create_change(root, control="standard")
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "committed definition")
             digest = status(root, change_id="C001")["definition_digest"]
             approval = approve(
                 root,
@@ -423,6 +429,7 @@ class WorkflowTests(unittest.TestCase):
     def test_ticket_transitions_and_context_determinism(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            initialize_git(root)
             initialize(root)
             create_change(root, control="standard", tickets=True)
             first = ticket_set(
@@ -465,6 +472,8 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(
                 blocked_context["next_action"]["id"], "approve-definition"
             )
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "committed definition")
             approve(
                 root,
                 change_id="C001",
@@ -552,6 +561,8 @@ class WorkflowTests(unittest.TestCase):
             base_sha = initialize_git(root)
             initialize(root)
             create_change(root, control="standard")
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "approved definition")
             approve(
                 root,
                 change_id="C001",
@@ -564,8 +575,6 @@ class WorkflowTests(unittest.TestCase):
                 conditions=None,
                 operation_id="definition-1",
             )
-            git(root, "add", ".dls", "docs")
-            git(root, "commit", "-m", "approved definition")
             head_sha = git(root, "rev-parse", "HEAD")
             evidence_add(
                 root,
@@ -622,6 +631,8 @@ class WorkflowTests(unittest.TestCase):
             base_sha = initialize_git(root)
             initialize(root)
             create_change(root, control="standard")
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "approved definition")
             approve(
                 root,
                 change_id="C001",
@@ -634,8 +645,6 @@ class WorkflowTests(unittest.TestCase):
                 conditions=None,
                 operation_id="definition-1",
             )
-            git(root, "add", ".dls", "docs")
-            git(root, "commit", "-m", "approved definition")
             head_sha = git(root, "rev-parse", "HEAD")
             evidence = evidence_add(
                 root,
@@ -784,6 +793,8 @@ class WorkflowTests(unittest.TestCase):
             base_sha = initialize_git(root)
             initialize(root)
             create_change(root, control="standard")
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "approved definition")
             approve(
                 root,
                 change_id="C001",
@@ -796,8 +807,6 @@ class WorkflowTests(unittest.TestCase):
                 conditions=None,
                 operation_id="definition-1",
             )
-            git(root, "add", ".dls", "docs")
-            git(root, "commit", "-m", "approved definition")
             head_sha = git(root, "rev-parse", "HEAD")
             evidence_add(
                 root,

@@ -11,7 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ConfigError, IntegrityError
-from .io import canonical_file_digest, safe_resolve, sha256_bytes, sha256_file
+from .io import (
+    canonical_file_digest,
+    canonical_text,
+    safe_resolve,
+    sha256_bytes,
+    sha256_file,
+)
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 ASSETS_ROOT = PLUGIN_ROOT / "assets"
@@ -491,11 +497,111 @@ def package_digest(root: Path, artifacts: dict[str, Any]) -> str:
     return sha256_bytes("\n".join(entries).encode("utf-8"))
 
 
+def package_digest_at_revision(
+    root: Path,
+    artifacts: dict[str, Any],
+    revision: str,
+) -> str | None:
+    """Return the canonical package digest stored in one Git revision.
+
+    This is intentionally read-only and never falls back to the working tree.
+    It lets DLS prove whether a legacy approval actually described the Git SHA
+    recorded beside it before projecting that approval onto the authored-only
+    definition contract.
+    """
+    resolved = run_git(
+        root,
+        "rev-parse",
+        "--verify",
+        f"{revision}^{{commit}}",
+        check=False,
+    )
+    commit_sha = resolved.stdout.strip()
+    if resolved.returncode != 0 or not commit_sha:
+        return None
+    entries: list[str] = []
+    for name, metadata in sorted(artifacts.items()):
+        if not isinstance(metadata, dict) or not isinstance(metadata.get("path"), str):
+            raise IntegrityError(f"Invalid artifact metadata: {name}")
+        relative = metadata["path"]
+        blob = run_git(
+            root,
+            "show",
+            f"{commit_sha}:{relative}",
+            check=False,
+        )
+        if blob.returncode != 0:
+            return None
+        producer_ticket_scope = metadata.get("producer_ticket_scope")
+        if producer_ticket_scope is None:
+            content_digest = sha256_bytes(
+                canonical_text(blob.stdout).encode("utf-8")
+            )
+        else:
+            if not isinstance(producer_ticket_scope, list) or not all(
+                isinstance(ticket_id, str) and ticket_id
+                for ticket_id in producer_ticket_scope
+            ):
+                raise IntegrityError(
+                    f"Invalid producer_ticket_scope metadata: {name}"
+                )
+            try:
+                payload = json.loads(blob.stdout)
+            except json.JSONDecodeError as exc:
+                raise IntegrityError(
+                    f"Malformed scoped traceability JSON at {commit_sha}:{relative}: {exc}"
+                ) from exc
+            content_digest = _scoped_traceability_payload_digest(
+                payload,
+                set(producer_ticket_scope),
+            )
+        entries.append(f"{relative}\0{content_digest}")
+    return sha256_bytes("\n".join(entries).encode("utf-8"))
+
+
+def artifact_paths_matching_revision(
+    root: Path,
+    artifacts: dict[str, Any],
+    revision: str = "HEAD",
+) -> tuple[bool, list[str]]:
+    """Check that every authored artifact is committed at ``revision``."""
+    mismatched: list[str] = []
+    for name, metadata in sorted(artifacts.items()):
+        if not isinstance(metadata, dict) or not isinstance(metadata.get("path"), str):
+            raise IntegrityError(f"Invalid artifact metadata: {name}")
+        relative = metadata["path"]
+        committed = run_git(root, "show", f"{revision}:{relative}", check=False)
+        if committed.returncode != 0:
+            mismatched.append(relative)
+            continue
+        path = safe_resolve(root, relative, must_exist=True)
+        try:
+            working_digest = canonical_file_digest(path)
+            committed_digest = sha256_bytes(
+                canonical_text(committed.stdout).encode("utf-8")
+            )
+        except UnicodeDecodeError:
+            # Canonical DLS definition artifacts are text.  Treat an unexpected
+            # binary blob as non-reproducible rather than weakening provenance.
+            mismatched.append(relative)
+            continue
+        if working_digest != committed_digest:
+            mismatched.append(relative)
+    return not mismatched, mismatched
+
+
 def _scoped_traceability_digest(path: Path, producer_tickets: set[str]) -> str:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise IntegrityError(f"Malformed scoped traceability JSON {path}: {exc}") from exc
+    return _scoped_traceability_payload_digest(payload, producer_tickets)
+
+
+def _scoped_traceability_payload_digest(
+    payload: Any,
+    producer_tickets: set[str],
+) -> str:
     scoped_rows: list[dict[str, Any]] = []
 
     def visit(value: Any, trail: tuple[str, ...]) -> None:
