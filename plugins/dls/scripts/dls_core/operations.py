@@ -46,6 +46,7 @@ from .repo import (
     git_changed_files,
     git_head,
     git_merge_base,
+    git_product_tree_digest,
     git_source_dirty_paths,
     git_source_snapshot_digest,
     is_git_repo,
@@ -563,6 +564,23 @@ def status(root: Path, *, change_id: str) -> dict[str, Any]:
     dirty = git_source_dirty_paths(root) if is_git_repo(root) else []
     latest_review = _latest_review_result(state)
     review_stale = bool(latest_review and latest_review.get("head_sha") != head)
+    current_acceptance = next(
+        (
+            item
+            for item in reversed(approvals)
+            if item.get("decision") == "accept" and item.get("status") == "current"
+        ),
+        None,
+    )
+    if (
+        review_stale
+        and current_acceptance is not None
+        and latest_review is not None
+        and latest_review.get("head_sha") == current_acceptance.get("git_sha")
+    ):
+        # Acceptance proves the reviewed product tree.  A later DLS-only commit
+        # does not make that terminal review stale.
+        review_stale = False
     from .parallel_delivery import change_readiness
 
     stage = (
@@ -705,11 +723,24 @@ def check(root: Path, *, change_id: str, gate: str) -> dict[str, Any]:
         item.get("decision") == "architecture" and item.get("status") == "current"
         for item in approvals
     )
+    current_acceptance = next(
+        (
+            item
+            for item in reversed(approvals)
+            if item.get("decision") == "accept" and item.get("status") == "current"
+        ),
+        None,
+    )
+    accepted_head = (
+        current_acceptance.get("git_sha")
+        if current_acceptance is not None
+        else None
+    )
     latest_review = _latest_review_result(state)
     review_clear = bool(
         latest_review
         and latest_review.get("verdict") == "review-clear"
-        and latest_review.get("head_sha") == git_head(root)
+        and latest_review.get("head_sha") in {git_head(root), accepted_head}
     )
     acceptance_grade_review = bool(
         review_clear and latest_review and latest_review.get("mode") == "acceptance-grade"
@@ -763,6 +794,7 @@ def check(root: Path, *, change_id: str, gate: str) -> dict[str, Any]:
                 root,
                 state,
                 stage="review",
+                proof_head_sha=accepted_head,
             )
             checks.append(_check("validation:passing-evidence", evidence_ok, evidence_detail))
     if gate in {"accept", "all"}:
@@ -787,6 +819,7 @@ def check(root: Path, *, change_id: str, gate: str) -> dict[str, Any]:
                 root,
                 state,
                 stage="acceptance",
+                proof_head_sha=accepted_head,
             )
             checks.append(_check("validation:passing-evidence", evidence_ok, evidence_detail))
         if strict_path:
@@ -794,6 +827,7 @@ def check(root: Path, *, change_id: str, gate: str) -> dict[str, Any]:
                 root,
                 state,
                 stage="acceptance",
+                proof_head_sha=accepted_head,
             )
             checks.append(
                 _check(
@@ -903,6 +937,7 @@ def approve(
         raise IntegrityError("Accepted work cannot receive another decision without a new change")
     object_digest = current_definition_digest(root, state)
     current_head = git_head(root)
+    acceptance_source_digest: str | None = None
     if decision == "accept":
         strict_path = state["control_level"] in {"standard", "critical"}
         if strict_path and not current_head:
@@ -913,6 +948,9 @@ def approve(
         dirty = git_source_dirty_paths(root) if current_head else []
         if strict_path and dirty:
             raise IntegrityError(f"Acceptance requires clean product source: {', '.join(dirty)}")
+        acceptance_source_digest = git_product_tree_digest(root)
+        if strict_path and not acceptance_source_digest:
+            raise IntegrityError("Acceptance requires a readable product Git tree")
         gate = check(root, change_id=change_id, gate="accept")
         if not gate["ok"] and decision != "exception":
             failed = [item["id"] for item in gate["checks"] if not item["ok"]]
@@ -932,6 +970,8 @@ def approve(
         "prompt": prompt,
         "response": response,
     }
+    if decision == "accept" and acceptance_source_digest is not None:
+        approval["source_digest"] = acceptance_source_digest
     if dry_run:
         return {
             "ok": True,
@@ -1224,16 +1264,22 @@ def _evidence_records(
 def _current_evidence_by_command(
     root: Path,
     state: dict[str, Any],
+    *,
+    proof_head_sha: str | None = None,
 ) -> dict[str, tuple[str, dict[str, Any]]]:
     current_head = git_head(root)
+    evidence_head = proof_head_sha or current_head
     current_source_digest = git_source_snapshot_digest(root)
     latest: dict[str, tuple[str, dict[str, Any]]] = {}
     for relative, record in _evidence_records(root, state):
         command_id = record.get("command_id")
         if (
             not isinstance(command_id, str)
-            or record.get("git_sha") != current_head
-            or record.get("source_digest") != current_source_digest
+            or record.get("git_sha") != evidence_head
+            or (
+                evidence_head == current_head
+                and record.get("source_digest") != current_source_digest
+            )
         ):
             continue
         latest[command_id] = (relative, record)
@@ -1263,6 +1309,7 @@ def _required_evidence_status(
     state: dict[str, Any],
     *,
     stage: str,
+    proof_head_sha: str | None = None,
 ) -> tuple[bool, str, list[str]]:
     config = load_config(root)
     policy = config.get("policy", {})
@@ -1272,7 +1319,11 @@ def _required_evidence_status(
         else "acceptance_required_commands"
     )
     required = list(policy.get(key, []))
-    latest = _current_evidence_by_command(root, state)
+    latest = _current_evidence_by_command(
+        root,
+        state,
+        proof_head_sha=proof_head_sha,
+    )
     successful: dict[str, str] = {}
     for command_id, (relative, record) in latest.items():
         extra = record.get("extra")
@@ -1458,6 +1509,29 @@ def build_context(
         raise UsageError(f"Invalid context phase: {phase}")
     root = resolve_change_root(root, change_id)
     state = StateStore(root).load(change_id)
+    if phase == "implementation" and state["control_level"] in {
+        "standard",
+        "critical",
+    }:
+        definition_approved = any(
+            item.get("decision") == "definition" and item.get("status") == "current"
+            for item in derived_approval_statuses(root, state)
+        )
+        if not definition_approved:
+            return {
+                "ok": True,
+                "dry_run": dry_run,
+                "changed": False,
+                "change_id": change_id,
+                "phase": phase,
+                "status": "blocked",
+                "manifest": None,
+                "manifest_path": None,
+                "next_action": {
+                    "id": "approve-definition",
+                    "detail": current_definition_digest(root, state)[:12],
+                },
+            }
     from .parallel_delivery import change_readiness
 
     readiness_stage = "review" if phase == "review" else "implementation"
@@ -6941,8 +7015,14 @@ def _successful_evidence_for_current_revision(
     state: dict[str, Any],
     *,
     stage: str,
+    proof_head_sha: str | None = None,
 ) -> tuple[bool, str]:
-    ok, detail, _ = _required_evidence_status(root, state, stage=stage)
+    ok, detail, _ = _required_evidence_status(
+        root,
+        state,
+        stage=stage,
+        proof_head_sha=proof_head_sha,
+    )
     return ok, detail
 
 

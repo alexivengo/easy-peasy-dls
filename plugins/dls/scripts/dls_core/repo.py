@@ -373,6 +373,49 @@ def git_source_dirty_paths(root: Path) -> list[str]:
     return paths
 
 
+def git_product_tree_digest(root: Path, revision: str = "HEAD") -> str | None:
+    """Return a stable digest of tracked product files at ``revision``.
+
+    DLS artifacts are deliberately excluded.  Unlike
+    :func:`git_source_snapshot_digest`, this digest describes the committed
+    product tree rather than an exact commit plus its working-copy drift.  It
+    is therefore suitable for proving that a metadata-only descendant commit
+    still contains the product revision that a human accepted.
+    """
+    resolved = run_git(
+        root,
+        "rev-parse",
+        "--verify",
+        f"{revision}^{{commit}}",
+        check=False,
+    )
+    commit_sha = resolved.stdout.strip()
+    if resolved.returncode != 0 or not commit_sha:
+        return None
+    result = run_git(
+        root,
+        "ls-tree",
+        "-r",
+        "-z",
+        "--full-tree",
+        commit_sha,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    entries: list[str] = []
+    for token in result.stdout.split("\0"):
+        if not token:
+            continue
+        metadata, separator, relative = token.partition("\t")
+        if not separator:
+            return None
+        if relative == ".dls" or relative.startswith(".dls/"):
+            continue
+        entries.append(f"{metadata}\0{relative}")
+    return sha256_bytes("\0".join(sorted(entries)).encode("utf-8"))
+
+
 def git_source_snapshot_digest(root: Path) -> str | None:
     head = git_head(root)
     if not head:

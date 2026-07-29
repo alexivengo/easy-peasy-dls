@@ -25,6 +25,7 @@ from dls_core.parallel_delivery import (
     overlap_projection,
 )
 from dls_core.io import utc_now
+from dls_core.repo import git_product_tree_digest
 from dls_core.state import (
     StateStore,
     current_definition_digest,
@@ -203,6 +204,7 @@ env_allow = []
                 if item["id"] == "dependencies:definition"
             )
             self.assertTrue(dependency_check["ok"])
+            self._approve_definition(second, "C002")
             context = build_context(
                 second,
                 change_id="C002",
@@ -369,6 +371,81 @@ env_allow = []
                 change_readiness(
                     third, change_id="C003", stage="implementation"
                 )["ready"]
+            )
+
+    def test_metadata_only_target_commit_preserves_legacy_acceptance_and_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, first, second, _ = self._pair(directory)
+            dependency_set(
+                second,
+                change_id="C002",
+                target_change_id="C001",
+                blocks_stage="implementation",
+                requires="accepted-in-base",
+                rationale="Consume the accepted C001 product revision.",
+                operation_id="dependency-c002-legacy-accept",
+            )
+            accepted_head = git(first, "rev-parse", "HEAD")
+            accepted_product = git_product_tree_digest(first, accepted_head)
+            self._record_human_decision(
+                first,
+                "C001",
+                decision="accept",
+                git_sha=accepted_head,
+            )
+            git(first, "add", ".dls")
+            git(first, "commit", "-m", "record DLS acceptance metadata")
+            owner_head = git(first, "rev-parse", "HEAD")
+            self.assertNotEqual(owner_head, accepted_head)
+            self.assertEqual(git_product_tree_digest(first), accepted_product)
+            acceptance = derived_approval_statuses(
+                first, StateStore(first).load("C001")
+            )[-1]
+            self.assertEqual(acceptance["status"], "current")
+
+            git(second, "merge", "--no-edit", "--no-ff", "-s", "ours", accepted_head)
+            readiness = change_readiness(
+                second, change_id="C002", stage="implementation"
+            )
+            self.assertTrue(readiness["ready"])
+            dependency = readiness["dependencies"]["items"][0]
+            self.assertEqual(dependency["target_head_sha"], accepted_head)
+            self.assertEqual(dependency["target_owner_head_sha"], owner_head)
+
+    def test_product_commit_after_acceptance_stales_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, first, second, _ = self._pair(directory)
+            dependency_set(
+                second,
+                change_id="C002",
+                target_change_id="C001",
+                blocks_stage="implementation",
+                requires="accepted-in-base",
+                rationale="Consume the accepted C001 product revision.",
+                operation_id="dependency-c002-product-drift",
+            )
+            accepted_head = git(first, "rev-parse", "HEAD")
+            self._record_human_decision(
+                first,
+                "C001",
+                decision="accept",
+                git_sha=accepted_head,
+            )
+            (first / "shared.txt").write_text("changed after acceptance\n", encoding="utf-8")
+            git(first, "add", "shared.txt", ".dls")
+            git(first, "commit", "-m", "change product after acceptance")
+            acceptance = derived_approval_statuses(
+                first, StateStore(first).load("C001")
+            )[-1]
+            self.assertEqual(acceptance["status"], "stale")
+            self.assertEqual(acceptance["stale_reason"], "product-source-changed")
+            readiness = change_readiness(
+                second, change_id="C002", stage="implementation"
+            )
+            self.assertFalse(readiness["ready"])
+            self.assertEqual(
+                readiness["dependencies"]["items"][0]["reason"],
+                "requires-accepted-in-base",
             )
 
     def test_worktree_create_is_dirty_root_safe_and_idempotent(self) -> None:
@@ -675,6 +752,10 @@ env_allow = []
         self.assertIn("stage-aware dependencies", skill)
         self.assertIn("One writer means one owner worktree", skill)
         self.assertIn("The user still opens each parallel Codex task", skill)
+        self.assertIn("bounded readiness preflight", skill)
+        self.assertIn("Plan Mode does not authorize speculative implementation discovery", skill)
+        self.assertIn("stop immediately and return that one action", skill)
+        self.assertIn("Do not inspect product source, run baseline tests", skill)
         self.assertNotIn("create a subagent for parallel", skill.lower())
 
 

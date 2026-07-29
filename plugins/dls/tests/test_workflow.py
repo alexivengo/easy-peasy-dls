@@ -452,6 +452,31 @@ class WorkflowTests(unittest.TestCase):
                     note=None,
                     operation_id="ticket-2",
                 )
+            blocked_context = build_context(
+                root,
+                change_id="C001",
+                phase="implementation",
+                include=[],
+                exclude=[],
+                dry_run=True,
+            )
+            self.assertEqual(blocked_context["status"], "blocked")
+            self.assertIsNone(blocked_context["manifest"])
+            self.assertEqual(
+                blocked_context["next_action"]["id"], "approve-definition"
+            )
+            approve(
+                root,
+                change_id="C001",
+                decision="definition",
+                expected_revision=first["state_revision"],
+                actor="user",
+                prompt=None,
+                response=None,
+                git_sha=None,
+                conditions=None,
+                operation_id="definition-before-context",
+            )
             context_one = build_context(
                 root,
                 change_id="C001",

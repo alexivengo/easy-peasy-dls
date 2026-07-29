@@ -338,24 +338,27 @@ def _requirement_status(
             "target_head_sha": git_head(target_owner),
         }
     requirement = item["requires"]
-    target_head = git_head(target_owner)
+    target_owner_head = git_head(target_owner)
     approvals = derived_approval_statuses(target_owner, target_state)
     definition_approved = any(
         approval.get("decision") == "definition" and approval.get("status") == "current"
         for approval in approvals
     )
+    acceptance = _current_acceptance(target_owner, target_state)
     latest_review = _latest_review_result(target_state)
     review_clear = bool(
         latest_review
         and latest_review.get("verdict") == "review-clear"
-        and latest_review.get("head_sha") == target_head
+        and (
+            latest_review.get("head_sha") == target_owner_head
+            or (
+                acceptance is not None
+                and latest_review.get("head_sha") == acceptance.get("git_sha")
+            )
+        )
     )
-    acceptance = _current_acceptance(target_owner, target_state)
-    accepted = bool(
-        acceptance
-        and isinstance(target_head, str)
-        and acceptance.get("git_sha") == target_head
-    )
+    accepted_head = acceptance.get("git_sha") if acceptance is not None else None
+    accepted = isinstance(accepted_head, str) and bool(accepted_head)
     if requirement == "definition-approved":
         satisfied = definition_approved
     elif requirement == "review-clear":
@@ -366,13 +369,13 @@ def _requirement_status(
         dependent_head = git_head(root)
         contained = bool(
             accepted
-            and isinstance(target_head, str)
+            and isinstance(accepted_head, str)
             and isinstance(dependent_head, str)
             and run_git(
                 root,
                 "merge-base",
                 "--is-ancestor",
-                target_head,
+                accepted_head,
                 dependent_head,
                 check=False,
             ).returncode
@@ -380,13 +383,13 @@ def _requirement_status(
         )
         satisfied = contained or bool(
             accepted
-            and isinstance(target_head, str)
+            and isinstance(accepted_head, str)
             and isinstance(dependent_head, str)
             and _exception_matches(
                 root,
                 state,
                 item=item,
-                target_head=target_head,
+                target_head=accepted_head,
                 dependent_head=dependent_head,
             )
         )
@@ -394,14 +397,23 @@ def _requirement_status(
             return {
                 "satisfied": False,
                 "reason": "accepted-not-in-base",
-                "detail": f"target_head={target_head}; dependent_head={dependent_head}",
-                "target_head_sha": target_head,
+                "detail": (
+                    f"accepted_head={accepted_head}; dependent_head={dependent_head}"
+                ),
+                "target_head_sha": accepted_head,
+                "target_owner_head_sha": target_owner_head,
             }
+    reported_target_head = (
+        accepted_head
+        if requirement in {"accepted", "accepted-in-base"} and accepted
+        else target_owner_head
+    )
     return {
         "satisfied": satisfied,
         "reason": None if satisfied else f"requires-{requirement}",
         "detail": requirement,
-        "target_head_sha": target_head,
+        "target_head_sha": reported_target_head,
+        "target_owner_head_sha": target_owner_head,
     }
 
 

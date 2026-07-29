@@ -18,8 +18,9 @@ from dls_core.delivery_receipt import (
     RECEIPT_ITEM_LIMIT,
     delivery_receipt,
 )
-from dls_core.operations import approve, evidence_add, review_import, review_pack
+from dls_core.operations import approve, check, evidence_add, review_import, review_pack, status
 from dls_core.state import StateStore
+from dls_core.telemetry import delivery_status
 
 from support import (
     build_review_report,
@@ -452,12 +453,35 @@ env_allow = []
                 ]
             )
             accepted = dispatch(root, arguments)
+            self.assertRegex(accepted["approval"]["source_digest"], r"^[0-9a-f]{64}$")
             receipt = accepted["delivery_receipt"]
             self.assertEqual(receipt["lifecycle"], "accepted")
             self.assertEqual(receipt["acceptance"]["status"], "accepted")
             self.assertEqual(receipt["release"]["status"], "not-evaluated")
             self.assertEqual(receipt["production"]["status"], "not-evaluated")
             self.assertEqual(receipt["next_action"]["id"], "delivery-complete")
+            accepted_validation_status = receipt["validation"]["status"]
+
+            git(root, "add", ".dls")
+            git(root, "commit", "-m", "record accepted DLS metadata")
+            metadata_only = delivery_receipt(root, change_id="C001")
+            self.assertEqual(metadata_only["lifecycle"], "accepted")
+            self.assertEqual(metadata_only["acceptance"]["status"], "accepted")
+            self.assertEqual(metadata_only["review"]["status"], "review-clear")
+            self.assertEqual(
+                metadata_only["validation"]["status"], accepted_validation_status
+            )
+            self.assertEqual(
+                metadata_only["next_action"]["id"], "delivery-complete"
+            )
+            self.assertFalse(status(root, change_id="C001")["review_stale"])
+            self.assertTrue(check(root, change_id="C001", gate="all")["ok"])
+            accepted_status = delivery_status(root, change_id="C001")
+            self.assertEqual(accepted_status["next_action"]["id"], "delivery-complete")
+            self.assertEqual(accepted_status["candidate"]["status"], "accepted")
+            self.assertEqual(accepted_status["candidate_head"], head_sha)
+            self.assertEqual(accepted_status["review"]["status"], "completed")
+            self.assertEqual(accepted_status["review"]["verdict"], "review-clear")
 
             (root / "README.md").write_text("# Changed after acceptance\n", encoding="utf-8")
             git(root, "add", "README.md")

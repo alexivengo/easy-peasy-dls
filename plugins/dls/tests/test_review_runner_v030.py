@@ -1001,11 +1001,18 @@ env_allow = []
                         pack_path=None,
                         operation_id="another-root",
                     )
-                    self.assertEqual(duplicate["status"], "running")
-                    self.assertEqual(
-                        duplicate["next_action"]["id"],
-                        "wait-review",
-                    )
+                    # The first runner may finish between the read-only status
+                    # check and this duplicate call on a loaded CI host.  Both
+                    # outcomes satisfy single-flight as long as no second lane
+                    # is launched (asserted from the call counter below).
+                    self.assertIn(duplicate["status"], {"running", "completed"})
+                    if duplicate["status"] == "running":
+                        self.assertEqual(
+                            duplicate["next_action"]["id"],
+                            "wait-review",
+                        )
+                    else:
+                        self.assertTrue(duplicate["review_result_path"])
                     completed = first.result(timeout=20)
             finally:
                 self._restore_path(original)

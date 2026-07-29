@@ -2,7 +2,7 @@
 
 Срез: 29 июля 2026 года
 
-Текущая линия: `v0.9.1`
+Текущая линия: `v0.9.2`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
@@ -175,6 +175,19 @@ upstream требует `rebase-after-dependency` до появления его
 Exit criteria v0.9.1: реальный EPIC-01 review восстанавливается с тем же
 operation ID, без нового model attempt и без изменения product source; будущий
 final-full не получает checkout и не обрезает coverage молча.
+
+## v0.9.2 — acceptance portability и implementation fail-fast
+
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| M60 | Must-be / P0 | Terminal status coherence | Metadata-only descendant сохраняет accepted lifecycle, review-clear и exact accepted evidence |
+| M63 | Must-be / P0 | Accepted revision dependency | `accepted-in-base` проверяет ancestry принятого reviewed SHA, а не последующего DLS metadata HEAD |
+| P34 | Performance / P0 | Bounded implementation preflight | Draft, approval и dependency boundaries останавливают Plan Mode до чтения product source и baseline tests |
+
+Exit criteria v0.9.2: реальный EPIC-01 остаётся accepted после переносимых
+`.dls/**`-коммитов, EPIC-02a больше не получает ложный dependency blocker, а
+неподтверждённая standard/critical definition возвращает компактный
+`approve-definition` без context manifest.
 
 ## Следующая волна v0.10.0: UI/UX Attractive pilot
 

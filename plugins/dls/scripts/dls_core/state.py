@@ -12,7 +12,13 @@ from typing import Any, Callable
 
 from .errors import IntegrityError, UsageError
 from .io import FileLock, atomic_write_json, read_json, sha256_bytes, utc_now
-from .repo import git_head, package_digest
+from .repo import (
+    git_head,
+    git_product_tree_digest,
+    git_source_dirty_paths,
+    package_digest,
+    run_git,
+)
 
 WORK_KINDS = {"feature", "bug", "chore", "spike", "hotfix"}
 CONTROL_LEVELS = {"routine", "standard", "critical"}
@@ -885,8 +891,46 @@ def derived_approval_statuses(root: Path, state: dict[str, Any]) -> list[dict[st
         elif decision in {"definition", "design", "architecture"} and dependency_drift:
             item["status"] = "stale"
             item["stale_reason"] = "dependency-definition-digest-changed"
-        if decision == "accept" and item.get("git_sha") != head:
-            item["status"] = "stale"
-            item["stale_reason"] = "git-head-changed"
+        if decision == "accept":
+            accepted_sha = item.get("git_sha")
+            if item.get("object_digest") != definition_digest:
+                item["status"] = "stale"
+                item["stale_reason"] = "authored-content-digest-changed"
+            elif (
+                accepted_sha is None
+                and head is None
+                and state.get("control_level") == "routine"
+            ):
+                # Preserve the existing non-Git routine path.  Exact-revision
+                # proof remains mandatory for standard and critical work.
+                pass
+            elif not isinstance(accepted_sha, str) or not accepted_sha or not head:
+                item["status"] = "stale"
+                item["stale_reason"] = "accepted-revision-unavailable"
+            elif run_git(
+                root,
+                "merge-base",
+                "--is-ancestor",
+                accepted_sha,
+                head,
+                check=False,
+            ).returncode != 0:
+                item["status"] = "stale"
+                item["stale_reason"] = "git-history-diverged"
+            else:
+                accepted_source_digest = item.get("source_digest")
+                if not isinstance(accepted_source_digest, str):
+                    # Legacy state v1 approvals did not persist this field.
+                    accepted_source_digest = git_product_tree_digest(root, accepted_sha)
+                current_source_digest = git_product_tree_digest(root, head)
+                if not accepted_source_digest or not current_source_digest:
+                    item["status"] = "stale"
+                    item["stale_reason"] = "product-source-unavailable"
+                elif accepted_source_digest != current_source_digest:
+                    item["status"] = "stale"
+                    item["stale_reason"] = "product-source-changed"
+                elif git_source_dirty_paths(root):
+                    item["status"] = "stale"
+                    item["stale_reason"] = "product-source-dirty"
         approvals.append(item)
     return approvals

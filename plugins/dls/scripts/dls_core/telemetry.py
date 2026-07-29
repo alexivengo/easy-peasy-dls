@@ -15,7 +15,7 @@ from .errors import IntegrityError, LockError
 from .io import FileLock, atomic_write_json, read_json, safe_resolve, utc_now
 from .operations import _codex_usage_from_output, _validate_review_pack
 from .repo import git_head
-from .state import StateStore
+from .state import StateStore, derived_approval_statuses
 from .worktrees import resolve_registered_worktree
 
 METRICS_CONTRACT = "dls-review-metrics/v1"
@@ -1051,7 +1051,32 @@ def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
         and review.get("candidate_head") == candidate.get("current_head")
     )
     state = StateStore(owner).load(change_id)
-    if review_is_current and review.get("review_result_path"):
+    current_acceptance = next(
+        (
+            item
+            for item in reversed(derived_approval_statuses(owner, state))
+            if item.get("decision") == "accept" and item.get("status") == "current"
+        ),
+        None,
+    )
+    accepted_head = (
+        current_acceptance.get("git_sha")
+        if current_acceptance is not None
+        else None
+    )
+    accepted_review = next(
+        (
+            item
+            for item in reversed(state.get("reviews", []))
+            if isinstance(item, dict)
+            and item.get("kind") == "result"
+            and item.get("head_sha") == accepted_head
+        ),
+        None,
+    )
+    if current_acceptance is not None:
+        stage = "acceptance"
+    elif review_is_current and review.get("review_result_path"):
         stage = "acceptance" if review.get("verdict") == "review-clear" else "review"
     elif review_is_current or candidate.get("prepared"):
         stage = "review"
@@ -1073,6 +1098,11 @@ def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
     )
     if readiness["next_action"] is not None:
         next_action = readiness["next_action"]
+    elif current_acceptance is not None:
+        next_action = {
+            "id": "delivery-complete",
+            "detail": "accepted product revision remains current",
+        }
     elif (
         stage == "definition"
         and candidate.get("run_id") is None
@@ -1092,7 +1122,9 @@ def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
         "head_sha": git_head(owner),
         "current_head": candidate.get("current_head"),
         "candidate_head": (
-            review.get("candidate_head")
+            accepted_head
+            if current_acceptance is not None
+            else review.get("candidate_head")
             if review_is_current
             else candidate.get("candidate_head")
         ),
@@ -1107,18 +1139,34 @@ def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
             else candidate.get("prepared", False)
         ),
         "candidate": {
-            "status": candidate.get("status"),
-            "phase": candidate.get("phase"),
+            "status": (
+                "accepted" if current_acceptance is not None else candidate.get("status")
+            ),
+            "phase": (
+                "accepted" if current_acceptance is not None else candidate.get("phase")
+            ),
             "review_id": (
-                review.get("review_id")
+                accepted_review.get("review_id")
+                if accepted_review is not None
+                else review.get("review_id")
                 if review_is_current
                 else candidate.get("review_id")
             ),
         },
         "review": {
-            "status": review.get("status"),
-            "review_id": review.get("review_id"),
-            "verdict": review.get("verdict"),
+            "status": (
+                "completed" if accepted_review is not None else review.get("status")
+            ),
+            "review_id": (
+                accepted_review.get("review_id")
+                if accepted_review is not None
+                else review.get("review_id")
+            ),
+            "verdict": (
+                accepted_review.get("verdict")
+                if accepted_review is not None
+                else review.get("verdict")
+            ),
         },
         "usage_status": metrics.get("usage_status"),
         "cache_bytes": cache["bytes"],

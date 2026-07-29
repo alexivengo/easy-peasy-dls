@@ -219,6 +219,7 @@ def _review_projection(
     *,
     head_sha: str | None,
     source_clean: bool,
+    accepted_head_sha: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, bool]:
     entries = [
         item
@@ -249,7 +250,7 @@ def _review_projection(
     findings = [item for item in report.get("findings", []) if isinstance(item, dict)]
     current = bool(
         head_sha
-        and report.get("head_sha") == head_sha
+        and report.get("head_sha") in {head_sha, accepted_head_sha}
         and source_clean
     )
     historical_counts = Counter({"blocker": 0, "should-fix": 0, "note": 0})
@@ -282,10 +283,13 @@ def _review_projection(
 def _validation_projection(
     root: Path,
     state: dict[str, Any],
+    *,
+    proof_head_sha: str | None = None,
 ) -> dict[str, Any]:
     config = load_config(root)
     required = list(config.get("policy", {}).get("review_required_commands", []))
     current_head = git_head(root)
+    validation_head = proof_head_sha or current_head
     current_source_digest = git_source_snapshot_digest(root)
     latest_pass: dict[str, tuple[str, dict[str, Any]]] = {}
     for relative in reversed(state.get("evidence", [])):
@@ -298,8 +302,11 @@ def _validation_projection(
         extra = record.get("extra") if isinstance(record.get("extra"), dict) else {}
         if (
             command_id in required
-            and record.get("git_sha") == current_head
-            and record.get("source_digest") == current_source_digest
+            and record.get("git_sha") == validation_head
+            and (
+                validation_head != current_head
+                or record.get("source_digest") == current_source_digest
+            )
             and record.get("exit_code") == 0
             and not extra.get("timed_out", False)
             and not extra.get("output_overflow", False)
@@ -502,18 +509,27 @@ def delivery_receipt(root: Path, *, change_id: str) -> dict[str, Any]:
         for status, count in ticket_counts.items()
         if status in {"implemented", "validated", "done"}
     )
-    validation = _validation_projection(owner, state)
+    accepted_current = bool(
+        acceptance_status == "approved"
+        and acceptance_approval is not None
+        and source_clean
+    )
+    accepted_head_sha = (
+        acceptance_approval.get("git_sha")
+        if accepted_current and acceptance_approval is not None
+        else None
+    )
+    validation = _validation_projection(
+        owner,
+        state,
+        proof_head_sha=accepted_head_sha,
+    )
     review, latest_report, review_current = _review_projection(
         owner,
         state,
         head_sha=head_sha,
         source_clean=source_clean,
-    )
-    accepted_current = bool(
-        acceptance_status == "approved"
-        and acceptance_approval is not None
-        and acceptance_approval.get("git_sha") == head_sha
-        and source_clean
+        accepted_head_sha=accepted_head_sha,
     )
     if accepted_current:
         dependency_stage = "acceptance"

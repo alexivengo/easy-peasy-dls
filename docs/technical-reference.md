@@ -134,6 +134,25 @@ conditions содержит оба SHA и digest конкретной dependency
 такое исключение. Изменение dependency contract входит в definition digest и
 инвалидирует approval, context, candidate contract и ReviewPack.
 
+После `v0.9.1` обнаружился portability-дефект: acceptance ошибочно сравнивался
+с текущим commit SHA владельца change. Поэтому последующий коммит только с
+`.dls/**` делал уже принятый product candidate stale и ложно блокировал
+`accepted-in-base`. Исправленный контракт хранит DLS-owned digest принятого
+product tree без `.dls` и для legacy approvals вычисляет его из принятого SHA.
+Acceptance остаётся current только если принятый SHA является предком текущего
+owner HEAD, authored definition не менялась, product tree совпадает и рабочие
+product files чисты. Dependency проверяет ancestry именно принятого SHA, а не
+более нового metadata HEAD. Product change, divergence и dirty source по-прежнему
+инвалидируют acceptance.
+
+Implementation workflow теперь fail-fast до semantic discovery. В standard и
+critical задаче, включая Plan Mode, сначала выполняются только plugin provenance
+и один `delivery-status`; implementation context строится лишь после разрешающего
+typed action. `continue-definition`, dependency/approval/rebase boundary или
+другой blocker завершают preflight до чтения product source, тестов и длинной
+ручной археологии state. Это удерживает модельный контекст на продуктовой работе,
+а механическое объяснение границы оставляет DLS.
+
 `worktree create` сначала разрешает explicit base ref в exact commit, затем
 вызывает фиксированный `git worktree add -b ...` argv. Dirty caller checkout не
 используется как источник diff и не блокирует создание. Default path и branch —
