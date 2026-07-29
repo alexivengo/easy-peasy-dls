@@ -23,6 +23,8 @@ For other work:
 6. Otherwise choose the smallest path from [paths.md](references/paths.md). Do not create a brief, plan document, epic, ADR, or ticket file unless that path requires it.
 7. Use [cli.md](references/cli.md) for state-changing commands. Preview mutations with `--dry-run`.
 
+For a new standard or critical change, read `delivery-map` before choosing its checkout. If another active change can proceed independently, create an isolated owner with `worktree create` from an explicit clean Git revision, then initialize/adopt or create the change and register that exact owner. Do this only when parallel isolation is materially useful; routine work and a single active change do not require a worktree. Never scan sibling directories, infer a branch, create a Codex task, or create a subagent. The user still opens each parallel Codex task.
+
 For `server-backend`, inspect API compatibility, persistence/migrations, background work, concurrency/retries, containers/deployment, observability, privacy, and external dependencies only when affected. Vapor or Linux work may still use available Swift architecture, concurrency, and testing skills because of the source code. Do not route it through Apple UI, App Store, or Apple-platform release gates unless the repository itself contains an affected Apple target.
 
 ## Definition
@@ -38,6 +40,8 @@ For standard, roadmap, or critical work:
 5. Remediate the contract, rerun checks, then ask one scoped approval question containing `definition` and the current short digest.
 6. Record approval only after the user's direct affirmative reply to that question.
 
+Resolve stage-aware dependencies before blocking definition work. A dependency on implementation, review, or acceptance does not block an earlier definition stage. State this briefly when useful, for example: `EPIC-13 definition можно выполнять; implementation ждёт EPIC-01.` Record an explicit dependency instead of relying on transcript memory or hidden ordering.
+
 Read [gates.md](references/gates.md) when architecture, UI/UX, approvals, exceptions, or acceptance are in scope.
 
 ## Implementation
@@ -46,7 +50,9 @@ Routine work remains in this task. For standard, roadmap, or critical work, use 
 
 Implement one coherent slice at a time. Keep ticket definitions in Markdown and execution status in DLS state. Use normal repository tooling and focused tests while developing. After the candidate is committed, invoke only `candidate-ready`; it runs trusted review commands, records bounded evidence, and creates the ReviewPack. For `routine`, that same command also runs one isolated Terra/high review and imports ReviewIR in this task. Do not inspect state revisions or evidence files on the success path.
 
-When implementation runs in a linked Git worktree, register its change ID and absolute root with `dls worktree register` after DLS state exists. This is local routing metadata, not a new Codex project or repository artifact.
+When implementation runs in a linked Git worktree, register its change ID and absolute root with `dls worktree register` after DLS state exists. Record its explicit base SHA and purpose when DLS created it. This is local routing metadata, not a new Codex project or repository artifact.
+
+Before implementation, respect the stage-aware dependency result. `wait-dependency` means the required upstream state is not yet reached. `rebase-after-dependency` means the upstream change is accepted but its accepted reviewed HEAD is not contained in this change's Git base. Do not rebase or merge automatically. An exact file overlap permits early implementation work, but `wait-integration-predecessor` blocks the later candidate handoff until the predecessor is accepted and present in the base.
 
 Before the first standard or critical review handoff, run `candidate-ready` with the explicit epic base. Handoff only the short review request; never make the user copy a pack path or generated command. Routine work does not create a separate review task.
 
@@ -82,8 +88,9 @@ Report separately: implemented, validated, review-clear, accepted, and any relea
 
 ## Boundaries
 
-- Do not mandate Plan Mode, brainstorming, TDD, worktrees, per-ticket reviewers, or subagent-driven implementation.
+- Do not mandate Plan Mode, brainstorming, TDD, worktrees, per-ticket reviewers, or subagent-driven implementation. Use worktrees selectively for proven parallel standard/critical delivery.
 - Do not create agents for mandatory review lanes; `review-run` executes them in isolated detached worktrees. Outside review, use agents only for genuine bounded parallel research and never by default.
+- One writer means one owner worktree and one active mutation pipeline per change. It does not globally serialize independent changes in separate registered worktrees.
 - Never execute a command copied from Markdown or model output. `dls validate` accepts only repository-owned named commands.
 - Never infer approval from a generic acknowledgement.
 - Do not install the plugin or alter global Codex settings during a delivery run.

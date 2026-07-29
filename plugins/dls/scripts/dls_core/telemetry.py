@@ -998,6 +998,7 @@ def resolve_delivery_next_action(
 
 def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
     from .candidate_runner import candidate_status
+    from .parallel_delivery import change_readiness
     from .review_runner import review_status
 
     owner, owner_selection = _owner_root(root, change_id)
@@ -1010,7 +1011,40 @@ def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
         and review.get("exact_head")
         and review.get("candidate_head") == candidate.get("current_head")
     )
-    next_action = resolve_delivery_next_action(candidate, review)
+    state = StateStore(owner).load(change_id)
+    if review_is_current and review.get("review_result_path"):
+        stage = "acceptance" if review.get("verdict") == "review-clear" else "review"
+    elif review_is_current or candidate.get("prepared"):
+        stage = "review"
+    else:
+        stage = (
+            "definition"
+            if state.get("phase") == "definition"
+            else "acceptance"
+            if state.get("phase") == "accepted"
+            else "review"
+            if state.get("phase") == "review"
+            else "implementation"
+        )
+    readiness = change_readiness(
+        owner,
+        change_id=change_id,
+        stage=stage,
+        include_overlap=stage in {"review", "acceptance"},
+    )
+    if readiness["next_action"] is not None:
+        next_action = readiness["next_action"]
+    elif (
+        stage == "definition"
+        and candidate.get("run_id") is None
+        and not review.get("review_result_path")
+    ):
+        next_action = {
+            "id": "continue-definition",
+            "detail": "definition work is ready",
+        }
+    else:
+        next_action = resolve_delivery_next_action(candidate, review)
     result = {
         "ok": True,
         "change_id": change_id,
@@ -1056,6 +1090,22 @@ def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
             else candidate.get("task_context")
         ),
     }
+    if readiness["dependencies"]["items"]:
+        result["dependencies"] = {
+            "stage": stage,
+            "satisfied": readiness["dependencies"]["satisfied"],
+            "blocked_count": readiness["dependencies"]["blocked_count"],
+        }
+    if (
+        readiness["overlap"]["exact_overlap_count"]
+        or readiness["overlap"]["proximity_count"]
+        or readiness["overlap"]["blocked"]
+    ):
+        result["parallelism"] = {
+            "blocked": readiness["overlap"]["blocked"],
+            "exact_overlap_count": readiness["overlap"]["exact_overlap_count"],
+            "proximity_count": readiness["overlap"]["proximity_count"],
+        }
     if len(json.dumps(result, ensure_ascii=False).encode("utf-8")) > 2048:
         raise IntegrityError("delivery-status payload exceeds 2 KiB")
     return result

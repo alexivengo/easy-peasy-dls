@@ -70,7 +70,7 @@ from .telemetry import (
     review_task_context,
     unavailable_task_context,
 )
-from .worktrees import resolve_registered_worktree
+from .worktrees import resolve_change_root
 
 SEMANTIC_MODEL = "gpt-5.6-sol"
 SPECIALIST_MODEL = "gpt-5.6-terra"
@@ -479,12 +479,9 @@ def _codex_failure_reason(output: bytes, *, exit_code: int | None) -> str:
 
 def _owner_root(root: Path, change_id: str) -> tuple[Path, str]:
     candidate = root.resolve()
-    if (
-        (candidate / ".dls" / "config.toml").is_file()
-        and StateStore(candidate).path(change_id).is_file()
-    ):
-        return candidate, "current-checkout"
-    return resolve_registered_worktree(candidate, change_id), "registered-worktree"
+    owner = resolve_change_root(candidate, change_id)
+    selection = "current-checkout" if owner == candidate else "registered-worktree"
+    return owner, selection
 
 
 def _pack_for_review(
@@ -3383,6 +3380,90 @@ def review_run(
     emit("started", operation_id=effective_operation_id)
     explicit_pack = Path(pack_path).is_absolute() if pack_path else False
     if not explicit_pack:
+        # Check the state-owned single-flight lease before assembling the more
+        # expensive status projection. A short native lane must not finish in
+        # the time spent building telemetry and let a concurrent caller enter
+        # finalization with a different root operation ID.
+        quick_candidate = root.resolve()
+        if (
+            (quick_candidate / ".dls" / "config.toml").is_file()
+            and StateStore(quick_candidate).path(change_id).is_file()
+        ):
+            # This first read is deliberately registry-free. If the caller is
+            # already inside the running review's owner checkout, Git/worktree
+            # validation is slow enough for very short lanes to finish before
+            # a duplicate observes their lease. A live local lease is always
+            # safe to wait on; when no lease exists, the normal owner resolver
+            # below still enforces registry ownership before launching work.
+            quick_owner = quick_candidate
+            quick_owner_selection = "current-checkout"
+        else:
+            quick_owner, quick_owner_selection = _owner_root(root, change_id)
+        quick_state = StateStore(quick_owner).load(change_id)
+        active_attempt = next(
+            (
+                item
+                for item in reversed(quick_state.get("reviews", []))
+                if isinstance(item, dict)
+                and item.get("status") == "running"
+                and isinstance(item.get("review_id"), str)
+                and _process_is_alive(item.get("runner_pid"))
+            ),
+            None,
+        )
+        if active_attempt is not None:
+            active_review_id = active_attempt["review_id"]
+            active_pack = next(
+                (
+                    item
+                    for item in reversed(quick_state.get("reviews", []))
+                    if isinstance(item, dict)
+                    and item.get("kind") == "pack"
+                    and item.get("review_id") == active_review_id
+                ),
+                None,
+            )
+            quick_head = git_head(quick_owner)
+            active_head = (
+                active_pack.get("head_sha") if isinstance(active_pack, dict) else None
+            )
+            exact_head = bool(active_head and active_head == quick_head)
+            running = {
+                "ok": True,
+                "changed": False,
+                "dry_run": dry_run,
+                "change_id": change_id,
+                "state_revision": quick_state["state_revision"],
+                "operation_id": effective_operation_id,
+                "owner_root": str(quick_owner),
+                "owner_selection": quick_owner_selection,
+                "current_head": quick_head,
+                "candidate_head": active_head,
+                "exact_head": exact_head,
+                "prepared": exact_head,
+                "review_id": active_review_id,
+                "status": "running",
+                "verdict": None,
+                "review_result_path": None,
+                "remediation_manifest_path": None,
+                "review_pack_path": (
+                    active_pack.get("pack_path")
+                    if isinstance(active_pack, dict)
+                    else None
+                ),
+                "pack_created": False,
+                "next_action": {
+                    "id": "wait-review",
+                    "detail": "review pipeline is active",
+                },
+            }
+            emit(
+                "completed",
+                review_id=active_review_id,
+                status="running",
+                next_action="wait-review",
+            )
+            return annotate_handoff(running)
         existing_status = review_status(root, change_id=change_id)
         task_context = existing_status.get("task_context") or task_context
         if (

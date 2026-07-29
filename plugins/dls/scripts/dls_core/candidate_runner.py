@@ -409,6 +409,7 @@ def _run_contract(
     manifest_digest: str | None,
     policy_digest: str,
     profile_digest: str,
+    delivery_readiness_digest: str,
     statuses: dict[str, str],
 ) -> tuple[str, str]:
     value = {
@@ -421,6 +422,7 @@ def _run_contract(
         "manifest_digest": manifest_digest,
         "policy_digest": policy_digest,
         "profile_digest": profile_digest,
+        "delivery_readiness_digest": delivery_readiness_digest,
         "finding_dispositions": statuses,
     }
     digest = sha256_bytes(
@@ -609,6 +611,27 @@ def _candidate_ready_impl(
         raise IntegrityError("Candidate readiness requires Git")
     store = StateStore(owner)
     state = store.load(change_id)
+    from .parallel_delivery import change_readiness
+
+    delivery_readiness = change_readiness(
+        owner,
+        change_id=change_id,
+        stage="review",
+        include_overlap=True,
+    )
+    if not delivery_readiness["ready"]:
+        action = delivery_readiness["next_action"] or {
+            "id": "wait-dependency",
+            "detail": "delivery dependency is not satisfied",
+        }
+        return _blocked(
+            change_id=change_id,
+            owner=owner,
+            owner_selection=owner_selection,
+            action=action["id"],
+            detail=action["detail"],
+            dry_run=dry_run,
+        )
     dirty = git_source_dirty_paths(owner)
     if dirty:
         return _blocked(
@@ -770,6 +793,7 @@ def _candidate_ready_impl(
         manifest_digest=manifest_digest,
         policy_digest=policy_digest,
         profile_digest=profile_digest,
+        delivery_readiness_digest=delivery_readiness["digest"],
         statuses=statuses,
     )
     effective_operation_id = operation_id or f"candidate-ready:{run_id}"
@@ -828,6 +852,11 @@ def _candidate_ready_impl(
         "status": "projected",
         "phase": "preflight",
         "review_mode": review_mode,
+        "delivery_readiness": {
+            "digest": delivery_readiness["digest"],
+            "dependency_digest": delivery_readiness["dependencies"]["digest"],
+            "overlap_digest": delivery_readiness["overlap"]["digest"],
+        },
         "head_sha": head_sha,
         "commands": commands,
         "finding_counts": {
@@ -855,6 +884,7 @@ def _candidate_ready_impl(
             "head_sha": head_sha,
             "source_digest": source_digest,
             "definition_digest": definition_digest,
+            "delivery_readiness_digest": delivery_readiness["digest"],
             "review_base_sha": str(effective_base),
             "review_mode": review_mode,
             "candidate_run_contract": CANDIDATE_RUN_CONTRACT,
@@ -1098,12 +1128,20 @@ def _candidate_ready_impl(
         owner,
         config=load_config(owner),
     )["digest"]
+    current_delivery_readiness = change_readiness(
+        owner,
+        change_id=change_id,
+        stage="review",
+        include_overlap=True,
+    )
     if (
         git_head(owner) != head_sha
         or git_source_snapshot_digest(owner) != source_digest
         or current_definition_digest(owner, state) != definition_digest
         or current_policy_digest != policy_digest
         or current_profile_digest != profile_digest
+        or not current_delivery_readiness["ready"]
+        or current_delivery_readiness["digest"] != delivery_readiness["digest"]
     ):
         store.update_candidate_run(
             change_id,
@@ -1295,6 +1333,14 @@ def candidate_status(
     owner, owner_selection = _owner_root(root, change_id)
     state = StateStore(owner).load(change_id)
     current_head = git_head(owner)
+    from .parallel_delivery import change_readiness
+
+    delivery_readiness = change_readiness(
+        owner,
+        change_id=change_id,
+        stage="review",
+        include_overlap=True,
+    )
     runs = [item for item in state.get("candidate_runs", []) if isinstance(item, dict)]
     if operation_id is not None:
         runs = [item for item in runs if item.get("operation_id") == operation_id]
@@ -1320,13 +1366,16 @@ def candidate_status(
             "candidate_head": None,
             "exact_head": False,
             "prepared": False,
-            "next_action": _next_action("run-candidate-ready", "no candidate run exists"),
+            "next_action": (
+                delivery_readiness["next_action"]
+                or _next_action("run-candidate-ready", "no candidate run exists")
+            ),
             "task_context": unavailable_task_context("implementation"),
         }
     selected = runs[-1]
     exact_head = selected.get("head_sha") == current_head
     prepared = False
-    if exact_head and selected.get("status") == "completed":
+    if exact_head and selected.get("status") == "completed" and delivery_readiness["ready"]:
         prepared = _exact_head_pack(
             owner,
             state,
@@ -1364,6 +1413,24 @@ def candidate_status(
         prepared=prepared,
         task_context=inspected_context,
     )
+    if delivery_readiness["dependencies"]["items"]:
+        response["dependencies"] = {
+            "satisfied": delivery_readiness["dependencies"]["satisfied"],
+            "blocked_count": delivery_readiness["dependencies"]["blocked_count"],
+        }
+    if (
+        delivery_readiness["overlap"]["exact_overlap_count"]
+        or delivery_readiness["overlap"]["proximity_count"]
+        or delivery_readiness["overlap"]["blocked"]
+    ):
+        response["parallelism"] = {
+            "blocked": delivery_readiness["overlap"]["blocked"],
+            "exact_overlap_count": delivery_readiness["overlap"]["exact_overlap_count"],
+            "proximity_count": delivery_readiness["overlap"]["proximity_count"],
+        }
+    if not delivery_readiness["ready"]:
+        response["prepared"] = False
+        response["next_action"] = delivery_readiness["next_action"]
     if not diagnostic:
         for key in ("active_command", "failed_command"):
             if response.get(key) is None:

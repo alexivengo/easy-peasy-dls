@@ -27,7 +27,14 @@ Repository-owned команды задаются argv arrays в `.dls/config.tom
 
 `dls adopt` регистрирует совместимый существующий change/epic package без переписывания authored files.
 
-`dls worktree register` явно связывает change ID с linked worktree в локальной metadata общего Git common-dir. Это позволяет безопасно направлять короткую review-команду из основного Codex-проекта, не добавляя каждый worktree как отдельный проект.
+`dls worktree create` создаёт selective linked worktree от явно разрешённого
+Git SHA; `dls worktree register` связывает change ID с owner checkout в
+локальной metadata общего Git common-dir. `dls dependency` хранит stage-aware
+same-repository зависимости, а bounded `dls delivery-map` показывает, какие
+changes можно вести параллельно. Один writer остаётся scoped к change/worktree,
+поэтому независимые validation/review pipelines не получают глобальную
+блокировку. DLS не создаёт Codex-задачи, не сканирует соседние ветки и не делает
+rebase/merge автоматически.
 
 Actionable `not-clear` import атомарно сохраняет ReviewIR и canonical
 digest-bound remediation manifest. `dls remediation-start` проверяет этот
@@ -64,7 +71,7 @@ Delivery Receipt: краткий русский Markdown и bounded JSON одн�
 ## Структура
 
 - `.codex-plugin/plugin.json` — plugin metadata;
-- `skills/` — компактные explicit routers и одноуровневые references;
+- `skills/` — компактные guarded routers и одноуровневые references;
 - `scripts/dls.py` — portable entry point;
 - `scripts/dls_core/` — atomic state, gates, context, evidence и review;
 - `assets/templates/` — условные authored contracts;

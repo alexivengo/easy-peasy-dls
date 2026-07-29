@@ -13,7 +13,9 @@ dls init
 dls doctor
 dls new
 dls adopt
-dls worktree register|list|verify|unregister
+dls worktree create|register|list|verify|unregister
+dls dependency set|list|remove
+dls delivery-map
 dls status
 dls check
 dls context
@@ -52,7 +54,11 @@ Rules:
 - Evidence summaries must be concise and secret-free. Large raw output belongs only in ignored cache and is bounded by the runner.
 - Resolve this CLI from the loaded skill location as `<plugin-root>/scripts/dls.py`. Never probe `PATH` for `dls`.
 - Review model runs store the bounded final structured result separately from the JSONL diagnostic transcript. Transcript truncation is diagnostic metadata, not a review failure.
-- `dls worktree register CHANGE_ID /absolute/path` stores local routing under the repository's Git common-dir. Registration requires the same Git repository, a real linked worktree, unchanged branch identity, initialized DLS state, and the named change.
+- `dls worktree create CHANGE_ID --base REF --purpose definition|implementation` resolves the exact base commit before mutation and creates only the requested linked worktree. It never initializes/adopts the change, registers it, rebases it, deletes it, or searches other branches. The skill completes initialization and registration after state exists.
+- `dls worktree register CHANGE_ID /absolute/path [--base REF] [--purpose ...]` stores local routing under the repository's Git common-dir. Registration requires the same Git repository, a real linked worktree, unchanged branch identity, initialized DLS state, and the named change.
+- `dls dependency set CHANGE_ID --on OTHER --blocks STAGE --requires STATE --rationale TEXT` records a stage-aware same-repository dependency. Earlier stages continue. `accepted-in-base` requires current human acceptance plus Git ancestry, unless an exact scoped human exception names both SHAs and the dependency digest.
+- `dls dependency list|remove` are deterministic state operations. Dependency changes stale the dependent definition approval, context, candidate contract, and ReviewPack.
+- `dls delivery-map` is read-only and bounded. It shows active registered changes, dependency readiness, overlap counts, safe parallel groups, and one typed next action without local paths unless `--verbose` is explicit.
 - `dls review-start CHANGE_ID` uses the latest unfinished ReviewPack in the current checkout when that change exists there; otherwise it may resolve only an explicit valid registry binding. It never initializes/adopts, scans sibling directories, or infers branches. An absolute `--pack` remains the explicit one-off cross-checkout selector.
 - `dls remediation-start CHANGE_ID` verifies and returns the canonical manifest created atomically with the latest actionable ReviewIR. It is read-only and may route to a registered owner worktree.
 - `dls remediation-recover CHANGE_ID [--review-id ID]` is the explicit legacy-only repair path. It validates exact Git objects, ancestry, definition, ReviewPack and ReviewIR digests without switching the checkout, then creates the missing canonical manifest.

@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
-Срез: 28 июля 2026 года
-Текущая линия: `v0.8.1`
+Срез: 29 июля 2026 года
+Текущая линия: `v0.9.0`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -9,16 +9,16 @@
 «что делать следующим», а этот документ — «что вообще существует, планируется
 или намеренно не будет реализовано».
 
-Всего отслеживается 147 пунктов:
+Всего отслеживается 152 пункта:
 
-- 62 Must-be: `M01–M62`;
-- 39 Performance: `P01–P39`;
+- 64 Must-be: `M01–M64`;
+- 42 Performance: `P01–P42`;
 - 10 Attractive: `A01–A10`;
 - 12 Indifferent/premature: `I01–I12`;
 - 24 Reverse anti-features: `R01–R24`.
 
 Исходный KANO-снимок содержал 129 пунктов: все они сохранены под прежними ID.
-К ним добавлены 18 публичных возможностей `M51–M62` и `P34–P39`. Удалять ID
+К ним добавлены 23 публичные возможности `M51–M64` и `P34–P42`. Удалять ID
 нельзя: изменившееся решение помечается как заменённое, а не исчезает из карты.
 
 ## Статусы
@@ -77,8 +77,8 @@
 | M35 | Review не завершается без result path | ✅ | P0 | Успех требует canonical `review_result_path`; actionable result — remediation path |
 | M36 | Findings lifecycle | ✅ | P0 | Implementer ставит addressed/note; verified принадлежит independent review; waiver — человеку |
 | M37 | Latest-only remediation context | ✅ | P0 | Рабочий manifest строится только из последнего canonical ReviewIR |
-| M38 | UI/UX source prerequisite | 🟨 | P0 | Policy и approvals реализованы; реальный UI pilot перенесён в v0.8.1 |
-| M39 | Tiered UI policy | 🟨 | P0 | Tier 1 допускает precedent, Tier 2/3 требуют versioned artifact; реальный pilot перенесён в v0.8.1 |
+| M38 | UI/UX source prerequisite | 🟨 | P0 | Policy и approvals реализованы; реальный UI pilot перенесён в v0.9.1 |
+| M39 | Tiered UI policy | 🟨 | P0 | Tier 1 допускает precedent, Tier 2/3 требуют versioned artifact; реальный pilot перенесён в v0.9.1 |
 | M40 | Architecture decision до завершения SPEC | 🟨 | P0 | Critical E03 adoption и Draft/approval boundary дают backend preflight evidence; нужен полный approved definition/review lifecycle |
 | M41 | ADR только для долговечного решения | ✅ | P0 | ADR остаётся conditional artifact, а не ритуалом для каждого change |
 | M42 | Release/production evidence не подменяет review | ✅ | P0 | External gaps не блокируют code review без прямой ссылки на ticket DoD |
@@ -102,6 +102,8 @@
 | M60 | Candidate/review/delivery status из одного pack | ✅ | P0 | Exact HEAD, prior review и typed next action используют общий resolver |
 | M61 | Standalone native workspace provenance | ✅ | P0 | Native review запускается в clean exact-HEAD clone; owner-local `.dls` и попытки без workspace marker не входят в canonical provenance |
 | M62 | Indeterminate native recovery | ✅ | P0 | Transcript-verified prose не объявляется clean, не повторяет native call и обязательно проходит semantic reconciliation |
+| M63 | Stage-aware change dependencies | ✅ | P0 | Dependency блокирует только названную и последующие стадии; `accepted-in-base` проверяет human acceptance и Git ancestry |
+| M64 | Change-scoped one-writer | ✅ | P0 | Один owner и single-flight сохраняются внутри change, независимые worktrees не получают global lock |
 
 ## Performance — экономия времени, контекста и ручной работы
 
@@ -146,6 +148,9 @@
 | P37 | Controller/context telemetry | ✅ | P0 | Event counts, usage source и context metadata не читают содержимое сообщений |
 | P38 | Короткий handoff между задачами | ✅ | P0 | Передаётся одна пользовательская команда без manifest, SHA и paths |
 | P39 | Измерение targeted-review | 🟨 | P1 | Metrics содержат profile provenance; backend preflight намеренно не создаёт model usage, поэтому нужен approved review pilot |
+| P40 | Selective worktree preparation | ✅ | P1 | Parallel standard/critical owner создаётся от explicit SHA без sibling scan, rebase или autonomous task creation |
+| P41 | Overlap/conflict preflight | ✅ | P1 | Exact file overlap блокирует поздний candidate handoff, proximity остаётся advisory |
+| P42 | Active delivery map | ✅ | P1 | Bounded read-only карта показывает dependencies, parallel groups, integration order и один typed action на change |
 
 ## Attractive — полезно после стабилизации core
 
@@ -170,7 +175,7 @@
 | I02 | Большое количество runtime skills | 🧊 | P3 | Добавлять только по повторяющемуся use case |
 | I03 | SQLite state store | 🧊 | P3 | JSON + CAS соответствует solo workflow |
 | I04 | Full event sourcing | 🧊 | P3 | Maintenance cost выше текущей ценности |
-| I05 | Parallel state/product writers | 🧊 | P3 | Противоречит one-writer contract |
+| I05 | Concurrent writers одного change/state | 🧊 | P3 | One-writer запрещает конкурирующие mutations одного change, но не независимые changes в отдельных worktrees |
 | I06 | Generic lifecycle transition command | 🧊 | P3 | Typed commands безопаснее |
 | I07 | Generic render subsystem | 🧊 | P3 | Templates и derived projections достаточны |
 | I08 | Generic migration engine | 🧊 | P3 | Typed adopt/recovery безопаснее |
@@ -240,7 +245,14 @@
 - unsafe output и integrity drift получают terminal typed actions вместо
   бесконечного `resume-review`.
 
-### v0.9.0 — UI/UX и полный architecture lifecycle
+### v0.9.0 — dependency-aware parallel delivery
+
+- `M63`, `M64`: stage-aware dependencies и one-writer на change/worktree;
+- `P40`: selective worktree от explicit clean SHA;
+- `P41`: exact-file overlap сериализует candidate/integration, не раннюю работу;
+- `P42`: bounded delivery map без model calls и локальных paths.
+
+### v0.9.1 — UI/UX и полный architecture lifecycle
 
 - `M38–M39`: UI tiers и immutable design source на реальном change;
 - `M40`: approved critical definition/review lifecycle;

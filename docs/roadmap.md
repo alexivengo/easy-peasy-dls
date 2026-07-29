@@ -1,15 +1,15 @@
 # Roadmap Easy Peasy DLS
 
-Срез: 28 июля 2026 года
+Срез: 29 июля 2026 года
 
-Текущая линия: `v0.8.1`
+Текущая линия: `v0.9.0`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
 ручную работу и повтор контекста, Attractive добавляет удобство только после
 стабилизации основного цикла.
 
-Полный реестр всех 147 реализованных, запланированных, отложенных и намеренно
+Полный реестр всех 152 реализованных, запланированных, отложенных и намеренно
 исключённых возможностей находится в [карте возможностей](capability-catalog.md).
 Этот файл остаётся короткой выборкой ближайших волн, а не вторым каталогом.
 
@@ -29,6 +29,8 @@ Must-be ядро реализовано и защищается regression-те�
 - bounded review execution: risk budgets, compact context и ранняя остановка.
 - deterministic Delivery Receipt: read-only narrative и traceability одного
   change без model call и нового source of truth.
+- stage-aware parallel delivery: selective worktrees, explicit dependencies,
+  overlap preflight и one-writer на change вместо глобальной очереди.
 
 Ранее открытые gaps launcher/PATH, semantic write prevention, remediation
 launcher и единого review-ready handoff закрыты текущим CLI и skills.
@@ -147,7 +149,23 @@ native call, output/transcript digests остаются неизменными, 
 не создаёт verdict самостоятельно, а unsafe/integrity случаи получают terminal
 typed action без resume-loop.
 
-## Следующая волна v0.9.0: UI/UX Attractive pilot
+## v0.9.0 — dependency-aware parallel delivery
+
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| M63 | Must-be / P0 | Stage-aware dependencies | Definition, implementation, review и acceptance блокируются только с нужной стадии; `accepted-in-base` проверяет human acceptance и Git ancestry |
+| M64 | Must-be / P0 | Change-scoped one-writer | Single-flight и CAS остаются на change/worktree, а независимые changes не получают глобальную блокировку |
+| P40 | Performance / P1 | Selective worktree preparation | Standard/critical parallel change создаётся от explicit clean SHA, без sibling scan, rebase или autonomous task creation |
+| P41 | Performance / P1 | Overlap/conflict preflight | Exact file overlap сериализует поздний candidate handoff; proximity остаётся advisory |
+| P42 | Performance / P1 | Delivery map | Bounded read-only карта показывает active changes, dependencies, parallel groups, integration order и typed actions |
+
+Exit criteria v0.9.0: dirty/not-clear predecessor не блокирует независимую
+definition, implementation dependency возвращает `wait-dependency`, accepted
+upstream требует `rebase-after-dependency` до появления его HEAD в base, а два
+непересекающихся changes одновременно проходят candidate/review pipelines без
+глобального lock.
+
+## Следующая волна v0.9.1: UI/UX Attractive pilot
 
 - `M38–M39` — проверить Tier 1 precedent и Tier 2/3 versioned design artifact на
   реальном UI change;
@@ -181,7 +199,7 @@ Easy Peasy DLS не планирует:
 - model-authored shell, arbitrary command execution и скрытые hooks;
 - автоматический human approval или изменение глобальной модели;
 - release evidence как code-review blocker по умолчанию;
-- SQLite, event sourcing и parallel writers без доказанной необходимости.
+- SQLite, event sourcing и concurrent writers одного change/state.
 
 ## Как roadmap пересматривается
 

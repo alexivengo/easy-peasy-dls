@@ -420,6 +420,25 @@ def _render_markdown(receipt: dict[str, Any]) -> str:
             "",
         ]
     )
+    dependencies = receipt.get("dependencies", {})
+    parallelism = receipt.get("parallelism", {})
+    if dependencies.get("count", 0) or parallelism.get("exact_overlap_count", 0):
+        lines[-1:-1] = [
+            "## Координация",
+            "",
+            (
+                "- Dependencies: "
+                f"**{dependencies.get('satisfied_count', 0)}/"
+                f"{dependencies.get('count', 0)} satisfied**, "
+                f"{dependencies.get('blocked_count', 0)} blocking this stage"
+            ),
+            (
+                "- Overlap: "
+                f"{parallelism.get('exact_overlap_count', 0)} exact files / "
+                f"{parallelism.get('proximity_count', 0)} nearby path groups"
+            ),
+            "",
+        ]
     markdown = "\n".join(lines)
     if len(markdown.encode("utf-8")) > RECEIPT_MARKDOWN_MAX_BYTES:
         raise IntegrityError("Delivery Receipt Markdown exceeds 4 KiB")
@@ -497,6 +516,24 @@ def delivery_receipt(root: Path, *, change_id: str) -> dict[str, Any]:
         and source_clean
     )
     if accepted_current:
+        dependency_stage = "acceptance"
+    elif review_current and review.get("status") == "review-clear":
+        dependency_stage = "acceptance"
+    elif candidate.get("prepared") or review_current:
+        dependency_stage = "review"
+    elif definition_status == "approved":
+        dependency_stage = "implementation"
+    else:
+        dependency_stage = "definition"
+    from .parallel_delivery import change_readiness
+
+    delivery_readiness = change_readiness(
+        owner,
+        change_id=change_id,
+        stage=dependency_stage,
+        include_overlap=dependency_stage in {"review", "acceptance"},
+    )
+    if accepted_current:
         lifecycle = "accepted"
         acceptance_public_status = "accepted"
     else:
@@ -536,9 +573,13 @@ def delivery_receipt(root: Path, *, change_id: str) -> dict[str, Any]:
         }
         if accepted_current
         else (
-            review_readiness["next_action"]
-            if not source_clean
-            else resolve_delivery_next_action(candidate, review_readiness)
+            delivery_readiness["next_action"]
+            if delivery_readiness["next_action"] is not None
+            else (
+                review_readiness["next_action"]
+                if not source_clean
+                else resolve_delivery_next_action(candidate, review_readiness)
+            )
         )
     )
     safe_next_action = {
@@ -591,6 +632,39 @@ def delivery_receipt(root: Path, *, change_id: str) -> dict[str, Any]:
         "production": _stage_projection(
             latest_report, current=review_current, stage="production"
         ),
+        "dependencies": {
+            "stage": dependency_stage,
+            "contract_digest": delivery_readiness["dependencies"]["digest"],
+            "count": len(delivery_readiness["dependencies"]["items"]),
+            "satisfied_count": sum(
+                1
+                for item in delivery_readiness["dependencies"]["items"]
+                if item["satisfied"]
+            ),
+            "blocked_count": delivery_readiness["dependencies"]["blocked_count"],
+            "items": _bounded(
+                [
+                    {
+                        "change_id": item["change_id"],
+                        "blocks_stage": item["blocks_stage"],
+                        "requires": item["requires"],
+                        "applies": item["applies"],
+                        "satisfied": item["satisfied"],
+                        "reason": item["reason"],
+                    }
+                    for item in delivery_readiness["dependencies"]["items"]
+                ]
+            ),
+        },
+        "parallelism": {
+            "contract_digest": delivery_readiness["overlap"]["digest"],
+            "status": delivery_readiness["overlap"]["status"],
+            "blocked": delivery_readiness["overlap"]["blocked"],
+            "exact_overlap_count": delivery_readiness["overlap"][
+                "exact_overlap_count"
+            ],
+            "proximity_count": delivery_readiness["overlap"]["proximity_count"],
+        },
         "next_action": safe_next_action,
     }
     receipt_digest = _digest(projection)

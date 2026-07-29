@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 import uuid
 from pathlib import Path
 from typing import Any, Callable
 
 from .errors import IntegrityError, UsageError
-from .io import FileLock, atomic_write_json, read_json, utc_now
+from .io import FileLock, atomic_write_json, read_json, sha256_bytes, utc_now
 from .repo import git_head, package_digest
 
 WORK_KINDS = {"feature", "bug", "chore", "spike", "hotfix"}
@@ -32,6 +33,13 @@ IMPACT_TAGS = {
     "irreversible",
 }
 CHANGE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+DEPENDENCY_STAGES = {"definition", "implementation", "review", "acceptance"}
+DEPENDENCY_REQUIREMENTS = {
+    "definition-approved",
+    "review-clear",
+    "accepted",
+    "accepted-in-base",
+}
 
 
 def validate_change_id(change_id: str) -> str:
@@ -74,6 +82,7 @@ def initial_state(
                 "recorded_at": utc_now(),
             }
         ],
+        "dependencies": [],
     }
     validate_state(state)
     return state
@@ -120,6 +129,40 @@ def validate_state(state: dict[str, Any]) -> None:
             raise IntegrityError(f"state.{key} must be {expected_type.__name__}")
     if "candidate_runs" in state and not isinstance(state["candidate_runs"], list):
         raise IntegrityError("state.candidate_runs must be list")
+    dependencies = state.get("dependencies", [])
+    if not isinstance(dependencies, list):
+        raise IntegrityError("state.dependencies must be list")
+    if len(dependencies) > 64:
+        raise IntegrityError("state.dependencies exceeds 64 entries")
+    targets: set[str] = set()
+    for dependency in dependencies:
+        if not isinstance(dependency, dict):
+            raise IntegrityError("state.dependencies entries must be objects")
+        target = dependency.get("change_id")
+        if not isinstance(target, str):
+            raise IntegrityError("Dependency change_id must be a string")
+        validate_change_id(target)
+        if target == change_id:
+            raise IntegrityError("A change cannot depend on itself")
+        if target in targets:
+            raise IntegrityError(f"Duplicate dependency target: {target}")
+        targets.add(target)
+        if dependency.get("blocks_stage") not in DEPENDENCY_STAGES:
+            raise IntegrityError(
+                f"Invalid dependency blocks_stage: {dependency.get('blocks_stage')!r}"
+            )
+        if dependency.get("requires") not in DEPENDENCY_REQUIREMENTS:
+            raise IntegrityError(
+                f"Invalid dependency requires: {dependency.get('requires')!r}"
+            )
+        target_digest = dependency.get("target_definition_digest")
+        if not isinstance(target_digest, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", target_digest
+        ):
+            raise IntegrityError("Dependency target_definition_digest must be SHA-256")
+        rationale = dependency.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip() or len(rationale) > 1000:
+            raise IntegrityError("Dependency rationale must contain 1-1000 characters")
 
 
 class StateStore:
@@ -670,13 +713,47 @@ class StateStore:
 
 
 def current_definition_digest(root: Path, state: dict[str, Any]) -> str:
-    return package_digest(root, state["artifacts"])
+    artifact_digest = package_digest(root, state["artifacts"])
+    dependencies = state.get("dependencies", [])
+    if not dependencies:
+        # Preserve every legacy approval digest byte-for-byte.
+        return artifact_digest
+    normalized = [
+        {
+            "change_id": item["change_id"],
+            "blocks_stage": item["blocks_stage"],
+            "requires": item["requires"],
+            "target_definition_digest": item["target_definition_digest"],
+            "rationale": item["rationale"].strip(),
+        }
+        for item in sorted(dependencies, key=lambda value: value["change_id"])
+    ]
+    return sha256_bytes(
+        json.dumps(
+            {
+                "contract": "dls-change-dependencies/v1",
+                "artifact_digest": artifact_digest,
+                "dependencies": normalized,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
 
 
 def derived_approval_statuses(root: Path, state: dict[str, Any]) -> list[dict[str, Any]]:
     definition_digest = current_definition_digest(root, state)
     head = git_head(root)
     approvals: list[dict[str, Any]] = []
+    dependency_drift: list[str] = []
+    if state.get("dependencies"):
+        try:
+            from .dependencies import dependency_snapshot_drift
+
+            dependency_drift = dependency_snapshot_drift(root, state)
+        except (IntegrityError, UsageError):
+            dependency_drift = ["dependency-state-unavailable"]
     for approval in state["approvals"]:
         item = copy.deepcopy(approval)
         if item.get("status") != "current":
@@ -688,6 +765,9 @@ def derived_approval_statuses(root: Path, state: dict[str, Any]) -> list[dict[st
         ):
             item["status"] = "stale"
             item["stale_reason"] = "authored-content-digest-changed"
+        elif decision in {"definition", "design", "architecture"} and dependency_drift:
+            item["status"] = "stale"
+            item["stale_reason"] = "dependency-definition-digest-changed"
         if decision == "accept" and item.get("git_sha") != head:
             item["status"] = "stale"
             item["stale_reason"] = "git-head-changed"

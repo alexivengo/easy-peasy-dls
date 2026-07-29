@@ -41,7 +41,9 @@ python3 plugins/dls/scripts/dls.py --root /path/to/project doctor
 | `doctor` | Проверить готовность плагина и репозитория |
 | `new` | Создать минимальный change package |
 | `adopt` | Зарегистрировать совместимый существующий пакет без переписывания |
-| `worktree` | Явно связать change ID и linked worktree |
+| `worktree create/register/...` | Создать selective linked worktree и явно связать change ID с owner checkout |
+| `dependency set/list/remove` | Управлять stage-aware same-repository dependencies |
+| `delivery-map` | Прочитать bounded карту активных changes, dependencies и overlap |
 | `status` | Показать производное состояние изменения |
 | `check` | Выполнить детерминированные gates |
 | `context` | Создать digest-bound context manifest |
@@ -114,6 +116,46 @@ evidence. Bounded implementation context составил `143 365` bytes / `17 
 words. Draft definition остановил pipeline на `approve-definition`; ReviewPack,
 candidate run и model call не создавались. Эти числа не являются backend token
 baseline и не обосновывают изменение default budgets или model routing.
+
+### Dependency-aware parallel delivery
+
+Optional state field `dependencies` использует контракт
+`dls-change-dependencies/v1`. Запись хранит target change, первую блокируемую
+стадию, требуемый milestone, snapshot target definition digest и rationale.
+Dependency действует на названную стадию и все последующие: implementation-only
+связь не блокирует definition. Self-reference, cycle, depth больше 16,
+неизвестный или cross-repository target и stale target definition завершаются до
+validation/model calls.
+
+`accepted-in-base` требует current human acceptance target change и Git ancestry
+его принятого reviewed HEAD в dependent HEAD. Squash-equivalent integration
+принимается только существующим scoped human `exception`, где exact JSON
+conditions содержит оба SHA и digest конкретной dependency. DLS сам не создаёт
+такое исключение. Изменение dependency contract входит в definition digest и
+инвалидирует approval, context, candidate contract и ReviewPack.
+
+`worktree create` сначала разрешает explicit base ref в exact commit, затем
+вызывает фиксированный `git worktree add -b ...` argv. Dirty caller checkout не
+используется как источник diff и не блокирует создание. Default path и branch —
+соседний `<repo>-<CHANGE_ID>-<purpose>` и
+`codex/<change-id>-<purpose>`. Matching worktree распознаётся идемпотентно;
+collision отклоняется. Инициализация DLS, `new`/`adopt`, регистрация, rebase,
+merge и удаление не являются скрытыми side effects этой команды.
+
+Overlap contract `dls-change-overlap/v1` сравнивает repository-relative product
+paths между recorded worktree base и current HEAD. Общий каталог — advisory
+proximity, одинаковый файл — integration blocker для более позднего change.
+Порядок задаётся dependency graph, затем `registered_at` и change ID. Раннее
+implementation не блокируется; `candidate-ready` и `review-run` повторно
+проверяют snapshot перед model call. Legacy registry без base остаётся читаемым
+со статусом overlap `unavailable`.
+
+`delivery-map` возвращает `dls-delivery-map/v1`, максимум 64 changes и один
+typed action на change. Обычный JSON не содержит абсолютных путей; `--verbose`
+предназначен для локальной диагностики. State/CAS и single-flight scoped по
+change: два разных owner worktree могут одновременно выполнять validation и
+review, а два writer одного change по-прежнему схлопываются или получают reuse
+warning.
 
 ## Review integrity
 
@@ -606,6 +648,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.8.1`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.9.0`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

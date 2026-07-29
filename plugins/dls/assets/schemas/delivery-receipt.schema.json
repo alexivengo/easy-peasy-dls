@@ -24,6 +24,8 @@
     "acceptance",
     "release",
     "production",
+    "dependencies",
+    "parallelism",
     "next_action",
     "markdown"
   ],
@@ -49,6 +51,8 @@
     "acceptance": { "type": "object" },
     "release": { "type": "object" },
     "production": { "type": "object" },
+    "dependencies": { "type": "object" },
+    "parallelism": { "type": "object" },
     "next_action": { "type": "object" },
     "markdown": { "type": "string", "maxLength": 4096 },
     "dls_version": { "type": "string" }

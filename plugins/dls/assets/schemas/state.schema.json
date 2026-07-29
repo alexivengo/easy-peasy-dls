@@ -50,6 +50,41 @@
     "tickets": { "type": "object" },
     "reviews": { "type": "array" },
     "candidate_runs": { "type": "array" },
+    "dependencies": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": [
+          "change_id",
+          "blocks_stage",
+          "requires",
+          "target_definition_digest",
+          "rationale"
+        ],
+        "properties": {
+          "change_id": { "type": "string", "minLength": 1 },
+          "blocks_stage": {
+            "enum": ["definition", "implementation", "review", "acceptance"]
+          },
+          "requires": {
+            "enum": [
+              "definition-approved",
+              "review-clear",
+              "accepted",
+              "accepted-in-base"
+            ]
+          },
+          "target_definition_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "rationale": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "recorded_at": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
     "finding_dispositions": { "type": "array" },
     "evidence": { "type": "array" },
     "operations": { "type": "array" }

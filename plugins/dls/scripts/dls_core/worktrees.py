@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from .state import StateStore, validate_change_id
 REGISTRY_SCHEMA_VERSION = 1
 REGISTRY_DIRECTORY = "dls"
 REGISTRY_FILENAME = "worktrees.json"
+WORKTREE_PURPOSES = {"definition", "implementation"}
 
 
 def _git_path(root: Path, argument: str) -> Path:
@@ -49,6 +51,39 @@ def _registered_git_worktrees(root: Path) -> set[Path]:
         for field in output.split("\0")
         if field.startswith("worktree ")
     }
+
+
+def resolve_change_root(root: Path, change_id: str) -> Path:
+    """Resolve one change without scanning sibling directories or branches."""
+    candidate = root.resolve()
+    if not is_git_repo(candidate):
+        if (
+            (candidate / ".dls" / "config.toml").is_file()
+            and StateStore(candidate).path(change_id).is_file()
+        ):
+            return candidate
+        return git_toplevel(candidate)
+    candidate = git_toplevel(candidate)
+    _, registry = _load_registry(candidate, required=False)
+    registered = registry["worktrees"].get(change_id)
+    if registered is not None:
+        if not isinstance(registered, dict):
+            raise IntegrityError(
+                f"Registered owner for {change_id} is not a metadata object"
+            )
+        return Path(
+            _validated_entry(
+                candidate,
+                change_id=change_id,
+                entry=registered,
+            )["owner_root"]
+        )
+    if (
+        (candidate / ".dls" / "config.toml").is_file()
+        and StateStore(candidate).path(change_id).is_file()
+    ):
+        return candidate
+    return resolve_registered_worktree(candidate, change_id)
 
 
 def worktree_registry_path(root: Path) -> Path:
@@ -122,6 +157,16 @@ def _validated_entry(
     if not (owner / ".dls" / "config.toml").is_file():
         raise IntegrityError(f"Registered worktree is not initialized for DLS: {owner}")
     state = StateStore(owner).load(change_id)
+    base_sha = entry.get("base_sha")
+    if base_sha is not None:
+        if not isinstance(base_sha, str) or not re.fullmatch(r"[0-9a-f]{40,64}", base_sha):
+            raise IntegrityError(f"Registered worktree has invalid base_sha: {change_id}")
+        resolved_base = run_git(owner, "rev-parse", "--verify", f"{base_sha}^{{commit}}", check=False)
+        if resolved_base.returncode != 0 or resolved_base.stdout.strip() != base_sha:
+            raise IntegrityError(f"Registered worktree base commit is missing: {change_id}")
+    purpose = entry.get("purpose")
+    if purpose is not None and purpose not in WORKTREE_PURPOSES:
+        raise IntegrityError(f"Registered worktree has invalid purpose: {change_id}")
     return {
         **entry,
         "change_id": change_id,
@@ -151,6 +196,8 @@ def worktree_register(
     *,
     change_id: str,
     owner_path: Path,
+    base_ref: str | None = None,
+    purpose: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     change_id = validate_change_id(change_id)
@@ -168,6 +215,17 @@ def worktree_register(
     if not (owner / ".dls" / "config.toml").is_file():
         raise IntegrityError(f"Worktree is not initialized for DLS: {owner}")
     StateStore(owner).load(change_id)
+    if purpose is not None and purpose not in WORKTREE_PURPOSES:
+        raise UsageError(f"Unsupported worktree purpose: {purpose}")
+    base_sha = None
+    if base_ref is not None:
+        base_sha = run_git(
+            owner,
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            f"{base_ref}^{{commit}}",
+        ).stdout.strip()
     path, registry = _load_registry(caller_root, required=False)
     entry = {
         "owner_root": str(owner),
@@ -175,15 +233,23 @@ def worktree_register(
         "branch": git_branch(owner),
         "registered_at": utc_now(),
     }
+    if base_sha is not None:
+        entry["base_sha"] = base_sha
+    if purpose is not None:
+        entry["purpose"] = purpose
     existing = registry["worktrees"].get(change_id)
     if isinstance(existing, dict):
+        if base_ref is None and isinstance(existing.get("base_sha"), str):
+            entry["base_sha"] = existing["base_sha"]
+        if purpose is None and isinstance(existing.get("purpose"), str):
+            entry["purpose"] = existing["purpose"]
         stable_existing = {
             key: existing.get(key)
-            for key in ("owner_root", "git_common_dir", "branch")
+            for key in ("owner_root", "git_common_dir", "branch", "base_sha", "purpose")
         }
         stable_entry = {
             key: entry.get(key)
-            for key in ("owner_root", "git_common_dir", "branch")
+            for key in ("owner_root", "git_common_dir", "branch", "base_sha", "purpose")
         }
         if stable_existing == stable_entry:
             return {
@@ -232,6 +298,106 @@ def worktree_register(
             entry=entry,
         ),
     }
+
+
+def _default_worktree_values(root: Path, change_id: str, purpose: str) -> tuple[Path, str]:
+    slug = re.sub(r"[^a-z0-9]+", "-", change_id.lower()).strip("-")
+    if not slug:
+        raise UsageError("Change ID cannot produce a safe worktree branch")
+    return root.parent / f"{root.name}-{change_id}-{purpose}", f"codex/{slug}-{purpose}"
+
+
+def worktree_create(
+    root: Path,
+    *,
+    change_id: str,
+    base_ref: str,
+    purpose: str,
+    owner_path: Path | None = None,
+    branch: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Create one isolated Git worktree from an explicitly resolved commit."""
+    change_id = validate_change_id(change_id)
+    if purpose not in WORKTREE_PURPOSES:
+        raise UsageError(f"Unsupported worktree purpose: {purpose}")
+    caller_root = git_toplevel(root)
+    base_sha = run_git(
+        caller_root,
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        f"{base_ref}^{{commit}}",
+    ).stdout.strip()
+    default_path, default_branch = _default_worktree_values(
+        caller_root, change_id, purpose
+    )
+    target = (owner_path or default_path)
+    if not target.is_absolute():
+        raise UsageError("Worktree creation requires an absolute --path")
+    target = target.resolve()
+    branch_name = branch or default_branch
+    if (
+        not re.fullmatch(r"codex/[A-Za-z0-9._/-]{1,120}", branch_name)
+        or run_git(
+            caller_root,
+            "check-ref-format",
+            "--branch",
+            branch_name,
+            check=False,
+        ).returncode
+        != 0
+    ):
+        raise UsageError("Worktree branch must be a safe codex/* branch")
+    registered = _registered_git_worktrees(caller_root)
+    if target in registered:
+        if git_common_dir(target) != git_common_dir(caller_root):
+            raise IntegrityError("Existing worktree belongs to another Git repository")
+        if git_branch(target) != branch_name:
+            raise IntegrityError("Existing worktree branch does not match requested branch")
+        existing_head = run_git(target, "rev-parse", "HEAD").stdout.strip()
+        return {
+            "ok": True,
+            "dry_run": dry_run,
+            "changed": False,
+            "change_id": change_id,
+            "purpose": purpose,
+            "base_sha": base_sha,
+            "branch": branch_name,
+            "owner_root": str(target),
+            "head_sha": existing_head,
+            "next_action": {"id": "initialize-change", "detail": "worktree already exists"},
+        }
+    if target.exists():
+        raise IntegrityError(f"Worktree path already exists: {target}")
+    branch_ref = f"refs/heads/{branch_name}"
+    if run_git(caller_root, "show-ref", "--verify", branch_ref, check=False).returncode == 0:
+        raise IntegrityError(f"Worktree branch already exists: {branch_name}")
+    projected = {
+        "ok": True,
+        "dry_run": dry_run,
+        "changed": not dry_run,
+        "change_id": change_id,
+        "purpose": purpose,
+        "base_sha": base_sha,
+        "branch": branch_name,
+        "owner_root": str(target),
+        "head_sha": base_sha,
+        "next_action": {"id": "initialize-change", "detail": "initialize DLS state and register owner"},
+    }
+    if dry_run:
+        projected["changed"] = False
+        return projected
+    run_git(
+        caller_root,
+        "worktree",
+        "add",
+        "-b",
+        branch_name,
+        str(target),
+        base_sha,
+    )
+    return projected
 
 
 def worktree_list(root: Path) -> dict[str, Any]:

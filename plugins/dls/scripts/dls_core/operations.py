@@ -64,7 +64,7 @@ from .state import (
     initial_state,
     validate_change_id,
 )
-from .worktrees import resolve_registered_worktree
+from .worktrees import resolve_change_root, resolve_registered_worktree
 
 AFFIRMATIVE_PATTERN = re.compile(
     r"^\s*(yes|y|approve|approved|confirm|confirmed|да|ок|фиксируем|"
@@ -554,6 +554,7 @@ def adopt_change(
 
 
 def status(root: Path, *, change_id: str) -> dict[str, Any]:
+    root = resolve_change_root(root, change_id)
     state = StateStore(root).load(change_id)
     definition_digest = current_definition_digest(root, state)
     approvals = derived_approval_statuses(root, state)
@@ -561,6 +562,23 @@ def status(root: Path, *, change_id: str) -> dict[str, Any]:
     dirty = git_source_dirty_paths(root) if is_git_repo(root) else []
     latest_review = _latest_review_result(state)
     review_stale = bool(latest_review and latest_review.get("head_sha") != head)
+    from .parallel_delivery import change_readiness
+
+    stage = (
+        "definition"
+        if state.get("phase") == "definition"
+        else "acceptance"
+        if state.get("phase") == "accepted"
+        else "review"
+        if state.get("phase") == "review"
+        else "implementation"
+    )
+    readiness = change_readiness(
+        root,
+        change_id=change_id,
+        stage=stage,
+        include_overlap=stage in {"review", "acceptance"},
+    )
     return {
         "ok": True,
         "change_id": change_id,
@@ -578,14 +596,43 @@ def status(root: Path, *, change_id: str) -> dict[str, Any]:
         "review_stale": review_stale,
         "git_head": head,
         "source_dirty_paths": dirty,
+        "dependencies": readiness["dependencies"],
+        "parallelism": {
+            "ready": readiness["ready"],
+            "overlap": readiness["overlap"],
+            "next_action": readiness["next_action"],
+        },
     }
 
 
 def check(root: Path, *, change_id: str, gate: str) -> dict[str, Any]:
     if gate not in {"definition", "review", "accept", "all"}:
         raise UsageError(f"Unknown gate: {gate}")
+    root = resolve_change_root(root, change_id)
     state = StateStore(root).load(change_id)
     checks: list[dict[str, Any]] = []
+    from .parallel_delivery import change_readiness
+
+    dependency_stage = (
+        "acceptance" if gate in {"accept", "all"} else "review" if gate == "review" else "definition"
+    )
+    dependency_readiness = change_readiness(
+        root,
+        change_id=change_id,
+        stage=dependency_stage,
+        include_overlap=dependency_stage in {"review", "acceptance"},
+    )
+    checks.append(
+        _check(
+            f"dependencies:{dependency_stage}",
+            dependency_readiness["ready"],
+            (
+                dependency_readiness["next_action"]["detail"]
+                if dependency_readiness["next_action"]
+                else "ready"
+            ),
+        )
+    )
     artifact_texts: dict[str, str] = {}
     for key, metadata in sorted(state["artifacts"].items()):
         path = safe_resolve(root, metadata["path"])
@@ -814,6 +861,7 @@ def approve(
         raise UsageError(f"Invalid approval decision: {decision}")
     if actor not in {"codex", "user"}:
         raise UsageError("actor must be codex or user")
+    root = resolve_change_root(root, change_id)
     state_store = StateStore(root)
     state = state_store.load(change_id)
     effective_operation_id = operation_id or str(uuid.uuid4())
@@ -1407,7 +1455,31 @@ def build_context(
 ) -> dict[str, Any]:
     if phase not in {"implementation", "review", "remediation"}:
         raise UsageError(f"Invalid context phase: {phase}")
+    root = resolve_change_root(root, change_id)
     state = StateStore(root).load(change_id)
+    from .parallel_delivery import change_readiness
+
+    readiness_stage = "review" if phase == "review" else "implementation"
+    readiness = change_readiness(
+        root,
+        change_id=change_id,
+        stage=readiness_stage,
+        include_overlap=phase == "review",
+    )
+    if not readiness["ready"]:
+        return {
+            "ok": True,
+            "dry_run": dry_run,
+            "changed": False,
+            "change_id": change_id,
+            "phase": phase,
+            "status": "blocked",
+            "manifest": None,
+            "manifest_path": None,
+            "dependencies": readiness["dependencies"],
+            "parallelism": readiness["overlap"],
+            "next_action": readiness["next_action"],
+        }
     current_head = git_head(root)
     config = load_config(root)
     platform_profile = resolve_profile(root, config=config)
@@ -1503,6 +1575,8 @@ def build_context(
             "git_head": head,
             "inputs": inputs,
             "exclusions": sorted(excluded),
+            "dependency_digest": readiness["dependencies"]["digest"],
+            "overlap_digest": readiness["overlap"]["digest"],
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -1521,6 +1595,18 @@ def build_context(
         "git_head": head,
         "inputs": inputs,
         "exclusions": sorted(excluded),
+        "dependencies": {
+            "contract": readiness["dependencies"]["contract"],
+            "digest": readiness["dependencies"]["digest"],
+            "satisfied": readiness["dependencies"]["satisfied"],
+            "items": readiness["dependencies"]["items"],
+        },
+        "parallelism": {
+            "contract": readiness["overlap"]["contract"],
+            "digest": readiness["overlap"]["digest"],
+            "exact_overlap_count": readiness["overlap"]["exact_overlap_count"],
+            "proximity_count": readiness["overlap"]["proximity_count"],
+        },
         "totals": {
             "bytes": sum(item["bytes"] for item in inputs),
             "words": sum(item["words"] for item in inputs),
@@ -2522,6 +2608,27 @@ def _validate_review_pack(pack: dict[str, Any], change_id: str) -> None:
                 for field in ("name", "digest")
             ):
                 raise IntegrityError("ReviewPack platform profile identity is invalid")
+        delivery_readiness = pack.get("delivery_readiness")
+        if delivery_readiness is not None:
+            if not isinstance(delivery_readiness, dict):
+                raise IntegrityError("ReviewPack delivery_readiness must be an object")
+            if set(delivery_readiness) != {
+                "contract",
+                "digest",
+                "dependency_digest",
+                "overlap_digest",
+                "dependency_count",
+                "exact_overlap_count",
+            }:
+                raise IntegrityError("ReviewPack delivery_readiness fields are invalid")
+            if delivery_readiness.get("contract") != "dls-change-readiness/v1":
+                raise IntegrityError("Unsupported ReviewPack delivery readiness contract")
+            for field in ("digest", "dependency_digest", "overlap_digest"):
+                if not isinstance(delivery_readiness.get(field), str):
+                    raise IntegrityError("ReviewPack delivery readiness digest is invalid")
+            for field in ("dependency_count", "exact_overlap_count"):
+                if not isinstance(delivery_readiness.get(field), int):
+                    raise IntegrityError("ReviewPack delivery readiness count is invalid")
         v2_required = {
             "review_mode",
             "epic_base_sha",
@@ -2832,6 +2939,22 @@ def review_pack(
     state_store = StateStore(root)
     stored_state = state_store.load(change_id)
     state = _state_override or stored_state
+    from .parallel_delivery import change_readiness
+
+    delivery_readiness = change_readiness(
+        root,
+        change_id=change_id,
+        stage="review",
+        include_overlap=True,
+    )
+    if not delivery_readiness["ready"]:
+        action = delivery_readiness["next_action"] or {
+            "id": "wait-dependency",
+            "detail": "delivery dependency is not satisfied",
+        }
+        raise IntegrityError(
+            f"ReviewPack dependency gate failed: {action['id']}: {action['detail']}"
+        )
     if (
         _review_mode == "full"
         and _operation_kind == "review-pack"
@@ -2938,6 +3061,14 @@ def review_pack(
             "contract": platform_profile["contract"],
             "name": platform_profile["name"],
             "digest": platform_profile["digest"],
+        },
+        "delivery_readiness": {
+            "contract": delivery_readiness["contract"],
+            "digest": delivery_readiness["digest"],
+            "dependency_digest": delivery_readiness["dependencies"]["digest"],
+            "overlap_digest": delivery_readiness["overlap"]["digest"],
+            "dependency_count": len(delivery_readiness["dependencies"]["items"]),
+            "exact_overlap_count": delivery_readiness["overlap"]["exact_overlap_count"],
         },
         "review_id": review_id,
         "change_id": change_id,
@@ -3053,6 +3184,26 @@ def review_ready(
         raise IntegrityError("Review readiness requires Git")
     state = StateStore(root).load(change_id)
     _require_revision(state, expected_revision)
+    from .parallel_delivery import change_readiness
+
+    delivery_readiness = change_readiness(
+        root,
+        change_id=change_id,
+        stage="review",
+        include_overlap=True,
+    )
+    if not delivery_readiness["ready"]:
+        action = delivery_readiness["next_action"] or {
+            "id": "wait-dependency",
+            "detail": "delivery dependency is not satisfied",
+        }
+        return _review_ready_blocked(
+            change_id=change_id,
+            state_revision=state["state_revision"],
+            next_action=action["id"],
+            detail=action["detail"],
+            dry_run=dry_run,
+        )
     dirty = git_source_dirty_paths(root)
     if dirty:
         return _review_ready_blocked(
@@ -3350,6 +3501,26 @@ def _validate_review_pack_current(
         current_profile = resolve_profile(root, config=load_config(root))
         if pack_profile.get("digest") != current_profile["digest"]:
             raise IntegrityError("ReviewPack platform profile is stale")
+    pack_readiness = pack.get("delivery_readiness")
+    if isinstance(pack_readiness, dict):
+        from .parallel_delivery import change_readiness
+
+        current_readiness = change_readiness(
+            root,
+            change_id=state["change_id"],
+            stage="review",
+            include_overlap=True,
+        )
+        if not current_readiness["ready"]:
+            action = current_readiness["next_action"] or {
+                "id": "wait-dependency",
+                "detail": "delivery dependency is not satisfied",
+            }
+            raise IntegrityError(
+                f"ReviewPack delivery dependency is blocked: {action['id']}: {action['detail']}"
+            )
+        if pack_readiness.get("digest") != current_readiness["digest"]:
+            raise IntegrityError("ReviewPack dependency or overlap snapshot is stale")
     current_approval = next(
         (
             item
@@ -5725,7 +5896,15 @@ def review_import(
     if existing_result:
         recorded = read_json(safe_resolve(root, relative_path, must_exist=True))
         if recorded != report:
-            raise IntegrityError(f"Review result already imported with different content: {review_id}")
+            differing_fields = sorted(
+                key
+                for key in set(recorded) | set(report)
+                if recorded.get(key) != report.get(key)
+            )
+            raise IntegrityError(
+                f"Review result already imported with different content: {review_id}; "
+                f"fields={','.join(differing_fields)}"
+            )
         remediation_path = _existing_remediation_manifest_path(
             root,
             change_id=change_id,

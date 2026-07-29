@@ -90,6 +90,24 @@ definition, policy и finding set он наследует declaration из бл�
 
 Implementer может отметить finding как `addressed`, но не как `verified`. Если finding спорный или попал не в тот gate, `note` передаёт его на независимое adjudication и ничего не закрывает. Проверка исправления и reclassification принадлежат reviewer.
 
+### Параллельные changes без глобальной очереди
+
+DLS применяет one-writer к одному change и его owner worktree, а не ко всему
+репозиторию. Для нового standard/critical change он может создать linked
+worktree от явно выбранного clean SHA и записать stage-aware dependency:
+
+- dependency на implementation не мешает готовить definition;
+- `accepted-in-base` требует human acceptance upstream-change и Git ancestry
+  его принятого reviewed HEAD в текущем candidate;
+- одинаковый изменённый файл разрешает раннюю implementation-работу, но
+  блокирует более поздний candidate до интеграции predecessor;
+- разные файлы позволяют независимо выполнять validation и review.
+
+`delivery-map` показывает активные changes, доступный параллелизм, derived
+integration order и один следующий шаг. DLS не сканирует соседние каталоги,
+не выбирает ветку скрытно, не создаёт Codex-задачи и не делает rebase/merge.
+Пользователь сам открывает отдельные задачи и принимает integration-решения.
+
 ## 3. Независимо проверили
 
 ReviewPack фиксирует:

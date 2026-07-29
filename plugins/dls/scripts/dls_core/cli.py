@@ -10,6 +10,7 @@ from typing import Any
 
 from . import VERSION
 from .candidate_runner import candidate_ready, candidate_status
+from .dependencies import dependency_list, dependency_remove, dependency_set
 from .delivery_receipt import delivery_receipt
 from .errors import DLSError, UsageError
 from .operations import (
@@ -36,7 +37,9 @@ from .operations import (
 from .repo import find_repo_root
 from .review_runner import review_run, review_status
 from .telemetry import cache_prune, cache_status, delivery_status, review_metrics
+from .parallel_delivery import delivery_map
 from .worktrees import (
+    worktree_create,
     worktree_list,
     worktree_register,
     worktree_unregister,
@@ -136,7 +139,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     worktree_register_parser.add_argument("change_id")
     worktree_register_parser.add_argument("owner_path", type=Path)
+    worktree_register_parser.add_argument("--base")
+    worktree_register_parser.add_argument(
+        "--purpose", choices=("definition", "implementation")
+    )
     _dry_run(worktree_register_parser)
+    worktree_create_parser = worktree_subparsers.add_parser(
+        "create",
+        help="Create an isolated change worktree from an explicit Git ref.",
+    )
+    worktree_create_parser.add_argument("change_id")
+    worktree_create_parser.add_argument("--base", required=True)
+    worktree_create_parser.add_argument(
+        "--purpose", required=True, choices=("definition", "implementation")
+    )
+    worktree_create_parser.add_argument("--path", type=Path)
+    worktree_create_parser.add_argument("--branch")
+    _dry_run(worktree_create_parser)
     worktree_subparsers.add_parser(
         "list",
         help="List registered worktrees and their current validity.",
@@ -152,6 +171,42 @@ def build_parser() -> argparse.ArgumentParser:
     )
     worktree_unregister_parser.add_argument("change_id")
     _dry_run(worktree_unregister_parser)
+
+    dependency_parser = subparsers.add_parser(
+        "dependency", help="Manage stage-aware dependencies between changes."
+    )
+    dependency_subparsers = dependency_parser.add_subparsers(
+        dest="dependency_command", required=True
+    )
+    dependency_set_parser = dependency_subparsers.add_parser("set")
+    dependency_set_parser.add_argument("change_id")
+    dependency_set_parser.add_argument("--on", required=True, dest="target_change_id")
+    dependency_set_parser.add_argument(
+        "--blocks",
+        required=True,
+        choices=("definition", "implementation", "review", "acceptance"),
+        dest="blocks_stage",
+    )
+    dependency_set_parser.add_argument(
+        "--requires",
+        required=True,
+        choices=(
+            "definition-approved",
+            "review-clear",
+            "accepted",
+            "accepted-in-base",
+        ),
+    )
+    dependency_set_parser.add_argument("--rationale", required=True)
+    _operation_id(dependency_set_parser)
+    _dry_run(dependency_set_parser)
+    dependency_list_parser = dependency_subparsers.add_parser("list")
+    dependency_list_parser.add_argument("change_id")
+    dependency_remove_parser = dependency_subparsers.add_parser("remove")
+    dependency_remove_parser.add_argument("change_id")
+    dependency_remove_parser.add_argument("--on", required=True, dest="target_change_id")
+    _operation_id(dependency_remove_parser)
+    _dry_run(dependency_remove_parser)
 
     status_parser = subparsers.add_parser("status", help="Show derived change status.")
     status_parser.add_argument("change_id")
@@ -369,6 +424,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read one compact delivery state and typed next action.",
     )
     delivery_status_parser.add_argument("change_id")
+    delivery_map_parser = subparsers.add_parser(
+        "delivery-map", help="Show dependency-aware readiness for registered changes."
+    )
+    delivery_map_parser.add_argument("--verbose", action="store_true")
 
     delivery_receipt_parser = subparsers.add_parser(
         "delivery-receipt",
@@ -566,6 +625,18 @@ def dispatch(
             root,
             change_id=args.change_id,
             owner_path=args.owner_path,
+            base_ref=args.base,
+            purpose=args.purpose,
+            dry_run=args.dry_run,
+        )
+    if command == "worktree" and args.worktree_command == "create":
+        return worktree_create(
+            root,
+            change_id=args.change_id,
+            base_ref=args.base,
+            purpose=args.purpose,
+            owner_path=args.path,
+            branch=args.branch,
             dry_run=args.dry_run,
         )
     if command == "worktree" and args.worktree_command == "list":
@@ -576,6 +647,27 @@ def dispatch(
         return worktree_unregister(
             root,
             change_id=args.change_id,
+            dry_run=args.dry_run,
+        )
+    if command == "dependency" and args.dependency_command == "set":
+        return dependency_set(
+            root,
+            change_id=args.change_id,
+            target_change_id=args.target_change_id,
+            blocks_stage=args.blocks_stage,
+            requires=args.requires,
+            rationale=args.rationale,
+            operation_id=args.operation_id,
+            dry_run=args.dry_run,
+        )
+    if command == "dependency" and args.dependency_command == "list":
+        return dependency_list(root, change_id=args.change_id)
+    if command == "dependency" and args.dependency_command == "remove":
+        return dependency_remove(
+            root,
+            change_id=args.change_id,
+            target_change_id=args.target_change_id,
+            operation_id=args.operation_id,
             dry_run=args.dry_run,
         )
     if command == "status":
@@ -730,6 +822,8 @@ def dispatch(
         )
     if command == "delivery-status":
         return delivery_status(root, change_id=args.change_id)
+    if command == "delivery-map":
+        return delivery_map(root, verbose=args.verbose)
     if command == "delivery-receipt":
         return delivery_receipt(root, change_id=args.change_id)
     if command == "cache-status":
@@ -809,6 +903,12 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
                 f"{result['change_id']} -> {result['worktree']['owner_root']}; "
                 f"{'registered' if result['changed'] else 'unchanged'}"
             )
+        if args.worktree_command == "create":
+            return prefix + (
+                f"{result['change_id']} -> {result['branch']} at {result['owner_root']}; "
+                f"base={result['base_sha'][:8]}; "
+                f"{'created' if result['changed'] else 'unchanged'}"
+            )
         if args.worktree_command == "verify":
             return (
                 f"{result['change_id']} -> {result['worktree']['owner_root']}; valid"
@@ -816,6 +916,17 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
         return prefix + (
             f"{result['change_id']}: "
             f"{'unregistered' if result['changed'] else 'not registered'}"
+        )
+    if command == "dependency":
+        if args.dependency_command == "list":
+            return (
+                f"{result['change_id']}: dependencies={len(result['dependencies'])}; "
+                f"digest={result['dependency_digest'][:8]}"
+            )
+        return prefix + (
+            f"{result['change_id']}: dependency "
+            f"{'updated' if result['changed'] else 'unchanged'}; "
+            f"digest={result['dependency_digest'][:8]}"
         )
     if command == "status":
         approval_summary = ",".join(
@@ -834,6 +945,9 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             + (f" — {', '.join(failed)}" if failed else "")
         )
     if command == "context":
+        if result.get("manifest") is None:
+            action = result.get("next_action") or {"id": "wait-dependency", "detail": "blocked"}
+            return prefix + f"context blocked; next={action['id']}; {action['detail']}"
         totals = result["manifest"]["totals"]
         return prefix + (
             f"context {result['phase']} {result['manifest']['manifest_digest'][:12]}; "
@@ -976,6 +1090,12 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
         return (
             f"delivery {result['change_id']}; candidate={result['candidate']['status']}; "
             f"review={result['review']['status']}; next={result['next_action']['id']}"
+        )
+    if command == "delivery-map":
+        ready = sum(1 for item in result["changes"] if item["parallel_ready"])
+        return (
+            f"changes={result['change_count']}; parallel_ready={ready}; "
+            f"omitted={result['omitted_count']}"
         )
     if command == "delivery-receipt":
         return result["markdown"]

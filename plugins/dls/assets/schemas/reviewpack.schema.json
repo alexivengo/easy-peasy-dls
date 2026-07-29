@@ -55,6 +55,26 @@
       },
       "additionalProperties": false
     },
+    "delivery_readiness": {
+      "type": "object",
+      "required": [
+        "contract",
+        "digest",
+        "dependency_digest",
+        "overlap_digest",
+        "dependency_count",
+        "exact_overlap_count"
+      ],
+      "properties": {
+        "contract": { "const": "dls-change-readiness/v1" },
+        "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "dependency_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "overlap_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "dependency_count": { "type": "integer", "minimum": 0 },
+        "exact_overlap_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
     "review_id": { "type": "string", "minLength": 1 },
     "change_id": { "type": "string", "minLength": 1 },
     "mode": { "enum": ["acceptance-grade", "advisory-dirty"] },

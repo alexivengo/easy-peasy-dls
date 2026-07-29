@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dls://schemas/delivery-map/v1",
+  "title": "DLS Delivery Map v1",
+  "type": "object",
+  "required": [
+    "ok",
+    "contract",
+    "change_count",
+    "omitted_count",
+    "parallel_groups",
+    "integration_order",
+    "integration_order_omitted_count",
+    "changes"
+  ],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "contract": { "const": "dls-delivery-map/v1" },
+    "change_count": { "type": "integer", "minimum": 0 },
+    "omitted_count": { "type": "integer", "minimum": 0 },
+    "parallel_groups": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": { "type": "string" },
+        "maxItems": 64
+      },
+      "maxItems": 64
+    },
+    "integration_order": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 64
+    },
+    "integration_order_omitted_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "changes": {
+      "type": "array",
+      "items": { "type": "object" },
+      "maxItems": 64
+    },
+    "dls_version": { "type": "string" }
+  },
+  "additionalProperties": false
+}

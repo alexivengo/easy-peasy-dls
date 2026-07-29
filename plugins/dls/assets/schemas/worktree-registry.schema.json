@@ -44,6 +44,13 @@
           "registered_at": {
             "type": "string",
             "minLength": 1
+          },
+          "base_sha": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40,64}$"
+          },
+          "purpose": {
+            "enum": ["definition", "implementation"]
           }
         },
         "additionalProperties": false
