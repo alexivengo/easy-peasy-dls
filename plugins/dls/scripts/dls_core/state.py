@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import uuid
 from pathlib import Path
@@ -585,6 +586,122 @@ class StateStore:
                     utc_now(),
                 )
             updated["operations"] = updated["operations"][-200:]
+            updated["state_revision"] += 1
+            validate_state(updated)
+            atomic_write_json(path, updated)
+            return updated, copy.deepcopy(recorded), True
+
+    def claim_review_finalization(
+        self,
+        change_id: str,
+        *,
+        review_id: str,
+        finalization_id: str,
+        runner_pid: int,
+    ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+        """Claim the one deterministic assembly/import boundary for a review."""
+        path = self.path(change_id)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        with FileLock(lock_path):
+            state = self.load(change_id)
+            result = next(
+                (
+                    item
+                    for item in reversed(state["reviews"])
+                    if isinstance(item, dict)
+                    and item.get("kind") == "result"
+                    and item.get("review_id") == review_id
+                ),
+                None,
+            )
+            if result is not None:
+                return state, {
+                    "kind": "finalization",
+                    "review_id": review_id,
+                    "finalization_id": finalization_id,
+                    "status": "completed",
+                    "result_path": result.get("result_path"),
+                }, False
+            index = next(
+                (
+                    index
+                    for index, item in enumerate(state["reviews"])
+                    if isinstance(item, dict)
+                    and item.get("kind") == "finalization"
+                    and item.get("review_id") == review_id
+                ),
+                None,
+            )
+            if index is not None and state["reviews"][index].get("status") == "running":
+                runner_pid_value = state["reviews"][index].get("runner_pid")
+                alive = False
+                if isinstance(runner_pid_value, int) and runner_pid_value > 0:
+                    try:
+                        os.kill(runner_pid_value, 0)
+                        alive = True
+                    except OSError:
+                        alive = False
+                if alive:
+                    return state, copy.deepcopy(state["reviews"][index]), False
+            updated = copy.deepcopy(state)
+            record = {
+                "kind": "finalization",
+                "review_id": review_id,
+                "finalization_id": finalization_id,
+                "status": "running",
+                "runner_pid": runner_pid,
+                "started_at": utc_now(),
+            }
+            if index is None:
+                updated["reviews"].append(record)
+                recorded = updated["reviews"][-1]
+            else:
+                updated["reviews"][index] = record
+                recorded = updated["reviews"][index]
+            updated["state_revision"] += 1
+            validate_state(updated)
+            atomic_write_json(path, updated)
+            return updated, copy.deepcopy(recorded), True
+
+    def finish_review_finalization(
+        self,
+        change_id: str,
+        *,
+        review_id: str,
+        finalization_id: str,
+        status: str,
+        error: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+        if status not in {"completed", "failed"}:
+            raise IntegrityError("Review finalization status is invalid")
+        path = self.path(change_id)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+        with FileLock(lock_path):
+            state = self.load(change_id)
+            index = next(
+                (
+                    index
+                    for index, item in enumerate(state["reviews"])
+                    if isinstance(item, dict)
+                    and item.get("kind") == "finalization"
+                    and item.get("review_id") == review_id
+                    and item.get("finalization_id") == finalization_id
+                ),
+                None,
+            )
+            if index is None:
+                raise IntegrityError("Unknown review finalization claim")
+            current = state["reviews"][index]
+            if current.get("status") == status:
+                return state, copy.deepcopy(current), False
+            if current.get("status") != "running":
+                raise IntegrityError("Review finalization claim is not running")
+            updated = copy.deepcopy(state)
+            recorded = updated["reviews"][index]
+            recorded["status"] = status
+            recorded["completed_at"] = utc_now()
+            if error is not None:
+                recorded["error"] = error
             updated["state_revision"] += 1
             validate_state(updated)
             atomic_write_json(path, updated)

@@ -16,7 +16,13 @@ from typing import Any, Callable
 
 from .delivery_receipt import delivery_receipt
 from .errors import IntegrityError, LockError
-from .economy import ReviewBudget, processed_tokens, review_budget, token_budget_failure
+from .economy import (
+    ReviewBudget,
+    processed_tokens,
+    review_budget,
+    token_budget_failure,
+    token_budget_warning,
+)
 from .io import (
     atomic_write_json,
     atomic_write_text,
@@ -78,6 +84,36 @@ SPECIALIST_EFFORT = "high"
 REVIEW_PROMPTS_ROOT = PLUGIN_ROOT / "assets" / "review-prompts"
 DECISION_REPAIR_INPUT_MAX_BYTES = 262144
 INPUT_ONLY_REVIEW_MAX_BYTES = 2 * 1024 * 1024
+FINAL_FULL_COMMAND_EVENTS = 16
+FINAL_FULL_TIMEOUT_SECONDS = 900
+FINAL_FULL_TRANSCRIPT_BYTES = 1024 * 1024
+REVIEW_BUDGET_CONTRACT = "dls-review-budget/v2"
+FINAL_COVERAGE_CONTRACT = "dls-final-coverage/v1"
+
+
+def _final_full_budget(owner: Path, control_level: str) -> ReviewBudget:
+    budget = review_budget(owner, control_level)
+    return ReviewBudget(
+        aggregate_tokens=budget.aggregate_tokens,
+        lane_tokens=budget.lane_tokens,
+        command_events=min(budget.command_events, FINAL_FULL_COMMAND_EVENTS),
+        timeout_seconds=min(budget.timeout_seconds, FINAL_FULL_TIMEOUT_SECONDS),
+        transcript_bytes=min(budget.transcript_bytes, FINAL_FULL_TRANSCRIPT_BYTES),
+        aggregate_recovery_tokens=budget.aggregate_ceiling,
+        lane_recovery_tokens=budget.lane_ceiling,
+    )
+
+
+def _budget_projection(budget: ReviewBudget) -> dict[str, int]:
+    return {
+        "aggregate_tokens": budget.aggregate_tokens,
+        "aggregate_recovery_tokens": budget.aggregate_ceiling,
+        "lane_tokens": budget.lane_tokens,
+        "lane_recovery_tokens": budget.lane_ceiling,
+        "command_events": budget.command_events,
+        "timeout_seconds": budget.timeout_seconds,
+        "transcript_bytes": budget.transcript_bytes,
+    }
 
 
 class ReviewDecisionReferenceError(IntegrityError):
@@ -109,6 +145,10 @@ class ReviewDecisionReferenceError(IntegrityError):
             "invalid_value": self.invalid_value,
             "repairable": self.repairable,
         }
+
+
+class ReviewBudgetPlanningError(IntegrityError):
+    """A required review lane cannot be launched inside its bounded input plan."""
 
 
 def _ticket_alias_index(pack: dict[str, Any]) -> dict[str, set[str]]:
@@ -420,7 +460,7 @@ def _lane_contract_digest(
     input_bundle_digest: str | None = None,
     budget: ReviewBudget,
 ) -> str:
-    contract = {
+    contract: dict[str, Any] = {
         "runner_contract": pack.get("runner_contract", REVIEW_RUNNER_CONTRACT),
         "review_id": pack["review_id"],
         "lane_key": lane_key,
@@ -432,14 +472,18 @@ def _lane_contract_digest(
         "schema_digest": schema_digest,
         "context_digest": context_digest,
         "input_bundle_digest": input_bundle_digest,
-        "budget": {
+    }
+    if pack.get("budget_contract") == REVIEW_BUDGET_CONTRACT:
+        contract["budget_contract"] = REVIEW_BUDGET_CONTRACT
+        contract["budget"] = _budget_projection(budget)
+    else:
+        contract["budget"] = {
             "aggregate_tokens": budget.aggregate_tokens,
             "lane_tokens": budget.lane_tokens,
             "command_events": budget.command_events,
             "timeout_seconds": budget.timeout_seconds,
             "transcript_bytes": budget.transcript_bytes,
-        },
-    }
+        }
     return sha256_bytes(
         json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     )
@@ -660,9 +704,45 @@ def _progress_summary(
 def _terminal_lane_next_action(
     terminal: dict[str, Any],
     lane_attempts: list[dict[str, Any]],
+    *,
+    owner: Path | None = None,
+    control_level: str | None = None,
 ) -> dict[str, str]:
     lane_key = terminal.get("lane_key")
     if terminal.get("status") == "budget-exceeded":
+        reason = terminal.get("failure_reason")
+        if (
+            owner is not None
+            and control_level in {"routine", "standard", "critical"}
+            and isinstance(reason, str)
+            and reason.startswith(
+                ("lane processed_tokens=", "aggregate processed_tokens=")
+            )
+            and terminal.get("exit_code") == 0
+            and terminal.get("timed_out") is False
+            and terminal.get("overflow") is False
+            and terminal.get("transcript_truncated") is not True
+        ):
+            usage_tokens = processed_tokens(terminal.get("usage"))
+            aggregate_total = sum(
+                value
+                for item in lane_attempts
+                for value in [processed_tokens(item.get("usage"))]
+                if value is not None
+            )
+            budget = review_budget(owner, control_level)
+            if usage_tokens is not None and token_budget_failure(
+                terminal.get("usage"),
+                aggregate_before=max(0, aggregate_total - usage_tokens),
+                budget=budget,
+            ) is None:
+                return {
+                    "id": "resume-review-budget",
+                    "detail": (
+                        "the completed structured output is eligible for "
+                        "zero-call bounded recovery"
+                    ),
+                }
         return {
             "id": "inspect-review-budget",
             "detail": terminal.get("failure_reason")
@@ -855,7 +935,21 @@ def review_status(
         next_action = {"id": "wait-review", "detail": "review pipeline is active"}
     elif terminal_lane is not None:
         status_value = "failed"
-        next_action = _terminal_lane_next_action(terminal_lane, lane_attempts)
+        terminal_pack = None
+        if pack_entry and isinstance(pack_entry.get("pack_path"), str):
+            terminal_pack = read_json(
+                safe_resolve(owner, pack_entry["pack_path"], must_exist=True)
+            )
+        next_action = _terminal_lane_next_action(
+            terminal_lane,
+            lane_attempts,
+            owner=owner,
+            control_level=(
+                terminal_pack.get("control_level")
+                if isinstance(terminal_pack, dict)
+                else state.get("control_level")
+            ),
+        )
     elif pipeline is not None and pipeline.get("status") in {
         "failed",
         "failed-finalize",
@@ -868,6 +962,8 @@ def review_status(
             action_id = "inspect-review-output"
         elif failure_kind == "budget-exceeded":
             action_id = "inspect-review-budget"
+        elif failure_kind == "review-context":
+            action_id = "split-review-scope"
         elif failure_kind == "integrity":
             action_id = "inspect-review-integrity"
         else:
@@ -1280,6 +1376,151 @@ def _input_bundle_metadata(
     )
 
 
+def _final_full_inputs(
+    owner: Path,
+    *,
+    pack: dict[str, Any],
+    context_path: str,
+    native_bytes: bytes,
+    independent_decision: dict[str, Any],
+    targeted_decision: dict[str, Any],
+    specialist_payloads: dict[str, bytes],
+    aggregate_before: int,
+    budget: ReviewBudget,
+    prompt_text: str = "",
+    schema_path: Path | None = None,
+) -> tuple[dict[str, Path | bytes], dict[str, Any]]:
+    """Build an exact, input-only whole-change bundle for final remediation review."""
+    actual_paths = sorted(
+        line
+        for line in run_git(
+            owner,
+            "diff",
+            "--name-only",
+            f"{pack['epic_base_sha']}..{pack['head_sha']}",
+        ).stdout.splitlines()
+        if line
+    )
+    expected_paths = sorted(pack.get("full_changed_files", []))
+    if actual_paths != expected_paths:
+        raise IntegrityError("Final coverage paths differ from the bound ReviewPack")
+    patch_bytes = run_git(
+        owner,
+        "diff",
+        "--no-ext-diff",
+        "--binary",
+        f"{pack['epic_base_sha']}..{pack['head_sha']}",
+    ).stdout.encode("utf-8")
+    coverage_entries: list[dict[str, Any]] = []
+    for relative in actual_paths:
+        blob = run_git(
+            owner,
+            "rev-parse",
+            "--verify",
+            f"{pack['head_sha']}:{relative}",
+            check=False,
+        )
+        coverage_entries.append(
+            {
+                "path": relative,
+                "head_blob": blob.stdout.strip() if blob.returncode == 0 else None,
+                "deleted": blob.returncode != 0,
+            }
+        )
+    coverage = {
+        "contract": FINAL_COVERAGE_CONTRACT,
+        "review_id": pack["review_id"],
+        "epic_base_sha": pack["epic_base_sha"],
+        "head_sha": pack["head_sha"],
+        "path_count": len(coverage_entries),
+        "paths": coverage_entries,
+        "patch_digest": sha256_bytes(patch_bytes),
+        "patch_bytes": len(patch_bytes),
+    }
+    coverage_bytes = json.dumps(
+        coverage,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    budget_plan = {
+        "contract": REVIEW_BUDGET_CONTRACT,
+        "review_id": pack["review_id"],
+        "lane_key": "semantic:final-full",
+        "aggregate_before": aggregate_before,
+        "aggregate_target_remaining": max(
+            0, budget.aggregate_tokens - aggregate_before
+        ),
+        "aggregate_recovery_remaining": max(
+            0, budget.aggregate_ceiling - aggregate_before
+        ),
+        "budget": _budget_projection(budget),
+        "coverage_digest": sha256_bytes(coverage_bytes),
+    }
+    extra_files: dict[str, Path | bytes] = {
+        "context.json": safe_resolve(owner, context_path, must_exist=True),
+        "epic.patch": patch_bytes,
+        "coverage.json": coverage_bytes,
+        "budget-plan.json": json.dumps(
+            budget_plan,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+        "native.txt": native_bytes,
+        "semantic-independent.json": json.dumps(
+            independent_decision,
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8"),
+        "targeted-decision.json": json.dumps(
+            targeted_decision,
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8"),
+        **{
+            f"specialists/{name}": payload
+            for name, payload in specialist_payloads.items()
+        },
+    }
+    input_digest, extra_input_bytes = _input_bundle_metadata(extra_files)
+    effective_schema_path = schema_path or (SCHEMAS_ROOT / "review-decision.schema.json")
+    prompt_bytes = prompt_text.encode("utf-8")
+    pack_bytes = json.dumps(pack, indent=2, sort_keys=True).encode("utf-8")
+    schema_bytes = effective_schema_path.read_bytes()
+    fixed_input_bytes = len(prompt_bytes) + len(pack_bytes) + len(schema_bytes)
+    input_bytes = extra_input_bytes + fixed_input_bytes
+    full_input_digest = sha256_bytes(
+        json.dumps(
+            {
+                "extra_digest": input_digest,
+                "prompt_digest": sha256_bytes(prompt_bytes),
+                "pack_digest": sha256_bytes(pack_bytes),
+                "schema_digest": sha256_bytes(schema_bytes),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    if input_bytes > INPUT_ONLY_REVIEW_MAX_BYTES:
+        raise ReviewBudgetPlanningError(
+            "Final-full input bundle exceeds the 2 MiB bounded coverage limit"
+        )
+    metadata = {
+        "budget_contract": REVIEW_BUDGET_CONTRACT,
+        "final_coverage_contract": FINAL_COVERAGE_CONTRACT,
+        "final_coverage_digest": sha256_bytes(coverage_bytes),
+        "final_coverage_path_count": len(coverage_entries),
+        "final_patch_digest": sha256_bytes(patch_bytes),
+        "final_patch_bytes": len(patch_bytes),
+        "final_input_bundle_digest": full_input_digest,
+        "final_input_bundle_bytes": input_bytes,
+        "budget_plan": budget_plan,
+        "workspace_mode": "input-only",
+    }
+    return extra_files, metadata
+
+
 def _completed_lane_payload(
     owner: Path,
     entry: dict[str, Any],
@@ -1386,11 +1627,24 @@ def _recover_completed_token_budget_lane(
             budget=effective_budget,
         ) is not None:
             continue
+        recorded_budget = candidate.get("budget")
+        command_limit = effective_budget.command_events
+        timeout_limit = effective_budget.timeout_seconds
+        transcript_limit = effective_budget.transcript_bytes
+        if isinstance(recorded_budget, dict):
+            command_limit = int(
+                recorded_budget.get("command_events", command_limit)
+            )
+            timeout_limit = int(
+                recorded_budget.get("timeout_seconds", timeout_limit)
+            )
+            transcript_limit = int(
+                recorded_budget.get("transcript_bytes", transcript_limit)
+            )
         if (
-            candidate.get("command_events", 0) > effective_budget.command_events
-            or candidate.get("duration_seconds", 0) > effective_budget.timeout_seconds
-            or candidate.get("transcript_retained_bytes", 0)
-            > effective_budget.transcript_bytes
+            candidate.get("command_events", 0) > command_limit
+            or candidate.get("duration_seconds", 0) > timeout_limit
+            or candidate.get("transcript_retained_bytes", 0) > transcript_limit
         ):
             continue
         output_relative = candidate.get("output_path")
@@ -1422,6 +1676,12 @@ def _recover_completed_token_budget_lane(
         )
         normalized_path = safe_resolve(owner, normalized_relative)
         atomic_write_json(normalized_path, normalized, backup=False)
+        aggregate_before = max(0, aggregate_total - usage_tokens)
+        warning = token_budget_warning(
+            candidate.get("usage"),
+            aggregate_before=aggregate_before,
+            budget=effective_budget,
+        )
         try:
             _, recovered, _ = state_store.finish_review_lane(
                 change_id,
@@ -1433,15 +1693,15 @@ def _recover_completed_token_budget_lane(
                     "normalized_output_digest": sha256_file(normalized_path),
                     "identifier_normalizations": identifier_normalizations,
                     "original_budget_failure_reason": reason,
-                    "budget_recovery_contract": "dls-token-budget-recovery/v1",
+                    "budget_contract": REVIEW_BUDGET_CONTRACT,
+                    "budget_status": (
+                        "recovered-over-target" if warning is not None else "within-target"
+                    ),
+                    "budget_warning": warning,
+                    "budget_recovery_contract": "dls-token-budget-recovery/v2",
                     "budget_recovery_lane_contract_digest": lane_contract_digest,
-                    "recovered_budget": {
-                        "aggregate_tokens": effective_budget.aggregate_tokens,
-                        "lane_tokens": effective_budget.lane_tokens,
-                        "command_events": effective_budget.command_events,
-                        "timeout_seconds": effective_budget.timeout_seconds,
-                        "transcript_bytes": effective_budget.transcript_bytes,
-                    },
+                    "recovered_budget": _budget_projection(effective_budget),
+                    "recovered_without_model_call": True,
                     "budget_recovered_at": utc_now(),
                     "failure_reason": None,
                 },
@@ -1550,7 +1810,7 @@ def _execute_structured_lane(
             for value in [processed_tokens(item.get("usage"))]
             if value is not None
         )
-        if aggregate_before >= effective_budget.aggregate_tokens:
+        if aggregate_before >= effective_budget.aggregate_ceiling:
             _update_pipeline(
                 owner,
                 change_id=change_id,
@@ -1560,14 +1820,14 @@ def _execute_structured_lane(
                 status="failed",
                 failure_reason=(
                     f"aggregate processed_tokens={aggregate_before} exceeds "
-                    f"budget={effective_budget.aggregate_tokens}"
+                    f"ceiling={effective_budget.aggregate_ceiling}"
                 ),
                 failure_kind="budget-exceeded",
             )
             return {
                 "status": "budget-exceeded",
                 "lane_key": lane_key,
-                "failure_reason": "aggregate child token budget exhausted",
+                "failure_reason": "aggregate child token recovery ceiling exhausted",
             }, None
         attempts = _review_lane_entries(
             state,
@@ -1886,6 +2146,11 @@ def _execute_structured_lane(
                 aggregate_before=aggregate_before,
                 budget=effective_budget,
             )
+            budget_warning = token_budget_warning(
+                usage,
+                aggregate_before=aggregate_before,
+                budget=effective_budget,
+            )
             if status_value == "completed" and budget_failure is not None:
                 status_value = "budget-exceeded"
                 failure_reason = budget_failure
@@ -1923,13 +2188,18 @@ def _execute_structured_lane(
                     "command_event_contract",
                     COMMAND_EVENT_CONTRACT,
                 ),
-                "budget": {
-                    "aggregate_tokens": effective_budget.aggregate_tokens,
-                    "lane_tokens": effective_budget.lane_tokens,
-                    "command_events": effective_budget.command_events,
-                    "timeout_seconds": effective_budget.timeout_seconds,
-                    "transcript_bytes": effective_budget.transcript_bytes,
-                },
+                "budget_contract": REVIEW_BUDGET_CONTRACT,
+                "budget": _budget_projection(effective_budget),
+                "budget_status": (
+                    "completed-over-target"
+                    if status_value == "completed" and budget_warning is not None
+                    else (
+                        "within-target" if status_value == "completed" else None
+                    )
+                ),
+                "budget_warning": (
+                    budget_warning if status_value == "completed" else None
+                ),
                 "duration_seconds": execution["duration_seconds"],
                 "source_snapshot_digest": snapshot_after,
                 "failure_reason": failure_reason,
@@ -2496,6 +2766,8 @@ def _execute_decision_lane(
     prompt_text: str,
     extra_files: dict[str, Path | bytes] | None = None,
     input_only_workspace: bool = False,
+    attempt_metadata: dict[str, Any] | None = None,
+    budget: ReviewBudget | None = None,
     model: str = SEMANTIC_MODEL,
     stream_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -2523,6 +2795,8 @@ def _execute_decision_lane(
             extra_files=extra_files,
             return_invalid_output=True,
             input_only_workspace=input_only_workspace,
+            attempt_metadata=attempt_metadata,
+            budget=budget,
             stream_callback=stream_callback,
         )
         if decision is not None or entry.get("status") == "running":
@@ -2610,6 +2884,23 @@ def _lane_provenance(entry: dict[str, Any]) -> dict[str, Any]:
             "repair_error_digest",
             "repair_reserved_ids",
             "input_bundle_digest",
+            "input_bundle_bytes",
+            "budget_contract",
+            "budget",
+            "budget_status",
+            "budget_warning",
+            "budget_recovery_contract",
+            "recovered_budget",
+            "recovered_without_model_call",
+            "original_budget_failure_reason",
+            "final_coverage_contract",
+            "final_coverage_digest",
+            "final_coverage_path_count",
+            "final_patch_digest",
+            "final_patch_bytes",
+            "final_input_bundle_digest",
+            "final_input_bundle_bytes",
+            "workspace_mode",
         )
     }
 
@@ -2824,6 +3115,20 @@ def _build_review_ir(
             "draft_digest": independent_entry["output_digest"],
             "transcript_path": independent_entry["transcript_path"],
             "transcript_digest": independent_entry["transcript_digest"],
+            **{
+                key: independent_entry.get(key)
+                for key in (
+                    "budget_contract",
+                    "budget",
+                    "budget_status",
+                    "budget_warning",
+                    "budget_recovery_contract",
+                    "recovered_budget",
+                    "recovered_without_model_call",
+                    "original_budget_failure_reason",
+                )
+                if independent_entry.get(key) is not None
+            },
         }
     ]
     if final_full_entry is not None:
@@ -2837,6 +3142,28 @@ def _build_review_ir(
                 "draft_digest": final_full_entry["output_digest"],
                 "transcript_path": final_full_entry["transcript_path"],
                 "transcript_digest": final_full_entry["transcript_digest"],
+                **{
+                    key: final_full_entry.get(key)
+                    for key in (
+                        "budget_contract",
+                        "budget",
+                        "budget_status",
+                        "budget_warning",
+                        "budget_recovery_contract",
+                        "recovered_budget",
+                        "recovered_without_model_call",
+                        "original_budget_failure_reason",
+                        "final_coverage_contract",
+                        "final_coverage_digest",
+                        "final_coverage_path_count",
+                        "final_patch_digest",
+                        "final_patch_bytes",
+                        "final_input_bundle_digest",
+                        "final_input_bundle_bytes",
+                        "workspace_mode",
+                    )
+                    if final_full_entry.get(key) is not None
+                },
             }
         )
     repairs = [
@@ -2922,6 +3249,7 @@ def _build_review_ir(
         "runner_contract": pack.get("runner_contract", REVIEW_RUNNER_CONTRACT),
         **({"context_contract": pack["context_contract"]} if pack.get("context_contract") else {}),
         **({"economy_contract": pack["economy_contract"]} if pack.get("economy_contract") else {}),
+        **({"budget_contract": pack["budget_contract"]} if pack.get("budget_contract") else {}),
         **({"native_output_contract": pack["native_output_contract"]} if pack.get("native_output_contract") else {}),
         **(
             {"native_workspace_contract": pack["native_workspace_contract"]}
@@ -4017,6 +4345,43 @@ def review_run(
         and not _has_actionable_review_finding(decision)
     ):
         final_prompt = _render_prompt("final-full.md", prompt_values)
+        final_budget = _final_full_budget(owner, pack["control_level"])
+        current_state = StateStore(owner).load(change_id)
+        aggregate_before_final = sum(
+            value
+            for item in current_state.get("reviews", [])
+            if isinstance(item, dict)
+            and item.get("review_id") == pack["review_id"]
+            and item.get("lane_key") != "semantic:final-full"
+            for value in [processed_tokens(item.get("usage"))]
+            if value is not None
+        )
+        try:
+            final_inputs, final_metadata = _final_full_inputs(
+                owner,
+                pack=pack,
+                context_path=context_path,
+                native_bytes=native_bytes,
+                independent_decision=independent_decision,
+                targeted_decision=decision,
+                specialist_payloads=specialist_payloads,
+                aggregate_before=aggregate_before_final,
+                budget=final_budget,
+                prompt_text=final_prompt,
+                schema_path=SCHEMAS_ROOT / "review-decision.schema.json",
+            )
+        except ReviewBudgetPlanningError as exc:
+            _update_pipeline(
+                owner,
+                change_id=change_id,
+                review_id=pack["review_id"],
+                operation_id=pipeline_operation_id,
+                stage="semantic:final-full",
+                status="failed",
+                failure_reason=str(exc),
+                failure_kind="review-context",
+            )
+            return incomplete_result(owner, pack["review_id"])
         emit("lane-transition", review_id=pack["review_id"], lane="semantic:final-full")
         _update_pipeline(
             owner,
@@ -4035,39 +4400,79 @@ def review_run(
             lane_kind="semantic",
             effort=semantic_effort,
             prompt_text=final_prompt,
-            extra_files={
-                "native.txt": native_bytes,
-                "semantic-independent.json": json.dumps(
-                    independent_decision,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ).encode("utf-8"),
-                "targeted-decision.json": json.dumps(
-                    decision,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ).encode("utf-8"),
-                **{
-                    f"specialists/{name}": payload
-                    for name, payload in specialist_payloads.items()
-                },
-            },
+            extra_files=final_inputs,
+            input_only_workspace=True,
+            attempt_metadata=final_metadata,
+            budget=final_budget,
             stream_callback=(lambda event: emit(event.pop("event"), **event)) if stream_callback else None,
         )
         if final_decision is None:
             return incomplete_result(owner, pack["review_id"])
         decision = final_decision
-    report, imported, presentation = _finalize_review(
-        owner,
-        change_id=change_id,
-        pack=pack,
-        start_result=started,
-        decision=decision,
-        independent_entry=independent_entry,
-        reconciliation_entry=reconciliation_entry,
-        specialist_entries=specialist_entries,
-        final_full_entry=final_full_entry,
-        pipeline_operation_id=pipeline_operation_id,
+    finalization_id = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"dls:{change_id}:{pack['review_id']}:finalization",
+        )
+    )
+    _, finalization, claimed_finalization = StateStore(
+        owner
+    ).claim_review_finalization(
+        change_id,
+        review_id=pack["review_id"],
+        finalization_id=finalization_id,
+        runner_pid=os.getpid(),
+    )
+    if not claimed_finalization:
+        current = review_status(
+            owner,
+            change_id=change_id,
+            review_id=pack["review_id"],
+        )
+        if current.get("status") == "completed" and current.get(
+            "review_result_path"
+        ):
+            current.update(
+                {
+                    "dry_run": False,
+                    "operation_id": effective_operation_id,
+                    "review_pack_path": relative_pack_path,
+                    "pack_created": False,
+                    "delivery_receipt": delivery_receipt(
+                        owner,
+                        change_id=change_id,
+                    ),
+                }
+            )
+            return annotate_handoff(current)
+        return incomplete_result(owner, pack["review_id"])
+    try:
+        report, imported, presentation = _finalize_review(
+            owner,
+            change_id=change_id,
+            pack=pack,
+            start_result=started,
+            decision=decision,
+            independent_entry=independent_entry,
+            reconciliation_entry=reconciliation_entry,
+            specialist_entries=specialist_entries,
+            final_full_entry=final_full_entry,
+            pipeline_operation_id=pipeline_operation_id,
+        )
+    except Exception as exc:
+        StateStore(owner).finish_review_finalization(
+            change_id,
+            review_id=pack["review_id"],
+            finalization_id=finalization_id,
+            status="failed",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        raise
+    StateStore(owner).finish_review_finalization(
+        change_id,
+        review_id=pack["review_id"],
+        finalization_id=finalization_id,
+        status="completed",
     )
     result = {
         "ok": imported["review_result_path"] is not None,

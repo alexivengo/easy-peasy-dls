@@ -31,7 +31,8 @@ sibling folders or infers branches.
 3. at most three deterministic critical specialist lanes;
 4. independent Sol high/xhigh semantic review;
 5. compact input-only reconciliation only when sources disagree or find issues;
-6. for a clean remediation only, one conditional whole-change final-full pass;
+6. for a clean remediation only, one conditional whole-change final-full pass
+   in a bounded input-only workspace with exact patch/coverage inventory;
 7. state-owned provenance, ReviewIR creation, validation, and import.
 
 Do not create subagents, semantic drafts, specialist prompts, ReviewIR, or
@@ -61,8 +62,20 @@ python3 <plugin-root>/scripts/dls.py --root <current-project> --json \
 recovery it reports `preparing-candidate` and `wait-review`; do not start a
 second process. The normal stream never
 contains raw transcripts or provisional findings. Report only its transitions,
-budget warning, final result, or one compact heartbeat. `inspect-review-budget`
-is a bounded execution failure: do not retry expensive lanes or invent a verdict.
+budget warning, final result, or one compact heartbeat. A target overrun inside
+the state-owned recovery ceiling is recorded as a warning, not converted into a
+false infrastructure failure. `inspect-review-budget` means the hard ceiling or
+a non-token safety limit was exceeded: do not retry expensive lanes or invent a
+verdict.
+
+`resume-review-budget` means a completed structured output is already present
+and is eligible for deterministic zero-call recovery. Re-run the same public
+`review-run` with the same stable operation ID. DLS verifies HEAD, source,
+definition, pack, raw output/transcript digests and original command/time/output
+limits, then resumes only assembly/import. Never start another model lane.
+`split-review-scope` means the exact whole-change input bundle exceeds the
+bounded final-pass contract; return to definition/implementation planning and
+split the change instead of silently truncating coverage.
 
 After a canonical import, stream mode emits exactly one bounded
 `delivery-receipt` event immediately before `completed`. If the original stream
@@ -136,6 +149,10 @@ approval, release, or production gates and never requires a model call.
   replacement review.
 - `resume-review-repair`: call the same `review-run`; DLS resumes the single
   compact repair and only the downstream lanes that have not completed.
+- `resume-review-budget`: call the same `review-run`; DLS validates and imports
+  the already completed output without a model call.
+- `split-review-scope`: stop and split the review scope; DLS did not truncate
+  the whole-change coverage bundle.
 - `resume-review` for legacy native invalid-output: call the same `review-run`
   once; DLS either recovers the completed output without a native model call or
   returns a terminal inspect action.

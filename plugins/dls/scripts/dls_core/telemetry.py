@@ -647,6 +647,8 @@ def review_metrics(
     missing = 0
     completeness_reasons: list[str] = []
     total_command_events = 0
+    over_target_lanes = 0
+    recovered_without_model_call = 0
     for entry in attempts:
         lane_key = entry["lane_key"]
         usage, usage_source, incomplete_reason = _lane_usage_details(owner, entry)
@@ -684,7 +686,42 @@ def review_metrics(
             "cached_input_ratio": cached_ratio,
             "processed_tokens_per_command_event": per_command,
             "context": _lane_context_metadata(owner, entry, verbose=verbose),
+            "budget": {
+                "contract": entry.get("budget_contract"),
+                "status": entry.get("budget_status"),
+                "target_tokens": (
+                    entry.get("budget", {}).get("lane_tokens")
+                    if isinstance(entry.get("budget"), dict)
+                    else None
+                ),
+                "ceiling_tokens": (
+                    entry.get("budget", {}).get("lane_recovery_tokens")
+                    if isinstance(entry.get("budget"), dict)
+                    and isinstance(
+                        entry.get("budget", {}).get("lane_recovery_tokens"),
+                        int,
+                    )
+                    else (
+                        entry.get("recovered_budget", {}).get(
+                            "lane_recovery_tokens"
+                        )
+                        if isinstance(entry.get("recovered_budget"), dict)
+                        else None
+                    )
+                ),
+                "recovery_contract": entry.get("budget_recovery_contract"),
+                "recovered_without_model_call": bool(
+                    entry.get("recovered_without_model_call")
+                ),
+            },
         }
+        if entry.get("budget_status") in {
+            "completed-over-target",
+            "recovered-over-target",
+        }:
+            over_target_lanes += 1
+        if entry.get("recovered_without_model_call") is True:
+            recovered_without_model_call += 1
         lane["repair"] = entry.get("repair_contract") is not None
         lane["retry"] = int(entry.get("attempt_ordinal", 1) or 1) > 1
         if verbose:
@@ -786,6 +823,8 @@ def review_metrics(
             "cached_input_ratio": child_cached_ratio,
             "processed_tokens_per_command_event": child_per_command,
             "command_events": total_command_events,
+            "over_target_lanes": over_target_lanes,
+            "recovered_without_model_call_lanes": recovered_without_model_call,
         },
         "controller": {
             "task_ref": controller_ref,

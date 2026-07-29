@@ -35,11 +35,14 @@ from dls_core.operations import (
     ticket_set,
 )
 from dls_core.review_runner import (
+    ReviewBudgetPlanningError,
     ReviewDecisionReferenceError,
     _codex_failure_reason,
     _collect_decision_reference_errors,
     _derive_review_verdict,
     _derive_ticket_verdicts,
+    _final_full_inputs,
+    _final_full_budget,
     _native_review_is_clean,
     _normalize_structured_payload,
     _validate_strict_output_schema,
@@ -986,7 +989,7 @@ env_allow = []
                         operation_id="review-root",
                         stream_callback=events.append,
                     )
-                    deadline = time.monotonic() + 5
+                    deadline = time.monotonic() + 15
                     while not marker.exists() and time.monotonic() < deadline:
                         time.sleep(0.02)
                     self.assertTrue(marker.exists())
@@ -1080,6 +1083,14 @@ env_allow = []
                 counter.read_text(encoding="utf-8").splitlines(),
                 calls,
             )
+            finalizations = [
+                item
+                for item in StateStore(root).load("C001")["reviews"]
+                if item.get("kind") == "finalization"
+                and item.get("review_id") == completed["review_id"]
+            ]
+            self.assertEqual(len(finalizations), 1)
+            self.assertEqual(finalizations[0]["status"], "completed")
 
             attempts = [
                 item
@@ -1496,6 +1507,11 @@ env_allow = []
                     .replace("lane_tokens = 100", "lane_tokens = 300"),
                     encoding="utf-8",
                 )
+                resumable = review_status(root, change_id="C001")
+                self.assertEqual(
+                    resumable["next_action"]["id"],
+                    "resume-review-budget",
+                )
                 completed = review_run(
                     root,
                     change_id="C001",
@@ -1520,12 +1536,14 @@ env_allow = []
             self.assertEqual(semantic[0]["status"], "completed")
             self.assertEqual(
                 semantic[0]["budget_recovery_contract"],
-                "dls-token-budget-recovery/v1",
+                "dls-token-budget-recovery/v2",
             )
             self.assertEqual(
                 semantic[0]["original_budget_failure_reason"],
-                "lane processed_tokens=151 exceeds budget=100",
+                "lane processed_tokens=151 exceeds budget=110",
             )
+            self.assertTrue(semantic[0]["recovered_without_model_call"])
+            self.assertEqual(semantic[0]["budget_status"], "within-target")
 
     def test_review_run_returns_unprepared_candidate_to_implementation_task(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2317,6 +2335,62 @@ env_allow = []
                 result["prior_finding_verdicts"][0]["finding_id"],
                 "R001",
             )
+            final_entry = next(
+                item
+                for item in StateStore(root).load("C001")["reviews"]
+                if item.get("review_id") == completed["review_id"]
+                and item.get("lane_key") == "semantic:final-full"
+            )
+            self.assertEqual(final_entry["workspace_mode"], "input-only")
+            self.assertEqual(
+                final_entry["final_coverage_contract"],
+                "dls-final-coverage/v1",
+            )
+            self.assertEqual(
+                final_entry["final_coverage_path_count"],
+                len(ready["review_pack"]["full_changed_files"]),
+            )
+            self.assertLessEqual(final_entry["budget"]["command_events"], 16)
+            self.assertEqual(
+                result["lanes"]["semantic"]["passes"][-1]["workspace_mode"],
+                "input-only",
+            )
+
+    def test_final_full_refuses_unbounded_whole_change_bundle_before_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base_sha = initialize_git(root)
+            initialize(root)
+            create_change(root, control="critical")
+            context = root / ".dls/cache/context.json"
+            context.parent.mkdir(parents=True, exist_ok=True)
+            context.write_text("{}", encoding="utf-8")
+            payload = "x" * (2 * 1024 * 1024 + 4096)
+            (root / "large.txt").write_text(payload, encoding="utf-8")
+            git(root, "add", "large.txt")
+            git(root, "commit", "-m", "large review fixture")
+            head_sha = git(root, "rev-parse", "HEAD")
+            pack = {
+                "review_id": "large-context-review",
+                "epic_base_sha": base_sha,
+                "head_sha": head_sha,
+                "full_changed_files": ["large.txt"],
+            }
+            with self.assertRaisesRegex(
+                ReviewBudgetPlanningError,
+                "2 MiB bounded coverage limit",
+            ):
+                _final_full_inputs(
+                    root,
+                    pack=pack,
+                    context_path=".dls/cache/context.json",
+                    native_bytes=b"clean",
+                    independent_decision=self._decision_with_tickets(),
+                    targeted_decision=self._decision_with_tickets(),
+                    specialist_payloads={},
+                    aggregate_before=0,
+                    budget=_final_full_budget(root, "critical"),
+                )
 
     def test_review_status_reports_failed_without_restarting_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

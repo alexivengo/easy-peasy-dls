@@ -587,9 +587,12 @@ stream получает ровно одно событие `delivery-receipt` п
 в compact repair, остальные случаи получают `inspect-review-output`. Drift HEAD,
 source, definition или pack не запускает модель. Duration timeout является
 `budget-exceeded` и не получает дорогой retry. Risk budget ограничивает
-processed child tokens, одну lane, command events, duration и transcript:
-routine 750k/10m, standard 3m/15m, critical 5m/20m с меньшими per-lane caps.
-Budget failure не создаёт ReviewIR и возвращает `inspect-review-budget`.
+processed child tokens, одну lane, command events, duration и transcript.
+Token target и hard recovery ceiling различаются: routine 750k/825k,
+standard 3m/3.3m, critical 8m/8.8m aggregate; per-lane critical target/ceiling
+равны 6m/6.6m. Target overrun внутри ceiling сохраняет результат и явное
+предупреждение. Hard ceiling, timeout, command, transcript или output failure не
+создаёт ReviewIR и возвращает `inspect-review-budget`.
 Model, effort, prompt, schema, context, pack, HEAD и repair input
 входят в digest lane contract вместе с effective budget. Completed lane
 переиспользуется только при точном совпадении этого digest. Поэтому изменение
@@ -611,15 +614,28 @@ retryable.
 commands, 2.5 млн на lane и 5 млн aggregate обрывали уже завершённый валидный
 targeted-pass. В `v0.6.0` critical budget откалиброван до 48 commands, 1.5 MiB
 transcript, 6 млн на lane и 8 млн aggregate; 20-минутный timeout не расширялся.
-Завершённый digest-bound structured output можно принять без нового model call
-только после явного нового budget contract, в который укладывается измеренный
-usage. Command, time, transcript, transport и integrity failures так не
-восстанавливаются. Остальные terminal budget attempts возвращают
-типизированный `inspect-review-budget`, в том числе без output artifact.
+В `v0.9.1` подтверждён второй класс сбоя: final-full EPIC-01 завершился с
+валидным structured output, но usage стал известен лишь в `turn.completed` и
+оказался 6 364 076 tokens при target 6m; общий child total достиг 8 718 502 при
+target 8m. Старый контракт выбросил уже оплаченный результат. Контракт
+`dls-review-budget/v2` разрешает zero-call recovery только внутри ограниченного
+10%/absolute ceiling и после проверки exact HEAD, source, definition, pack,
+output/transcript digests и исходных non-token limits. Status возвращает
+`resume-review-budget`; raw artifacts и usage не меняются. Command, time,
+transcript, transport, integrity и over-ceiling failures так не
+восстанавливаются.
+
+Будущий remediation final-full выполняется не в product checkout, а в
+input-only workspace. DLS формирует exact `epic.patch`, coverage manifest со
+всеми changed paths/blob IDs, compact context и budget plan. Stage ограничен 16
+command events, 15 минутами, transcript 1 MiB и общим input bundle 2 MiB. Если
+полное покрытие не помещается, DLS не обрезает его молча и возвращает
+`split-review-scope` до model call.
 
 Новые packs помечаются `runner_contract: dls-review-runner/v2`,
 `context_contract: dls-review-context/v2`, `economy_contract:
-dls-review-economy/v1`, `native_output_contract: dls-native-review/v2` и
+dls-review-economy/v1`, `budget_contract: dls-review-budget/v2`,
+`native_output_contract: dls-native-review/v2` и
 `native_workspace_contract: dls-native-workspace/v1`. Для них import
 доверяет provenance только completed attempts из DLS state: модель возвращает
 semantic decision, но не может сама объявить lane завершённым. Исторические

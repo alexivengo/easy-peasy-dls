@@ -2,14 +2,14 @@
 
 Срез: 29 июля 2026 года
 
-Текущая линия: `v0.9.0`
+Текущая линия: `v0.9.1`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
 ручную работу и повтор контекста, Attractive добавляет удобство только после
 стабилизации основного цикла.
 
-Полный реестр всех 152 реализованных, запланированных, отложенных и намеренно
+Полный реестр всех 154 реализованных, запланированных, отложенных и намеренно
 исключённых возможностей находится в [карте возможностей](capability-catalog.md).
 Этот файл остаётся короткой выборкой ближайших волн, а не вторым каталогом.
 
@@ -165,7 +165,18 @@ upstream требует `rebase-after-dependency` до появления его
 непересекающихся changes одновременно проходят candidate/review pipelines без
 глобального lock.
 
-## Следующая волна v0.9.1: UI/UX Attractive pilot
+## v0.9.1 — bounded final review и zero-call recovery
+
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| M65 | Must-be / P0 | Completed-output budget recovery | Валидный exact-HEAD output внутри bounded recovery ceiling не выбрасывается и импортируется без повторного model call |
+| P43 | Performance / P0 | Input-only final-full | Whole-change финал получает exact patch/coverage bundle, 16 command events и typed scope split вместо unrestricted checkout |
+
+Exit criteria v0.9.1: реальный EPIC-01 review восстанавливается с тем же
+operation ID, без нового model attempt и без изменения product source; будущий
+final-full не получает checkout и не обрезает coverage молча.
+
+## Следующая волна v0.10.0: UI/UX Attractive pilot
 
 - `M38–M39` — проверить Tier 1 precedent и Tier 2/3 versioned design artifact на
   реальном UI change;

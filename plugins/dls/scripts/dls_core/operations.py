@@ -132,6 +132,7 @@ LEGACY_REVIEW_RUNNER_CONTRACT = "dls-review-runner/v1"
 REVIEW_RUNNER_CONTRACT = "dls-review-runner/v2"
 REVIEW_CONTEXT_CONTRACT = "dls-review-context/v2"
 REVIEW_ECONOMY_CONTRACT = "dls-review-economy/v1"
+REVIEW_BUDGET_CONTRACT = "dls-review-budget/v2"
 COMMAND_EVENT_CONTRACT = "logical-invocations/v1"
 NATIVE_OUTPUT_CONTRACT = "dls-native-review/v2"
 NATIVE_WORKSPACE_CONTRACT = "dls-native-workspace/v1"
@@ -2894,6 +2895,7 @@ def _review_pack_state_entry(
         "runner_contract": pack.get("runner_contract"),
         "context_contract": pack.get("context_contract"),
         "economy_contract": pack.get("economy_contract"),
+        "budget_contract": pack.get("budget_contract"),
         "native_output_contract": pack.get("native_output_contract"),
         "native_workspace_contract": pack.get("native_workspace_contract"),
         "identifier_contract": pack.get("identifier_contract"),
@@ -3052,6 +3054,7 @@ def review_pack(
         "runner_contract": REVIEW_RUNNER_CONTRACT,
         "context_contract": REVIEW_CONTEXT_CONTRACT,
         "economy_contract": REVIEW_ECONOMY_CONTRACT,
+        "budget_contract": REVIEW_BUDGET_CONTRACT,
         "command_event_contract": COMMAND_EVENT_CONTRACT,
         "native_output_contract": NATIVE_OUTPUT_CONTRACT,
         "native_workspace_contract": NATIVE_WORKSPACE_CONTRACT,
@@ -6558,6 +6561,7 @@ def _validate_review_report(
     for field in (
         "context_contract",
         "economy_contract",
+        "budget_contract",
         "native_output_contract",
         "native_workspace_contract",
     ):

@@ -515,6 +515,7 @@ def build_review_report(
             for field in (
                 "context_contract",
                 "economy_contract",
+                "budget_contract",
                 "native_output_contract",
                 "native_workspace_contract",
             )

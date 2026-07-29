@@ -176,6 +176,42 @@ class IOAndStateTests(unittest.TestCase):
             self.assertFalse(changed)
             self.assertEqual(replayed["state_revision"], 2)
 
+    def test_dead_review_finalization_owner_is_reclaimed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize(root)
+            create_change(root)
+            store = StateStore(root)
+
+            _, first, claimed = store.claim_review_finalization(
+                "C001",
+                review_id="review-1",
+                finalization_id="finalize-dead",
+                runner_pid=999_999_999,
+            )
+            self.assertTrue(claimed)
+            self.assertEqual(first["status"], "running")
+
+            with mock.patch("dls_core.state.os.kill", side_effect=OSError("dead")):
+                _, recovered, claimed = store.claim_review_finalization(
+                    "C001",
+                    review_id="review-1",
+                    finalization_id="finalize-recovered",
+                    runner_pid=12345,
+                )
+            self.assertTrue(claimed)
+            self.assertEqual(recovered["finalization_id"], "finalize-recovered")
+            self.assertEqual(recovered["runner_pid"], 12345)
+
+            _, completed, changed = store.finish_review_finalization(
+                "C001",
+                review_id="review-1",
+                finalization_id="finalize-recovered",
+                status="completed",
+            )
+            self.assertTrue(changed)
+            self.assertEqual(completed["status"], "completed")
+
 
 if __name__ == "__main__":
     unittest.main()

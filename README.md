@@ -57,6 +57,10 @@ DLS спроектирован так, чтобы меньше повторят�
 - native review работает в чистом standalone clone и не видит локальный DLS sidecar рабочего checkout;
 - independent review нельзя закрыть силами implementer;
 - remediation проверяет предыдущие findings и изменившийся blast radius;
+- review имеет risk-adjusted targets и hard ceilings; уже завершённый валидный
+  output внутри bounded recovery window не оплачивается второй раз;
+- финальная whole-change проверка remediation получает exact patch/coverage
+  bundle без unrestricted product checkout;
 - `review-clear`, пользовательский `accept` и готовность к release остаются разными состояниями.
 
 Это позволяет ответить не только «что сделал Codex?», но и «для какой версии это действительно проверено?».

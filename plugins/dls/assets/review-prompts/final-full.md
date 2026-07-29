@@ -15,10 +15,14 @@ require a new complete finding with a different ID, and
 `replacement_finding_id` must equal that new finding ID and must differ from
 the prior finding ID.
 
-Read the bound context, ReviewPack, native output, independent targeted draft,
-specialist results, and `.dls-review-input/targeted-decision.json`. Re-check every
-ticket, cross-ticket integration, contract conformance, blast radius, and current
-validation evidence. The returned decision supersedes the targeted decision.
+This pass runs in an input-only workspace without a product checkout. Read only
+the immutable files under `.dls-review-input/`: the bound context and ReviewPack,
+`epic.patch`, `coverage.json`, `budget-plan.json`, native output, independent
+targeted draft, specialist results, and `targeted-decision.json`. Treat
+`coverage.json` as the exact whole-change path inventory and inspect every path
+represented by `epic.patch`. Re-check every ticket, cross-ticket integration,
+contract conformance, blast radius, and current validation evidence. The
+returned decision supersedes the targeted decision.
 
 Do not modify files. Return only JSON matching
 `.dls-review-input/output.schema.json`. DLS derives canonical ticket verdicts

@@ -14,6 +14,7 @@ from dls_core.economy import (
     processed_tokens,
     review_budget,
     token_budget_failure,
+    token_budget_warning,
 )
 from dls_core.io import sha256_file
 from dls_core.operations import (
@@ -65,6 +66,42 @@ class EconomyV050Tests(unittest.TestCase):
         self.assertEqual(total["processed_tokens"], 175)
         self.assertEqual(processed_tokens(total), 175)
         self.assertIsNone(_normalize_usage({"input_tokens": 0, "output_tokens": 0}))
+
+    def test_critical_target_overrun_inside_recovery_ceiling_is_a_warning(self) -> None:
+        budget = DEFAULT_REVIEW_BUDGETS["critical"]
+        usage = {
+            "input_tokens": 6_350_000,
+            "cached_input_tokens": 6_100_000,
+            "output_tokens": 14_076,
+        }
+        aggregate_before = 2_354_426
+        warning = token_budget_warning(
+            usage,
+            aggregate_before=aggregate_before,
+            budget=budget,
+        )
+        self.assertIsNone(
+            token_budget_failure(
+                usage,
+                aggregate_before=aggregate_before,
+                budget=budget,
+            )
+        )
+        self.assertIsNotNone(warning)
+        assert warning is not None
+        self.assertEqual(warning["lane_processed_tokens"], 6_364_076)
+        self.assertEqual(warning["lane_ceiling_tokens"], 6_600_000)
+        self.assertEqual(warning["aggregate_processed_tokens"], 8_718_502)
+        self.assertEqual(warning["aggregate_ceiling_tokens"], 8_800_000)
+
+    def test_critical_recovery_ceiling_still_rejects_real_overrun(self) -> None:
+        budget = DEFAULT_REVIEW_BUDGETS["critical"]
+        failure = token_budget_failure(
+            {"input_tokens": 6_600_000, "output_tokens": 1},
+            aggregate_before=2_200_000,
+            budget=budget,
+        )
+        self.assertIn("lane processed_tokens", failure or "")
 
     def test_sanitized_epic_fixture_reports_8264764_child_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -167,6 +204,70 @@ class EconomyV050Tests(unittest.TestCase):
             self.assertIsNone(result["lanes"][0]["usage"])
             self.assertEqual(result["lanes"][0]["usage_source"], "reported-zero")
             self.assertIn("native-reported-zero", result["completeness_reasons"])
+
+    def test_metrics_expose_budget_warning_and_zero_call_recovery_without_raw_data(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._root(directory)
+            state = StateStore(root).load("C001")
+
+            def mutate(value: dict) -> None:
+                value["reviews"].append(
+                    {
+                        "kind": "semantic",
+                        "review_id": "budget-recovery",
+                        "lane_key": "semantic:final-full",
+                        "status": "completed",
+                        "model": "gpt-5.6-sol",
+                        "attempt_ordinal": 1,
+                        "usage": {
+                            "input_tokens": 6_350_000,
+                            "cached_input_tokens": 6_100_000,
+                            "output_tokens": 14_076,
+                        },
+                        "budget_contract": "dls-review-budget/v2",
+                        "budget_status": "recovered-over-target",
+                        "budget_recovery_contract": "dls-token-budget-recovery/v2",
+                        "recovered_without_model_call": True,
+                        "budget": {
+                            "lane_tokens": 6_000_000,
+                        },
+                        "recovered_budget": {
+                            "lane_tokens": 6_000_000,
+                            "lane_recovery_tokens": 6_600_000,
+                        },
+                        "budget_warning": {
+                            "lane_overrun_tokens": 364_076,
+                        },
+                    }
+                )
+
+            StateStore(root).mutate(
+                "C001",
+                expected_revision=state["state_revision"],
+                operation_id="budget-recovery-metrics",
+                operation_kind="fixture",
+                mutator=mutate,
+            )
+            result = review_metrics(
+                root,
+                change_id="C001",
+                review_id="budget-recovery",
+            )
+            self.assertEqual(result["child_derived"]["over_target_lanes"], 1)
+            self.assertEqual(
+                result["child_derived"]["recovered_without_model_call_lanes"],
+                1,
+            )
+            self.assertTrue(
+                result["lanes"][0]["budget"]["recovered_without_model_call"]
+            )
+            self.assertEqual(
+                result["lanes"][0]["budget"]["ceiling_tokens"],
+                6_600_000,
+            )
+            encoded = json.dumps(result)
+            self.assertNotIn("budget_warning", encoded)
+            self.assertNotIn("raw", encoded)
 
     def test_codex_adapter_uses_current_turn_delta_and_filters_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

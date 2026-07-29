@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
 Срез: 29 июля 2026 года
-Текущая линия: `v0.9.0`
+Текущая линия: `v0.9.1`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -9,16 +9,16 @@
 «что делать следующим», а этот документ — «что вообще существует, планируется
 или намеренно не будет реализовано».
 
-Всего отслеживается 152 пункта:
+Всего отслеживается 154 пункта:
 
-- 64 Must-be: `M01–M64`;
-- 42 Performance: `P01–P42`;
+- 65 Must-be: `M01–M65`;
+- 43 Performance: `P01–P43`;
 - 10 Attractive: `A01–A10`;
 - 12 Indifferent/premature: `I01–I12`;
 - 24 Reverse anti-features: `R01–R24`.
 
 Исходный KANO-снимок содержал 129 пунктов: все они сохранены под прежними ID.
-К ним добавлены 23 публичные возможности `M51–M64` и `P34–P42`. Удалять ID
+К ним добавлены 25 публичных возможностей `M51–M65` и `P34–P43`. Удалять ID
 нельзя: изменившееся решение помечается как заменённое, а не исчезает из карты.
 
 ## Статусы
@@ -77,8 +77,8 @@
 | M35 | Review не завершается без result path | ✅ | P0 | Успех требует canonical `review_result_path`; actionable result — remediation path |
 | M36 | Findings lifecycle | ✅ | P0 | Implementer ставит addressed/note; verified принадлежит independent review; waiver — человеку |
 | M37 | Latest-only remediation context | ✅ | P0 | Рабочий manifest строится только из последнего canonical ReviewIR |
-| M38 | UI/UX source prerequisite | 🟨 | P0 | Policy и approvals реализованы; реальный UI pilot перенесён в v0.9.1 |
-| M39 | Tiered UI policy | 🟨 | P0 | Tier 1 допускает precedent, Tier 2/3 требуют versioned artifact; реальный pilot перенесён в v0.9.1 |
+| M38 | UI/UX source prerequisite | 🟨 | P0 | Policy и approvals реализованы; реальный UI pilot перенесён в v0.10.0 |
+| M39 | Tiered UI policy | 🟨 | P0 | Tier 1 допускает precedent, Tier 2/3 требуют versioned artifact; реальный pilot перенесён в v0.10.0 |
 | M40 | Architecture decision до завершения SPEC | 🟨 | P0 | Critical E03 adoption и Draft/approval boundary дают backend preflight evidence; нужен полный approved definition/review lifecycle |
 | M41 | ADR только для долговечного решения | ✅ | P0 | ADR остаётся conditional artifact, а не ритуалом для каждого change |
 | M42 | Release/production evidence не подменяет review | ✅ | P0 | External gaps не блокируют code review без прямой ссылки на ticket DoD |
@@ -104,6 +104,7 @@
 | M62 | Indeterminate native recovery | ✅ | P0 | Transcript-verified prose не объявляется clean, не повторяет native call и обязательно проходит semantic reconciliation |
 | M63 | Stage-aware change dependencies | ✅ | P0 | Dependency блокирует только названную и последующие стадии; `accepted-in-base` проверяет human acceptance и Git ancestry |
 | M64 | Change-scoped one-writer | ✅ | P0 | Один owner и single-flight сохраняются внутри change, независимые worktrees не получают global lock |
+| M65 | Completed-output budget recovery | ✅ | P0 | Валидный exact-HEAD output внутри bounded ceiling импортируется без повторного model call; hard limits остаются terminal |
 
 ## Performance — экономия времени, контекста и ручной работы
 
@@ -151,6 +152,7 @@
 | P40 | Selective worktree preparation | ✅ | P1 | Parallel standard/critical owner создаётся от explicit SHA без sibling scan, rebase или autonomous task creation |
 | P41 | Overlap/conflict preflight | ✅ | P1 | Exact file overlap блокирует поздний candidate handoff, proximity остаётся advisory |
 | P42 | Active delivery map | ✅ | P1 | Bounded read-only карта показывает dependencies, parallel groups, integration order и один typed action на change |
+| P43 | Input-only final-full | ✅ | P0 | Exact patch/coverage bundle заменяет unrestricted checkout; oversized change получает explicit scope split |
 
 ## Attractive — полезно после стабилизации core
 
@@ -252,7 +254,7 @@
 - `P41`: exact-file overlap сериализует candidate/integration, не раннюю работу;
 - `P42`: bounded delivery map без model calls и локальных paths.
 
-### v0.9.1 — UI/UX и полный architecture lifecycle
+### v0.10.0 — UI/UX и полный architecture lifecycle
 
 - `M38–M39`: UI tiers и immutable design source на реальном change;
 - `M40`: approved critical definition/review lifecycle;
