@@ -141,27 +141,48 @@ immutable provenance. Architecture approval использует
 несколько кандидатов возвращают `record-architecture-decision`.
 
 Architecture approval обязателен только при impact `architecture` или наличии
-canonical ADR. `approve --decision definition --include-design` атомарно
-записывает два независимых approvals из одного scoped human ответа. Definition
-и accept сохраняют snapshots scoped decisions. Для пакетов, подтверждённых до
-v0.10.0 одним whole-definition approval, DLS выводит совместимость только из
-точного approved Git revision: если bounded architecture digest на той ревизии
-совпадает с текущим, отдельное retroactive approval не требуется. Несвязанная
-SPEC-правка сохраняет этот architecture approval; изменение самой architecture
-region делает его pending. Поэтому unrelated SPEC edit
-инвалидирует полный definition approval, но сохраняет design/architecture;
-изменение самого design/architecture делает stale и scoped approval, и полный
-definition approval. Legacy approvals без markers продолжают whole-definition
-формат хранения и не переписываются; bounded compatibility является только
-runtime-проекцией точной approved Git revision.
+canonical ADR. Ранний отдельный `approve --decision architecture` остаётся для
+дорогого решения, которое нужно зафиксировать до завершения SPEC. На финальной
+границе `approve --decision definition [--include-design]
+[--include-architecture]` атомарно записывает отдельные approvals из одного
+explicit human ответа. Каждый record получает общий UUID и marker
+`dls-approval-bundle/v1`; prompt и response должны назвать каждое решение и его
+short digest. Частичный bundle невозможен: CAS записывает все records либо ни
+одного. Сам `approve` не запускает validation или model calls, а возвращает
+реальный следующий шаг общего readiness resolver.
+
+Definition и accept сохраняют snapshots scoped decisions. Для пакетов,
+подтверждённых до v0.10.0 одним whole-definition approval, DLS сохраняет
+read-only provenance `legacy-definition-projection`, вычисленную из exact
+approved Git revision. Она позволяет читать историческое состояние, но не
+может молча пережить supersede: если definition стала stale, следующий action
+явно включает unchanged architecture digest в atomic final bundle. Изменение
+самой architecture region делает projection pending. Explicit scoped design и
+architecture approvals по-прежнему переживают unrelated SPEC edit и stale
+только при изменении собственного digest. Исторические records не
+переписываются.
 
 Единый readiness resolver возвращает `record-design-source`, `approve-design`,
-`approve-definition-and-design`, `record-architecture-decision` или
-`approve-architecture` до context generation, validation и model calls. Context,
+`approve-definition`, `approve-definition-and-design`,
+`approve-definition-and-architecture`,
+`approve-definition-and-design-and-architecture`,
+`record-architecture-decision` или `approve-architecture` до context generation,
+validation и model calls. Каждый approval action содержит bounded список
+`{decision,digest}`. Context,
 новые ReviewPack v2 и Delivery Receipt получают только tier/surfaces/source
 kind/digest/approval status. Metrics получают только UI tier, source kind,
 bypass boolean и architecture-required. Source refs, raw design content,
 bypass rationale, credentials и absolute paths туда не включаются.
+
+RCA v0.10.2: legacy whole-definition projection делала architecture визуально
+current, поэтому v0.10.1 разрешала записать только новую definition. Эта запись
+supersede-ила единственный источник legacy provenance и немедленно открывала
+новый `approve-architecture` gate. Одновременно `review-run` доходил до поиска
+ReviewPack раньше, чем возвращал pending decision, и превращал корректную human
+boundary в `IntegrityError`. Unified Decision Handoff материализует все
+неподтверждённые scoped decisions одним bundle и проверяет decision readiness до
+pack resolution. Pending review preflight возвращает exit 0, `not-prepared` и
+typed action без pipeline, ReviewPack, findings или model calls.
 
 ### Dependency-aware parallel delivery
 
@@ -813,6 +834,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.10.1`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.10.2`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

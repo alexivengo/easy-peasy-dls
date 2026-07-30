@@ -165,6 +165,10 @@ approval, release, or production gates and never requires a model call.
   product source or invent dispositions. If recovery returns a typed human or
   implementation action, stop and report it; a first review without a known base
   still belongs to the implementation task.
+- `approve-definition`, `approve-design`, `approve-architecture`, or any combined
+  `approve-definition-and-*` action: stop before pack resolution. Return the
+  bounded decision/digest list to the definition or implementation task. Never
+  record approval or run `candidate-ready` from this independent review task.
 - `failed-finalize`: resume the same `review-run`; do not start an informal or
   replacement review.
 - `resume-review-repair`: call the same `review-run`; DLS resumes the single

@@ -57,6 +57,7 @@ DEPENDENCY_REQUIREMENTS = {
 }
 DEFINITION_DIGEST_CONTRACT = "dls-definition-digest/v2"
 DEFINITION_DECISIONS_CONTRACT = "dls-definition-decisions/v1"
+APPROVAL_BUNDLE_CONTRACT = "dls-approval-bundle/v1"
 ARTIFACT_ROLES = {"definition", "execution"}
 EXECUTION_ARTIFACT_KEYS = {
     "changelog",
@@ -220,6 +221,21 @@ def validate_state(state: dict[str, Any]) -> None:
             value = approval.get(key)
             if value is not None and not re.fullmatch(r"[0-9a-f]{64}", value):
                 raise IntegrityError(f"Approval {key} must be SHA-256 or null")
+        bundle_contract = approval.get("approval_bundle_contract")
+        bundle_id = approval.get("approval_bundle_id")
+        if (bundle_contract is None) != (bundle_id is None):
+            raise IntegrityError(
+                "Approval bundle contract and id must either both be present or absent"
+            )
+        if bundle_contract is not None:
+            if bundle_contract != APPROVAL_BUNDLE_CONTRACT:
+                raise IntegrityError(
+                    f"Unsupported approval bundle contract: {bundle_contract!r}"
+                )
+            try:
+                uuid.UUID(str(bundle_id))
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise IntegrityError("Approval bundle id must be a UUID") from exc
     dependencies = state.get("dependencies", [])
     if not isinstance(dependencies, list):
         raise IntegrityError("state.dependencies must be list")

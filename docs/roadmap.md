@@ -2,14 +2,14 @@
 
 Срез: 30 июля 2026 года
 
-Текущая линия: `v0.10.1`
+Текущая линия: `v0.10.2`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
 ручную работу и повтор контекста, Attractive добавляет удобство только после
 стабилизации основного цикла.
 
-Полный реестр всех 159 реализованных, запланированных, отложенных и намеренно
+Полный реестр всех 162 реализованных, запланированных, отложенных и намеренно
 исключённых возможностей находится в [карте возможностей](capability-catalog.md).
 Этот файл остаётся короткой выборкой ближайших волн, а не вторым каталогом.
 
@@ -269,6 +269,25 @@ Read-only preflight на clean draft `EPIC-05a/05b` вернул
   для неизменившейся architecture region вместо retroactive нового решения.
 - Legacy actionable review без manifest восстанавливается детерминированно без
   повторных model lanes.
+
+## v0.10.2 — Unified Decision Handoff
+
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| M69 | Must-be / P0 | Atomic multi-decision approval | Финальная definition-граница одним explicit ответом атомарно записывает все ещё pending definition/design/architecture decisions |
+| M70 | Must-be / P0 | Decision-safe review preflight | Pending human decision возвращается до ReviewPack resolution без pipeline, findings или model calls |
+| P46 | Performance / P0 | Один approval round-trip | Legacy architecture projection не исчезает после новой definition и не создаёт второй handoff |
+
+Exit criteria v0.10.2: combined approval записывает отдельные scoped records под
+одним bundle ID; standalone early decisions сохраняются; status surfaces
+возвращают один и тот же action; review task не записывает approval и не ищет
+несуществующий pack через integrity failure.
+
+## v0.11.0 — Platform & Conflict UX
+
+Следующая функциональная волна после reliability-релиза: повторяемый conflict
+inventory, понятный integration handoff и cross-platform pilots без
+автоматического destructive cleanup или скрытого merge/rebase.
 
 ## Позже, только по данным
 

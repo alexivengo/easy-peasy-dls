@@ -469,7 +469,20 @@ class DesignArchitectureV010Tests(unittest.TestCase):
             )
             self.assertEqual(
                 unchanged_architecture["next_action"]["id"],
-                "approve-definition",
+                "approve-definition-and-architecture",
+            )
+            self.assertEqual(
+                [
+                    item["decision"]
+                    for item in unchanged_architecture["next_action"]["approvals"]
+                ],
+                ["definition", "architecture"],
+            )
+            self.assertEqual(
+                unchanged_architecture["decisions"]["architecture"][
+                    "approval_provenance"
+                ],
+                "legacy-definition-projection",
             )
             dependency_stale_approvals = [
                 {
@@ -506,7 +519,7 @@ class DesignArchitectureV010Tests(unittest.TestCase):
             )
             self.assertEqual(
                 changed_architecture["next_action"]["id"],
-                "approve-architecture",
+                "approve-definition-and-architecture",
             )
 
     def test_architecture_missing_ambiguous_and_content_drift_are_typed(self) -> None:
@@ -588,7 +601,7 @@ class DesignArchitectureV010Tests(unittest.TestCase):
             self.assertEqual(by_decision["definition"]["status"], "stale")
             self.assertEqual(
                 status(root, change_id="C001")["next_action"]["id"],
-                "approve-architecture",
+                "approve-definition-and-architecture",
             )
 
     def test_cli_design_set_and_status_are_bounded(self) -> None:

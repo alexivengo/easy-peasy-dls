@@ -10,7 +10,7 @@ Create an ADR only when the decision outlives the change, controls multiple deli
 
 When the trigger applies, record exactly one canonical source: the ADR when one exists, otherwise the bounded `dls:architecture` region in SPEC. Adopted packages may use one unambiguous `## Architecture` or `## Architecture and alternatives` section. Missing or ambiguous content returns `record-architecture-decision`; DLS never guesses.
 
-Ask a scoped `architecture` approval question with the architecture digest before definition approval. Unrelated SPEC edits stale definition approval but preserve the unchanged architecture approval. Editing the decision or ADR stales both architecture and definition approvals.
+Ask a separate scoped `architecture` approval question early only when the expensive decision must be settled before the rest of the definition. Otherwise the final definition boundary includes the still-pending architecture digest in the same explicit approval bundle. Unrelated SPEC edits stale definition approval but preserve an explicit unchanged architecture approval. A legacy whole-definition projection remains readable, but superseding that definition requires architecture to be named explicitly in the new bundle. Editing the decision or ADR stales both architecture and definition approvals.
 
 ## UI and UX
 
@@ -27,15 +27,19 @@ Record source/bypass provenance in DLS state and product intent in the authored 
 
 ## Scoped approval
 
-Codex asks an immediately scoped question:
+Codex asks one immediately scoped question containing every pending decision:
 
 `Approve definition package 8fa21c?`
 
 or:
 
+`Approve definition 8fa21c and architecture b96caecf?`
+
+or:
+
 `Accept implementation 8fa21c at head 91bc02e?`
 
-Only a direct affirmative reply to that question may be recorded with `actor=codex`, `authority=user`, the prompt, and the response. A user may instead invoke the CLI directly with `actor=user`.
+Only a direct affirmative reply that explicitly names every decision and matching short digest may be recorded with `actor=codex`, `authority=user`, the prompt, and the response. A bundled write creates separate definition/design/architecture records under one `dls-approval-bundle/v1` ID; partial mutation is forbidden. A user may instead invoke the CLI directly with `actor=user`.
 
 Any authored-content digest change stales definition approval. Design and architecture approvals use their own scoped digests: unrelated authored edits preserve them, while changing the corresponding decision also stales definition approval. Any product commit after review stales review-clear.
 

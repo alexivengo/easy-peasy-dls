@@ -134,6 +134,13 @@
           "architecture_decision_digest": {
             "type": ["string", "null"],
             "pattern": "^[0-9a-f]{64}$"
+          },
+          "approval_bundle_contract": {
+            "const": "dls-approval-bundle/v1"
+          },
+          "approval_bundle_id": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "additionalProperties": true

@@ -67,6 +67,10 @@ version; raw design content не попадает в status, metrics или revi
 Раннее дорогообратимое решение подтверждается до завершения остальной SPEC;
 обычная архитектура проверяется вместе с definition. Поэтому ADR остаётся
 полезным долговечным артефактом, а не обязательным документом для каждого epic.
+На финальной границе DLS заранее собирает все ещё неподтверждённые decisions.
+Человек одним ответом явно называет definition и каждый design/architecture
+digest, а DLS атомарно сохраняет отдельные approvals. Definition-only ответ не
+превращается в скрытое architecture approval.
 
 ## 2. Сделали
 
@@ -84,6 +88,10 @@ design content, bypass rationale и credentials не повторяются ме
 Design и architecture approvals имеют собственные digests: несвязанная правка
 SPEC сохраняет их, но новый design/decision одновременно делает stale и
 соответствующее решение, и полный definition approval.
+Legacy whole-definition approval остаётся читаемым как bounded projection, но
+при следующем definition approval его unchanged architecture digest явно входит
+в тот же bundle. Поэтому новая definition больше не создаёт немедленно второй
+approval round-trip.
 
 Для параллельного standard/critical change approval сначала привязывается к
 закоммиченным authored-документам. Затем один атомарный handoff создаёт owner

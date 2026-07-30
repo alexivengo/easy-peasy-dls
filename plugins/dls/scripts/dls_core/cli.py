@@ -290,6 +290,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Atomically record definition and design from one scoped confirmation.",
     )
+    approve_parser.add_argument(
+        "--include-architecture",
+        action="store_true",
+        help="Atomically record definition and architecture from one scoped confirmation.",
+    )
     approve_parser.add_argument("--rationale")
     _revision(approve_parser)
     _operation_id(approve_parser)
@@ -783,6 +788,7 @@ def dispatch(
             conditions=args.conditions,
             operation_id=args.operation_id,
             include_design=args.include_design,
+            include_architecture=args.include_architecture,
             dry_run=args.dry_run,
         )
     if command == "ticket" and args.ticket_command == "set":

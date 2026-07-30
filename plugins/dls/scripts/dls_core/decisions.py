@@ -443,6 +443,19 @@ def _approval_status(
     return "pending"
 
 
+def _approval_provenance(
+    approvals: list[dict[str, Any]],
+    *,
+    decision: str,
+) -> str:
+    relevant = [item for item in approvals if item.get("decision") == decision]
+    if any(item.get("status") == "current" for item in relevant):
+        return "scoped"
+    if any(item.get("status") == "stale" for item in relevant):
+        return "scoped-stale"
+    return "none"
+
+
 def decision_projection(
     root: Path,
     state: dict[str, Any],
@@ -456,6 +469,10 @@ def decision_projection(
     architecture = architecture_source(root, state)
     architecture_decision_digest = architecture_digest(root, state)
     architecture_approval = _approval_status(approvals, decision="architecture")
+    architecture_approval_provenance = _approval_provenance(
+        approvals,
+        decision="architecture",
+    )
     if architecture_approval == "pending" and _legacy_definition_approves_architecture(
         root,
         state,
@@ -463,6 +480,8 @@ def decision_projection(
         architecture_decision_digest,
     ):
         architecture_approval = "current"
+        architecture_approval_provenance = "legacy-definition-projection"
+    design_approval = _approval_status(approvals, decision="design")
     return {
         "design": {
             "required": "user-interface" in state.get("impact_tags", []),
@@ -474,15 +493,37 @@ def decision_projection(
             "bypass": bool(design_value and design_value.get("mode") == "bypass"),
             "digest": current_design_digest,
             "provenance_current": bool(design_value and current_design_digest),
-            "approval": _approval_status(approvals, decision="design"),
+            "approval": design_approval,
+            "approval_provenance": _approval_provenance(
+                approvals,
+                decision="design",
+            ),
         },
         "architecture": {
             "required": required,
             "source_kind": architecture.get("source_kind") if architecture else None,
             "digest": architecture_decision_digest,
             "approval": architecture_approval,
+            "approval_provenance": architecture_approval_provenance,
             "triggers": triggers,
         },
+    }
+
+
+def _approval_action(
+    action_id: str,
+    approvals: list[tuple[str, str]],
+) -> dict[str, Any]:
+    bounded = [
+        {"decision": decision, "digest": digest}
+        for decision, digest in approvals[:3]
+    ]
+    return {
+        "id": action_id,
+        "detail": "; ".join(
+            f"{item['decision']}={item['digest'][:12]}" for item in bounded
+        ),
+        "approvals": bounded,
     }
 
 
@@ -500,22 +541,54 @@ def decision_readiness(
     )
     design = projection["design"]
     architecture = projection["architecture"]
-    action: dict[str, str] | None = None
+    action: dict[str, Any] | None = None
     if design["required"] and design["contract"] is None:
         action = {"id": "record-design-source", "detail": "UI change requires a typed design source or bypass"}
     elif design["required"] and not design["provenance_current"]:
         action = {"id": "record-design-source", "detail": "design source provenance no longer matches its exact version"}
     elif architecture["required"] and architecture["digest"] is None:
         action = {"id": "record-architecture-decision", "detail": "architecture trigger requires one bounded ADR or SPEC decision"}
-    elif architecture["required"] and architecture["approval"] != "current":
-        action = {"id": "approve-architecture", "detail": (architecture["digest"] or "")[:12]}
-    elif design["required"] and design["approval"] != "current":
-        action = {
-            "id": "approve-definition-and-design" if require_definition and not definition_current else "approve-design",
-            "detail": (design["digest"] or "")[:12],
-        }
-    elif require_definition and not definition_current:
-        action = {"id": "approve-definition", "detail": "current authored definition approval required"}
+    else:
+        # A legacy whole-definition approval remains a valid read projection,
+        # but superseding it with a new definition approval would remove the
+        # only source of architecture provenance.  Materialize every missing
+        # scoped decision in the same explicit human bundle instead.
+        pending_design = bool(
+            design["required"] and design["approval"] != "current"
+        )
+        pending_architecture = bool(
+            architecture["required"]
+            and architecture["approval_provenance"] != "scoped"
+        )
+        if require_definition and not definition_current:
+            from .state import current_definition_digest
+
+            requested: list[tuple[str, str]] = [
+                ("definition", current_definition_digest(root, state))
+            ]
+            if pending_design:
+                requested.append(("design", design["digest"] or ""))
+            if pending_architecture:
+                requested.append(("architecture", architecture["digest"] or ""))
+            if pending_design and pending_architecture:
+                action_id = "approve-definition-and-design-and-architecture"
+            elif pending_design:
+                action_id = "approve-definition-and-design"
+            elif pending_architecture:
+                action_id = "approve-definition-and-architecture"
+            else:
+                action_id = "approve-definition"
+            action = _approval_action(action_id, requested)
+        elif architecture["required"] and architecture["approval"] != "current":
+            action = _approval_action(
+                "approve-architecture",
+                [("architecture", architecture["digest"] or "")],
+            )
+        elif design["required"] and design["approval"] != "current":
+            action = _approval_action(
+                "approve-design",
+                [("design", design["digest"] or "")],
+            )
     return {
         "contract": "dls-decision-readiness/v1",
         "ready": action is None,
@@ -530,7 +603,21 @@ def review_pack_decisions_current(
 ) -> bool:
     """Preserve generic legacy packs but require provenance for scoped decisions."""
     if isinstance(pack_decisions, dict):
-        return pack_decisions == current_decisions
+        if pack_decisions == current_decisions:
+            return True
+        # v0.10.0/v0.10.1 packs predate the additive provenance field.  Their
+        # exact decision digest and status remain authoritative.
+        compatible = json.loads(json.dumps(current_decisions))
+        for key in ("design", "architecture"):
+            pack_item = pack_decisions.get(key)
+            current_item = compatible.get(key)
+            if (
+                isinstance(pack_item, dict)
+                and isinstance(current_item, dict)
+                and "approval_provenance" not in pack_item
+            ):
+                current_item.pop("approval_provenance", None)
+        return pack_decisions == compatible
     design = current_decisions["design"]
     architecture = current_decisions["architecture"]
     requires_projection = bool(

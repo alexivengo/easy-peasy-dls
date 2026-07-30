@@ -4316,6 +4316,35 @@ def review_run(
                     next_action=existing_status.get("next_action", {}).get("id"),
                 )
                 return annotate_handoff(existing_status)
+        if (
+            existing_status.get("status") == "not-prepared"
+            and not recovered_pack_created
+        ):
+            # Decision and other typed readiness boundaries must be reported
+            # before resolving a ReviewPack.  In particular, a review task is
+            # not allowed to turn an outstanding human decision into a
+            # missing-pack integrity failure or to prepare the candidate on
+            # the user's behalf.
+            existing_status.update(
+                {
+                    "dry_run": dry_run,
+                    "operation_id": effective_operation_id,
+                    "review_id": None,
+                    "review_pack_path": None,
+                    "pack_created": False,
+                    "review_result_path": None,
+                    "remediation_manifest_path": None,
+                    "verdict": None,
+                    "presentation": None,
+                }
+            )
+            emit(
+                "completed",
+                review_id=None,
+                status="not-prepared",
+                next_action=existing_status.get("next_action", {}).get("id"),
+            )
+            return annotate_handoff(existing_status)
     context_owner, _, context_pack, _, _ = _resolve_review_pack(
         root,
         change_id=change_id,

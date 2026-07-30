@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
 Срез: 30 июля 2026 года
-Текущая линия: `v0.10.1`
+Текущая линия: `v0.10.2`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -9,16 +9,16 @@
 «что делать следующим», а этот документ — «что вообще существует, планируется
 или намеренно не будет реализовано».
 
-Всего отслеживается 159 пунктов:
+Всего отслеживается 162 пункта:
 
-- 68 Must-be: `M01–M68`;
-- 45 Performance: `P01–P45`;
+- 70 Must-be: `M01–M70`;
+- 46 Performance: `P01–P46`;
 - 10 Attractive: `A01–A10`;
 - 12 Indifferent/premature: `I01–I12`;
 - 24 Reverse anti-features: `R01–R24`.
 
 Исходный KANO-снимок содержал 129 пунктов: все они сохранены под прежними ID.
-К ним добавлены 30 публичных возможностей `M51–M68` и `P34–P45`. Удалять ID
+К ним добавлены 33 публичные возможности `M51–M70` и `P34–P46`. Удалять ID
 нельзя: изменившееся решение помечается как заменённое, а не исчезает из карты.
 
 ## Статусы
@@ -108,6 +108,8 @@
 | M66 | Registry-first ReviewPack resolution | ✅ | P0 | Implicit review читает pack и invocation-scoped lease registered owner; stale portable state в caller checkout остаётся только исторической копией |
 | M67 | Final-full completion headroom | ✅ | P0 | 16 inspection commands остаются target, а bounded ceiling 24 оставляет место для обязательного structured decision |
 | M68 | Полнота input-only review context | ✅ | P0 | Reconciliation и final-full получают digest-bound ReviewPack и requirements только внутри разрешённого model workspace |
+| M69 | Atomic multi-decision approval | ✅ | P0 | Definition/design/architecture сохраняются отдельными scoped records под одним bundle ID либо не записываются вовсе |
+| M70 | Decision-safe review preflight | ✅ | P0 | `review-run` возвращает pending human decision до ReviewPack resolution и не создаёт pipeline/model calls |
 
 ## Performance — экономия времени, контекста и ручной работы
 
@@ -158,6 +160,7 @@
 | P43 | Input-only final-full | ✅ | P0 | Exact patch/coverage bundle заменяет unrestricted checkout; oversized change получает explicit scope split |
 | P44 | Terminal-lane command recovery | ✅ | P0 | Legacy 17/16 повторяет только final-full один раз; native, targeted и reconciliation не оплачиваются повторно |
 | P45 | Детерминированный bound-context bundle | ✅ | P0 | Stable paths и DLS-owned manifest исключают скрытый cache lookup, повторный discovery и неоднозначную доступность inputs |
+| P46 | Один approval round-trip | ✅ | P0 | Final definition boundary заранее объединяет все pending scoped decisions; legacy projection не создаёт повторный architecture handoff |
 
 ## Attractive — полезно после стабилизации core
 
@@ -295,7 +298,15 @@
 - pre-v0.10 whole-definition approval покрывает только доказанно неизменную
   bounded architecture region на exact approved Git revision.
 
-### Следующая P1-волна — platform и conflict UX
+### v0.10.2 — Unified Decision Handoff
+
+- `M69`: final definition approval атомарно materializes все явно названные
+  pending scoped decisions под одним `dls-approval-bundle/v1`;
+- `M70`: review preflight сообщает human decision до pack lookup и model calls;
+- `P46`: один explicit prompt/response заменяет последовательные definition и
+  architecture/design round-trips, не выводя одно решение из другого.
+
+### v0.11.0 — Platform & Conflict UX
 
 - `P28`: повторяемый conflict inventory без автоматического destructive cleanup;
 - завершить cross-platform доказательство `P02`, `P08`, `P09` и `P39`.

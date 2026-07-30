@@ -29,7 +29,7 @@ from .decisions import (
     design_digest,
     review_pack_decisions_current,
 )
-from .errors import ConfigError, IntegrityError, UsageError
+from .errors import ConfigError, IntegrityError, LockError, UsageError
 from .economy import processed_tokens, review_budget, token_budget_failure
 from .io import (
     atomic_write_json,
@@ -68,6 +68,7 @@ from .repo import (
     run_git,
 )
 from .state import (
+    APPROVAL_BUNDLE_CONTRACT,
     CONTROL_LEVELS,
     DEFINITION_DIGEST_CONTRACT,
     DEFINITION_DECISIONS_CONTRACT,
@@ -1068,6 +1069,7 @@ def approve(
     conditions: str | None,
     operation_id: str | None,
     include_design: bool = False,
+    include_architecture: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     if decision not in {"definition", "accept", "exception", "design", "architecture"}:
@@ -1076,12 +1078,26 @@ def approve(
         raise UsageError("actor must be codex or user")
     if include_design and decision != "definition":
         raise UsageError("--include-design is available only with --decision definition")
+    if include_architecture and decision != "definition":
+        raise UsageError(
+            "--include-architecture is available only with --decision definition"
+        )
     root = resolve_change_root(root, change_id)
     state_store = StateStore(root)
     state = state_store.load(change_id)
     effective_operation_id = operation_id or str(uuid.uuid4())
-    decisions = [decision, "design"] if include_design else [decision]
+    decisions = [decision]
+    if include_design:
+        decisions.append("design")
+    if include_architecture:
+        decisions.append("architecture")
     operation_kind = "approve:" + "+".join(decisions)
+    approval_bundle_id = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"dls:{change_id}:approval-bundle:{effective_operation_id}",
+        )
+    )
     approval_ids = {
         item: str(
             uuid.uuid5(
@@ -1109,9 +1125,33 @@ def approve(
             "approval": next(item for item in recorded if item["decision"] == decision),
             "approvals": recorded,
         }
+        if len(decisions) > 1 and all(
+            item.get("approval_bundle_contract") == APPROVAL_BUNDLE_CONTRACT
+            and item.get("approval_bundle_id") == approval_bundle_id
+            for item in recorded
+        ):
+            result["approval_bundle"] = {
+                "contract": APPROVAL_BUNDLE_CONTRACT,
+                "id": approval_bundle_id,
+                "decisions": [
+                    {
+                        "decision": item["decision"],
+                        "digest": item["object_digest"],
+                    }
+                    for item in recorded
+                ],
+            }
         if decision == "accept":
             from .delivery_receipt import delivery_receipt
             result["delivery_receipt"] = delivery_receipt(root, change_id=change_id)
+        elif decision in {"definition", "design", "architecture"}:
+            from .candidate_runner import candidate_status
+
+            result["next_action"] = candidate_status(
+                root,
+                change_id=change_id,
+                _inspect_task_context=False,
+            )["next_action"]
         return result
     _require_revision(state, expected_revision)
     if state["lifecycle"] == "accepted" and decision != "exception":
@@ -1119,21 +1159,41 @@ def approve(
     definition_digest = current_definition_digest(root, state)
     design_decision_digest = design_digest(root, state)
     architecture_decision_digest = architecture_digest(root, state)
+    current_approvals = derived_approval_statuses(root, state)
+    explicit_design_current = any(
+        item.get("decision") == "design" and item.get("status") == "current"
+        for item in current_approvals
+    )
+    explicit_architecture_current = any(
+        item.get("decision") == "architecture" and item.get("status") == "current"
+        for item in current_approvals
+    )
     if decision == "definition" and "user-interface" in state.get("impact_tags", []):
         if design_decision_digest is None:
             raise IntegrityError("Definition approval requires a typed design source or bypass")
+        if not explicit_design_current and "design" not in decisions:
+            raise IntegrityError(
+                "Definition approval requires explicit current design approval "
+                "or --include-design"
+            )
     if decision == "definition":
-        current_approvals = derived_approval_statuses(root, state)
         architecture_gate = decision_projection(root, state, current_approvals)[
             "architecture"
         ]
         if architecture_gate["required"] and architecture_decision_digest is None:
             raise IntegrityError("Definition approval requires a bounded architecture decision")
-        if architecture_gate["required"] and architecture_gate["approval"] != "current":
-            raise IntegrityError("Definition approval requires current architecture approval")
+        if (
+            architecture_gate["required"]
+            and not explicit_architecture_current
+            and "architecture" not in decisions
+        ):
+            raise IntegrityError(
+                "Definition approval requires explicit current architecture approval "
+                "or --include-architecture"
+            )
     if "design" in decisions and design_decision_digest is None:
         raise IntegrityError("Design approval requires a current typed design source")
-    if decision == "architecture" and architecture_decision_digest is None:
+    if "architecture" in decisions and architecture_decision_digest is None:
         raise IntegrityError("Architecture approval requires a bounded ADR or SPEC decision")
     object_digests = {
         "definition": definition_digest,
@@ -1167,14 +1227,14 @@ def approve(
                 + ", ".join(dirty_artifacts)
             )
         git_sha = current_head
-    if decision in {"design", "architecture"}:
+    if any(item in decisions for item in {"design", "architecture"}):
         if state["control_level"] in {"standard", "critical"} and not current_head:
             raise IntegrityError("Scoped decision approval requires Git")
         if git_sha and git_sha != current_head:
             raise IntegrityError(
                 f"Scoped decision approval SHA is not current HEAD: {git_sha} != {current_head}"
             )
-        if decision == "architecture" and current_head:
+        if "architecture" in decisions and current_head:
             source = architecture_source(root, state)
             if source is None:
                 raise IntegrityError("Architecture decision source is missing")
@@ -1212,6 +1272,12 @@ def approve(
             digest = object_digests[item]
             assert isinstance(digest, str)
             _validate_scoped_confirmation(item, digest, prompt, response)
+        if len(decisions) > 1:
+            _validate_scoped_bundle_confirmation(
+                decisions,
+                object_digests,
+                response,
+            )
     recorded_at = utc_now()
     approvals_to_record: list[dict[str, Any]] = []
     for item in decisions:
@@ -1230,6 +1296,9 @@ def approve(
             "prompt": prompt,
             "response": response,
         }
+        if len(decisions) > 1:
+            approval["approval_bundle_contract"] = APPROVAL_BUNDLE_CONTRACT
+            approval["approval_bundle_id"] = approval_bundle_id
         if item in {"definition", "accept"}:
             approval["definition_digest_contract"] = DEFINITION_DIGEST_CONTRACT
             approval["decision_snapshots_contract"] = DEFINITION_DECISIONS_CONTRACT
@@ -1245,8 +1314,20 @@ def approve(
             approval["source_digest"] = acceptance_source_digest
         approvals_to_record.append(approval)
     primary_approval = next(item for item in approvals_to_record if item["decision"] == decision)
+    approval_bundle = (
+        {
+            "contract": APPROVAL_BUNDLE_CONTRACT,
+            "id": approval_bundle_id,
+            "decisions": [
+                {"decision": item["decision"], "digest": item["object_digest"]}
+                for item in approvals_to_record
+            ],
+        }
+        if len(decisions) > 1
+        else None
+    )
     if dry_run:
-        return {
+        result = {
             "ok": True,
             "dry_run": True,
             "changed": False,
@@ -1256,6 +1337,9 @@ def approve(
             "approval": primary_approval,
             "approvals": approvals_to_record,
         }
+        if approval_bundle is not None:
+            result["approval_bundle"] = approval_bundle
+        return result
 
     def mutate(value: dict[str, Any]) -> None:
         for approval in approvals_to_record:
@@ -1272,13 +1356,22 @@ def approve(
             value["phase"] = "accepted"
             value["lifecycle"] = "accepted"
 
-    updated, changed = state_store.mutate(
-        change_id,
-        expected_revision=expected_revision,
-        operation_id=effective_operation_id,
-        operation_kind=operation_kind,
-        mutator=mutate,
-    )
+    for attempt in range(50):
+        try:
+            updated, changed = state_store.mutate(
+                change_id,
+                expected_revision=expected_revision,
+                operation_id=effective_operation_id,
+                operation_kind=operation_kind,
+                mutator=mutate,
+            )
+            break
+        except LockError:
+            if attempt == 49:
+                raise
+            time.sleep(0.02)
+    else:  # pragma: no cover - loop either succeeds or raises
+        raise AssertionError("unreachable")
     recorded_approvals = [
         item for item in updated["approvals"] if item.get("id") in approval_ids.values()
     ]
@@ -1295,10 +1388,20 @@ def approve(
         "approval": recorded_approval,
         "approvals": recorded_approvals,
     }
+    if approval_bundle is not None:
+        result["approval_bundle"] = approval_bundle
     if decision == "accept":
         from .delivery_receipt import delivery_receipt
 
         result["delivery_receipt"] = delivery_receipt(root, change_id=change_id)
+    elif decision in {"definition", "design", "architecture"}:
+        from .candidate_runner import candidate_status
+
+        result["next_action"] = candidate_status(
+            root,
+            change_id=change_id,
+            _inspect_task_context=False,
+        )["next_action"]
     return result
 
 
@@ -6934,6 +7037,24 @@ def _validate_scoped_confirmation(
         raise IntegrityError("Approval prompt must name the decision and current short digest")
     if not AFFIRMATIVE_PATTERN.search(response):
         raise IntegrityError("User response is not an explicit scoped affirmation")
+
+
+def _validate_scoped_bundle_confirmation(
+    decisions: list[str],
+    object_digests: dict[str, str | None],
+    response: str | None,
+) -> None:
+    if not response:
+        raise IntegrityError("Bundled approval requires the explicit user response")
+    response_lower = response.lower()
+    for decision in decisions:
+        digest = object_digests.get(decision)
+        if not isinstance(digest, str):
+            raise IntegrityError(f"Bundled approval has no digest for {decision}")
+        if decision.lower() not in response_lower or digest[:8] not in response_lower:
+            raise IntegrityError(
+                "Bundled approval response must name every decision and current short digest"
+            )
 
 
 def _context_manifest_content_digest(manifest: dict[str, Any]) -> str:

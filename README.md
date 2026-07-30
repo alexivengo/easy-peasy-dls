@@ -164,6 +164,13 @@ semantic passes, соберёт ReviewIR и импортирует его. Пе�
 subagents или вручную собирать provenance не нужно. Human approval DLS всё равно
 не запишет без вашего прямого подтверждения.
 
+Если на definition-границе одновременно готовы design или architecture,
+DLS задаёт один вопрос со всеми short digests. Ваш ответ должен явно назвать
+каждое решение; после этого отдельные approvals записываются атомарно. Review,
+встретивший неподтверждённое решение, не падает из-за отсутствующего pack и не
+пытается принять решение за вас — он возвращает короткий handoff в
+implementation/definition-задачу.
+
 Для параллельного standard/critical change DLS сначала требует закоммитировать
 authored definition, а затем одним атомарным handoff создаёт owner worktree и
 переносит туда approval, dependencies и state. Повторно инициализировать change
