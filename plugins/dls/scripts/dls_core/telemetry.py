@@ -1025,15 +1025,17 @@ def resolve_delivery_next_action(
     }:
         next_action = review["next_action"]
     elif review.get("review_result_path"):
-        if review.get("verdict") == "review-clear":
-            next_action = {
-                "id": "accept-review",
-                "detail": review["review_result_path"],
-            }
-        elif review.get("remediation_manifest_path"):
+        if review.get("remediation_manifest_path"):
             next_action = {
                 "id": "remediate-findings",
                 "detail": review["remediation_manifest_path"],
+            }
+        elif review.get("next_action", {}).get("id") == "recover-remediation-manifest":
+            next_action = review["next_action"]
+        elif review.get("verdict") == "review-clear":
+            next_action = {
+                "id": "accept-review",
+                "detail": review["review_result_path"],
             }
         else:
             next_action = {

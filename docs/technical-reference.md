@@ -143,11 +143,17 @@ immutable provenance. Architecture approval использует
 Architecture approval обязателен только при impact `architecture` или наличии
 canonical ADR. `approve --decision definition --include-design` атомарно
 записывает два независимых approvals из одного scoped human ответа. Definition
-и accept сохраняют snapshots scoped decisions. Поэтому unrelated SPEC edit
+и accept сохраняют snapshots scoped decisions. Для пакетов, подтверждённых до
+v0.10.0 одним whole-definition approval, DLS выводит совместимость только из
+точного approved Git revision: если bounded architecture digest на той ревизии
+совпадает с текущим, отдельное retroactive approval не требуется. Несвязанная
+SPEC-правка сохраняет этот architecture approval; изменение самой architecture
+region делает его pending. Поэтому unrelated SPEC edit
 инвалидирует полный definition approval, но сохраняет design/architecture;
 изменение самого design/architecture делает stale и scoped approval, и полный
 definition approval. Legacy approvals без markers продолжают whole-definition
-семантику и не переписываются.
+формат хранения и не переписываются; bounded compatibility является только
+runtime-проекцией точной approved Git revision.
 
 Единый readiness resolver возвращает `record-design-source`, `approve-design`,
 `approve-definition-and-design`, `record-architecture-decision` или
@@ -292,11 +298,15 @@ ReviewPack/model context. Для failure сохраняется ограниче
 
 ### Инвариант review → remediation
 
-Импорт actionable `not-clear` или `blocked` review атомарно записывает два
-immutable artifacts — ReviewIR и remediation manifest — и ссылки на оба в одной
-state revision. Успешный runner result поэтому всегда возвращает
+Импорт любого результата с actionable review/acceptance findings атомарно
+записывает два immutable artifacts — ReviewIR и remediation manifest — и ссылки
+на оба в одной state revision. Это относится и к `review-clear`, если finding
+блокирует только acceptance. Успешный runner result поэтому всегда возвращает
 `review_result_path`, а actionable результат дополнительно возвращает
-`remediation_manifest_path`.
+`remediation_manifest_path`. Только чистый `review-clear` без такого manifest
+может перейти к acceptance gate. Исторический actionable result без manifest
+получает typed action `recover-remediation-manifest`; recovery не вызывает
+модель повторно.
 
 Для интерфейса Codex `review-run` и завершённый `review-status` также возвращают
 производный объект `presentation` с контрактом `codex-inline-comments/v1`.
@@ -803,6 +813,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.10.0`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.10.1`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

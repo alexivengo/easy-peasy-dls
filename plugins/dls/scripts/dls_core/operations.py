@@ -6381,14 +6381,14 @@ def review_import(
             "finding_counts": _finding_counts(report["findings"]),
             "next_action": {
                 "id": (
-                    "accept-review"
-                    if report["verdict"] == "review-clear"
+                    "remediate-findings"
+                    if remediation_path is not None
                     else (
-                        "remediate-findings"
-                        if remediation_path is not None
+                        "recover-remediation-manifest"
+                        if needs_remediation
                         else (
-                            "recover-remediation-manifest"
-                            if needs_remediation
+                            "accept-review"
+                            if report["verdict"] == "review-clear"
                             else "resolve-review-blocker"
                         )
                     )
@@ -6426,20 +6426,16 @@ def review_import(
         "finding_counts": _finding_counts(report["findings"]),
         "imported_at": utc_now(),
     }
-    remediation_manifest = (
-        _build_remediation_manifest(
-            root,
-            change_id=change_id,
-            review_entry=result_record,
-            report=report,
-            pack_entry=pack_entry,
-            pack=pack,
-            result_path=relative_path,
-            pack_path=pack_path,
-            origin="review-import",
-        )
-        if report["verdict"] != "review-clear"
-        else None
+    remediation_manifest = _build_remediation_manifest(
+        root,
+        change_id=change_id,
+        review_entry=result_record,
+        report=report,
+        pack_entry=pack_entry,
+        pack=pack,
+        result_path=relative_path,
+        pack_path=pack_path,
+        origin="review-import",
     )
     remediation_path = (
         _canonical_remediation_manifest_path(change_id, review_id)
@@ -6466,11 +6462,11 @@ def review_import(
             "finding_counts": _finding_counts(report["findings"]),
             "next_action": {
                 "id": (
-                    "accept-review"
-                    if report["verdict"] == "review-clear"
+                    "remediate-findings"
+                    if remediation_manifest is not None
                     else (
-                        "remediate-findings"
-                        if remediation_manifest is not None
+                        "accept-review"
+                        if report["verdict"] == "review-clear"
                         else "resolve-review-blocker"
                     )
                 ),
@@ -6537,11 +6533,11 @@ def review_import(
         "finding_counts": _finding_counts(report["findings"]),
         "next_action": {
             "id": (
-                "accept-review"
-                if report["verdict"] == "review-clear"
+                "remediate-findings"
+                if remediation_manifest is not None
                 else (
-                    "remediate-findings"
-                    if remediation_manifest is not None
+                    "accept-review"
+                    if report["verdict"] == "review-clear"
                     else "resolve-review-blocker"
                 )
             ),

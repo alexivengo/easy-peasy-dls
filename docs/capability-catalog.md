@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
 Срез: 30 июля 2026 года
-Текущая линия: `v0.10.0`
+Текущая линия: `v0.10.1`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -286,6 +286,14 @@
   данные ещё не собраны; models и budgets не меняются.
 - Read-only product preflight: `EPIC-05a/05b → record-design-source`,
   `RUCORE-E03 → approve-architecture`; без mutations или model calls.
+
+### v0.10.1 — stage-correct review handoff
+
+- acceptance-only finding сохраняет корректный `review-clear`, но получает
+  canonical remediation manifest и не допускает преждевременный `accept`;
+- legacy result без manifest получает deterministic recovery без model calls;
+- pre-v0.10 whole-definition approval покрывает только доказанно неизменную
+  bounded architecture region на exact approved Git revision.
 
 ### Следующая P1-волна — platform и conflict UX
 

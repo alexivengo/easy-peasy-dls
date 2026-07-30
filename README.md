@@ -142,7 +142,9 @@ DLS-контексте. Обычные coding/review-задачи без DLS-с�
 Проведи code review EPIC-01.
 ```
 
-После `not-clear` откройте свежую implementation-задачу и напишите только:
+После любого actionable review — включая `review-clear` с замечанием, которое
+блокирует только acceptance, — откройте свежую implementation-задачу и напишите
+только:
 
 ```text
 Исправь findings последнего review EPIC-01.
@@ -224,10 +226,10 @@ inline-комментарии непосредственно у проверен
 канонического ReviewIR и выводятся только пока checkout остаётся на reviewed
 HEAD; они не становятся отдельным источником статуса review.
 
-Следом DLS показывает Delivery Receipt. При `not-clear` findings остаются
-первыми, затем идёт сводка и короткий remediation handoff. При `review-clear`
-Receipt становится основным итогом перед вашим `accept`. Отдельную команду для
-этого запускать не нужно.
+Следом DLS показывает Delivery Receipt. При любом actionable finding замечания
+остаются первыми, затем идёт сводка и короткий remediation handoff. Чистый
+`review-clear` становится итогом перед вашим `accept` только когда acceptance
+gate действительно проходит. Отдельную команду для этого запускать не нужно.
 
 Если review находит проблемы, DLS в той же атомарной операции сохраняет
 канонический remediation-контекст. Исправления выполняются в implementation-

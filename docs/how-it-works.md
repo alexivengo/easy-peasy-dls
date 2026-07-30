@@ -13,9 +13,9 @@ flowchart LR
     D -- "да" --> E["Implementation"]
     E --> F["Validation evidence"]
     F --> G["Independent review"]
-    G -- "есть findings" --> H["Remediation"]
+    G -- "есть review/acceptance findings" --> H["Remediation"]
     H --> F
-    G -- "review-clear" --> R["Delivery Receipt"]
+    G -- "чистый review-clear" --> R["Delivery Receipt"]
     R --> I{"Accept?"}
     I -- "нет" --> C
     I -- "да" --> J["Accepted Receipt"]

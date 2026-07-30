@@ -14,12 +14,15 @@ from dls_core.operations import (
     build_context,
     check,
     evidence_add,
+    remediation_start,
     review_import,
     review_pack,
     review_start,
     ticket_set,
 )
 from dls_core.state import StateStore
+from dls_core.telemetry import delivery_status
+from dls_core.review_runner import review_status
 from dls_core.worktrees import (
     worktree_list,
     worktree_register,
@@ -905,6 +908,137 @@ class ReviewPipelineTests(unittest.TestCase):
                     "findings:no-open-blockers": True,
                     "findings:no-unaccepted-should-fix": True,
                 },
+            )
+
+    def test_review_clear_acceptance_finding_creates_remediation_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, pack = self._standard_pack(root, tickets=True)
+            started = start_review_with_fake_codex(
+                root,
+                change_id="C001",
+                operation_id="native-acceptance-finding",
+            )
+            finding = {
+                "id": "R-ACCEPTANCE",
+                "severity": "should-fix",
+                "kind": "defect",
+                "location": "docs/changes/c001-change/SPEC.md:1",
+                "issue": "The accepted contract text is stale.",
+                "impact": "Acceptance would endorse an inaccurate contract.",
+                "required_fix": "Correct the authored contract before acceptance.",
+                "ticket_ids": ["T01"],
+                "requirement_ids": [],
+                "blocks": ["acceptance"],
+                "base_sha": pack["review_pack"]["base_sha"],
+                "head_sha": pack["review_pack"]["head_sha"],
+            }
+            report = build_review_report(
+                root,
+                pack_result=pack,
+                start_result=started,
+                verdict="review-clear",
+                findings=[finding],
+                ticket_verdicts=[
+                    {
+                        "ticket_id": "T01",
+                        "verdict": "clear",
+                        "finding_ids": ["R-ACCEPTANCE"],
+                    }
+                ],
+            )
+            report_path = root / ".dls/cache/acceptance-only.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            imported = review_import(
+                root,
+                change_id="C001",
+                report_path=".dls/cache/acceptance-only.json",
+                expected_revision=StateStore(root).load("C001")["state_revision"],
+                operation_id="acceptance-only",
+            )
+
+            self.assertTrue(imported["ok"])
+            self.assertEqual(imported["verdict"], "review-clear")
+            self.assertEqual(imported["next_action"]["id"], "remediate-findings")
+            self.assertTrue(imported["remediation_manifest_path"])
+            self.assertTrue((root / imported["remediation_manifest_path"]).is_file())
+            remediation = remediation_start(root, change_id="C001")
+            self.assertEqual(remediation["next_action"]["id"], "remediate-findings")
+            review = review_status(root, change_id="C001")
+            self.assertEqual(review["status"], "completed")
+            self.assertTrue(review["exact_head"])
+            self.assertEqual(review["next_action"]["id"], "remediate-findings")
+            self.assertEqual(
+                delivery_status(root, change_id="C001")["next_action"]["id"],
+                "remediate-findings",
+            )
+            acceptance = check(root, change_id="C001", gate="accept")
+            self.assertFalse(
+                next(
+                    item["ok"]
+                    for item in acceptance["checks"]
+                    if item["id"] == "findings:no-unaccepted-should-fix"
+                )
+            )
+
+            replayed = review_import(
+                root,
+                change_id="C001",
+                report_path=".dls/cache/acceptance-only.json",
+                expected_revision=StateStore(root).load("C001")["state_revision"],
+                operation_id="acceptance-only",
+            )
+            self.assertFalse(replayed["changed"])
+            self.assertEqual(
+                replayed["remediation_manifest_path"],
+                imported["remediation_manifest_path"],
+            )
+            self.assertEqual(replayed["next_action"]["id"], "remediate-findings")
+
+            manifest_path = root / imported["remediation_manifest_path"]
+            manifest_path.unlink()
+            before_legacy = StateStore(root).load("C001")
+
+            def remove_manifest_link(value: dict[str, object]) -> None:
+                for entry in value["reviews"]:  # type: ignore[index]
+                    if (
+                        isinstance(entry, dict)
+                        and entry.get("kind") == "result"
+                        and entry.get("review_id") == report["review_id"]
+                    ):
+                        entry.pop("remediation_manifest_path", None)
+                        entry.pop("remediation_manifest_digest", None)
+
+            StateStore(root).mutate(
+                "C001",
+                expected_revision=before_legacy["state_revision"],
+                operation_id="simulate-legacy-acceptance-result",
+                operation_kind="test-fixture",
+                mutator=remove_manifest_link,
+            )
+            legacy_review = review_status(root, change_id="C001")
+            self.assertEqual(legacy_review["status"], "completed")
+            self.assertTrue(legacy_review["exact_head"])
+            self.assertEqual(
+                legacy_review["next_action"]["id"],
+                "recover-remediation-manifest",
+            )
+            self.assertEqual(
+                delivery_status(root, change_id="C001")["next_action"]["id"],
+                "recover-remediation-manifest",
+            )
+            legacy_replay = review_import(
+                root,
+                change_id="C001",
+                report_path=".dls/cache/acceptance-only.json",
+                expected_revision=StateStore(root).load("C001")["state_revision"],
+                operation_id="legacy-acceptance-replay",
+            )
+            self.assertFalse(legacy_replay["changed"])
+            self.assertIsNone(legacy_replay["remediation_manifest_path"])
+            self.assertEqual(
+                legacy_replay["next_action"]["id"],
+                "recover-remediation-manifest",
             )
 
 

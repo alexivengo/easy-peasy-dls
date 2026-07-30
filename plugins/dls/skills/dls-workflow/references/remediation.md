@@ -1,15 +1,17 @@
 # DLS remediation
 
-Prefer a fresh implementation task after an imported `not-clear` review. The
-user handoff is only `Исправь findings последнего review CHANGE_ID.` Reusing the
-previous implementation task is allowed but advisory telemetry may recommend a
-fresh one. Product source has one writer.
+Prefer a fresh implementation task after any imported result with actionable
+review/acceptance findings. This includes `review-clear` with an acceptance-only
+finding. The user handoff is only
+`Исправь findings последнего review CHANGE_ID.` Reusing the previous
+implementation task is allowed but advisory telemetry may recommend a fresh one.
+Product source has one writer.
 
 ## 1. Verify canonical input before edits
 
-Every successful actionable `not-clear` import already creates a canonical
-manifest. Resolve it from the implementation checkout or any checkout with a
-registered owner worktree:
+Every successful import with actionable review/acceptance findings creates a
+canonical manifest, regardless of the overall review verdict. Resolve it from
+the implementation checkout or any checkout with a registered owner worktree:
 
 ```text
 dls --root OWNER_ROOT --json remediation-start CHANGE_ID

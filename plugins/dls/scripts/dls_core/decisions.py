@@ -312,6 +312,49 @@ def architecture_source(root: Path, state: dict[str, Any]) -> dict[str, Any] | N
     return None
 
 
+def _architecture_source_at_revision(
+    root: Path,
+    state: dict[str, Any],
+    git_sha: str,
+) -> dict[str, Any] | None:
+    """Read the bounded architecture decision from an immutable Git revision."""
+    if not re.fullmatch(r"[0-9a-f]{40,64}", git_sha):
+        return None
+    artifacts = state.get("artifacts", {})
+    for role in ("adr", "spec"):
+        artifact = artifacts.get(role)
+        relative = artifact.get("path") if isinstance(artifact, dict) else None
+        if not isinstance(relative, str) or not relative:
+            continue
+        candidate = Path(relative)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise IntegrityError(f"Unsafe architecture source path: {relative}")
+        result = run_git(root, "show", f"{git_sha}:{relative}", check=False)
+        if result.returncode != 0:
+            continue
+        text = canonical_text(result.stdout)
+        if role == "adr":
+            body = text.strip()
+            if not body:
+                return None
+            return {"source_kind": "adr", "path": relative, "content": body}
+        marked = _marked_architecture(text)
+        if marked is not None:
+            return {
+                "source_kind": "spec-marker",
+                "path": relative,
+                "content": marked,
+            }
+        legacy = _legacy_architecture(text)
+        if legacy is not None:
+            return {
+                "source_kind": "spec-heading",
+                "path": relative,
+                "content": legacy,
+            }
+    return None
+
+
 def architecture_required(state: dict[str, Any]) -> tuple[bool, list[str]]:
     triggers: list[str] = []
     if "architecture" in state.get("impact_tags", []):
@@ -332,6 +375,59 @@ def architecture_digest(root: Path, state: dict[str, Any]) -> str | None:
             "content": source["content"],
         },
     )
+
+
+def _architecture_digest_at_revision(
+    root: Path,
+    state: dict[str, Any],
+    git_sha: str,
+) -> str | None:
+    source = _architecture_source_at_revision(root, state, git_sha)
+    if source is None:
+        return None
+    return _stable_digest(
+        ARCHITECTURE_DIGEST_CONTRACT,
+        {
+            "source_kind": source["source_kind"],
+            "content": source["content"],
+        },
+    )
+
+
+def _legacy_definition_approves_architecture(
+    root: Path,
+    state: dict[str, Any],
+    approvals: list[dict[str, Any]],
+    current_digest: str | None,
+) -> bool:
+    """Project a pre-v0.10 whole-definition approval onto unchanged architecture.
+
+    Old approvals did not store a scoped architecture snapshot.  Their exact
+    Git revision still proves which architecture text the user approved.  This
+    projection is read-only and stops applying as soon as that bounded text
+    changes or the approval is revoked/superseded.
+    """
+    if current_digest is None:
+        return False
+    for approval in reversed(approvals):
+        approval_status = approval.get("status")
+        if (
+            approval.get("decision") != "definition"
+            or approval.get("decision_snapshots_contract") is not None
+            or approval_status not in {"current", "stale"}
+            or (
+                approval_status == "stale"
+                and approval.get("stale_reason")
+                != "authored-content-digest-changed"
+            )
+        ):
+            continue
+        git_sha = approval.get("git_sha")
+        if not isinstance(git_sha, str):
+            continue
+        if _architecture_digest_at_revision(root, state, git_sha) == current_digest:
+            return True
+    return False
 
 
 def _approval_status(
@@ -358,6 +454,15 @@ def decision_projection(
     current_design_digest = design_digest(root, state)
     required, triggers = architecture_required(state)
     architecture = architecture_source(root, state)
+    architecture_decision_digest = architecture_digest(root, state)
+    architecture_approval = _approval_status(approvals, decision="architecture")
+    if architecture_approval == "pending" and _legacy_definition_approves_architecture(
+        root,
+        state,
+        approvals,
+        architecture_decision_digest,
+    ):
+        architecture_approval = "current"
     return {
         "design": {
             "required": "user-interface" in state.get("impact_tags", []),
@@ -374,8 +479,8 @@ def decision_projection(
         "architecture": {
             "required": required,
             "source_kind": architecture.get("source_kind") if architecture else None,
-            "digest": architecture_digest(root, state),
-            "approval": _approval_status(approvals, decision="architecture"),
+            "digest": architecture_decision_digest,
+            "approval": architecture_approval,
             "triggers": triggers,
         },
     }

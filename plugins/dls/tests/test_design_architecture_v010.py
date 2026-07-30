@@ -13,6 +13,7 @@ from dls_core.decisions import (
     ARCHITECTURE_DIGEST_CONTRACT,
     DESIGN_DIGEST_CONTRACT,
     architecture_digest,
+    decision_projection,
     design_digest,
 )
 from dls_core.delivery_receipt import delivery_receipt
@@ -27,7 +28,7 @@ from dls_core.operations import (
     status,
 )
 from dls_core.review_runner import review_status
-from dls_core.state import StateStore, current_definition_digest
+from dls_core.state import StateStore, current_definition_digest, derived_approval_statuses
 from dls_core.telemetry import delivery_status, review_metrics
 
 from support import create_change, git, initialize, initialize_git
@@ -414,6 +415,98 @@ class DesignArchitectureV010Tests(unittest.TestCase):
             self.assertNotIn(
                 "approve-architecture",
                 json.dumps(status(root, change_id="C001")["next_action"]),
+            )
+
+    def test_legacy_definition_approval_covers_unchanged_architecture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_git(root)
+            initialize(root)
+            create_change(root, control="critical", impacts=["architecture"], tickets=True)
+            git(root, "add", ".dls", "docs")
+            git(root, "commit", "-m", "legacy approved architecture definition")
+            store = StateStore(root)
+            state = store.load("C001")
+            approved_head = git(root, "rev-parse", "HEAD")
+            approved_digest = current_definition_digest(root, state)
+
+            def record_legacy(value: dict) -> None:
+                value["approvals"].append(
+                    {
+                        "id": "legacy-definition",
+                        "decision": "definition",
+                        "object_digest": approved_digest,
+                        "git_sha": approved_head,
+                        "actor": "user",
+                        "authority": "user",
+                        "recorded_at": "2026-01-01T00:00:00Z",
+                        "status": "current",
+                        "conditions": None,
+                        "prompt": None,
+                        "response": None,
+                    }
+                )
+
+            store.mutate(
+                "C001",
+                expected_revision=state["state_revision"],
+                operation_id="legacy-definition",
+                operation_kind="fixture:legacy-definition",
+                mutator=record_legacy,
+            )
+            current = status(root, change_id="C001")
+            self.assertEqual(current["decisions"]["architecture"]["approval"], "current")
+            self.assertIsNone(current["next_action"])
+
+            spec = root / store.load("C001")["artifacts"]["spec"]["path"]
+            spec.write_text(spec.read_text() + "\nUnrelated acceptance wording.\n")
+            git(root, "add", "docs")
+            git(root, "commit", "-m", "change unrelated definition text")
+            unchanged_architecture = status(root, change_id="C001")
+            self.assertEqual(
+                unchanged_architecture["decisions"]["architecture"]["approval"],
+                "current",
+            )
+            self.assertEqual(
+                unchanged_architecture["next_action"]["id"],
+                "approve-definition",
+            )
+            dependency_stale_approvals = [
+                {
+                    **item,
+                    "stale_reason": "dependency-definition-digest-changed",
+                }
+                if item.get("decision") == "definition"
+                else item
+                for item in derived_approval_statuses(root, store.load("C001"))
+            ]
+            self.assertEqual(
+                decision_projection(
+                    root,
+                    store.load("C001"),
+                    dependency_stale_approvals,
+                )["architecture"]["approval"],
+                "pending",
+            )
+
+            text = spec.read_text()
+            start = text.index("<!-- dls:architecture:start -->")
+            end = text.index("<!-- dls:architecture:end -->")
+            spec.write_text(
+                text[:start]
+                + "<!-- dls:architecture:start -->\nUse another architecture.\n"
+                + text[end:]
+            )
+            git(root, "add", "docs")
+            git(root, "commit", "-m", "change architecture decision")
+            changed_architecture = status(root, change_id="C001")
+            self.assertEqual(
+                changed_architecture["decisions"]["architecture"]["approval"],
+                "pending",
+            )
+            self.assertEqual(
+                changed_architecture["next_action"]["id"],
+                "approve-architecture",
             )
 
     def test_architecture_missing_ambiguous_and_content_drift_are_typed(self) -> None:

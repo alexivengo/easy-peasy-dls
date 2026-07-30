@@ -146,14 +146,19 @@ approval, release, or production gates and never requires a model call.
 
 ## Handle outcomes
 
-- `completed` with `review-clear`: report the imported result and the separate
-  acceptance/release boundaries.
-- `completed` with `not-clear` or `blocked`: report findings and hand off to the
-  remediation workflow using only `Исправь findings последнего review CHANGE_ID.`
-  Prefer a fresh implementation task. An actionable result must include a
-  non-null canonical `remediation_manifest_path`. This is a successful runner
-  execution, not an infrastructure failure. Do not replay the manifest or
-  findings in the handoff unless the user requests them.
+- `completed` with clean `review-clear`: report the imported result and the
+  separate acceptance/release boundaries. Ask for acceptance only after the
+  acceptance gate passes.
+- `completed` with any actionable review/acceptance finding, including
+  `review-clear` with an acceptance-only finding: report findings and hand off
+  to the remediation workflow using only
+  `Исправь findings последнего review CHANGE_ID.` Prefer a fresh implementation
+  task. The result must include a non-null canonical
+  `remediation_manifest_path`. This is a successful runner execution, not an
+  infrastructure failure. Do not replay the manifest or findings in the handoff
+  unless the user requests them.
+- `recover-remediation-manifest`: call the deterministic legacy recovery path;
+  do not rerun model lanes and do not ask for acceptance.
 - `running`: wait or use only `review-status`.
 - `prepare-candidate`: `review-run` first attempts guarded remediation recovery.
   It may run trusted named validation and create DLS artifacts, but never edit

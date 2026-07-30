@@ -73,11 +73,28 @@ For any code-review request, read and follow [review.md](references/review.md). 
 
 For a remediation request, read and follow [remediation.md](references/remediation.md). Start from the latest-only canonical manifest. Pass the complete `addressed` and `note` declaration only for the first candidate attempt. If validation requires a new commit, invoke `candidate-ready` again without repeating unchanged findings; pass only explicit status overrides. DLS binds the new SHA, reruns exact-HEAD evidence, and creates the next ReviewPack. Neither status creates `verified`.
 
-After an actionable `not-clear`, recommend a fresh implementation task with only `Исправь findings последнего review CHANGE_ID.` After `candidate-ready` returns `open-review-task`, recommend a fresh review task with only `Проведи code review CHANGE_ID.` Do not paste the manifest, previous findings, SHA, paths, or operation IDs into either handoff unless the user explicitly asks for diagnostics.
+After any imported result with actionable review/acceptance findings, including
+`review-clear` with an acceptance-only finding, recommend a fresh implementation
+task with only `Исправь findings последнего review CHANGE_ID.` After
+`candidate-ready` returns `open-review-task`, recommend a fresh review task with
+only `Проведи code review CHANGE_ID.` Do not paste the manifest, previous
+findings, SHA, paths, or operation IDs into either handoff unless the user
+explicitly asks for diagnostics.
 
 Every candidate/review/status payload may contain `task_context`. If it reports `reused`, show the `open-fresh-task` recommendation once, but do not stop, restart, or change the primary `next_action`. `continued` is a normal retry or descendant candidate inside the same canonical cycle. `unavailable` is non-blocking. Never add a polling command, subagent, or manual bookkeeping step solely to classify task reuse.
 
-Never finish a review without the non-null `review_result_path` returned by `review-run`. A completed `not-clear` or actionable `blocked` review must also return a non-null canonical `remediation_manifest_path`. After standard or critical implementation/remediation, the task must wait for the single `candidate-ready` process, stop at `open-review-task`, and never invoke `review-run`. For routine, `candidate-ready` owns its single Terra review and returns the canonical result directly. Use compact `candidate-status` only when the original process is lost or long-running; add `--diagnostic` once when the bounded validation failure itself was lost. Never pass an old candidate operation ID after HEAD changes. A `review-clear` verdict is not final acceptance.
+Never finish a review without the non-null `review_result_path` returned by
+`review-run`. Any completed result with actionable review/acceptance findings
+must also return a non-null canonical `remediation_manifest_path`, regardless of
+the overall review verdict. After standard or critical implementation/remediation,
+the task must wait for the single `candidate-ready` process, stop at
+`open-review-task`, and never invoke `review-run`. For routine,
+`candidate-ready` owns its single Terra review and returns the canonical result
+directly. Use compact `candidate-status` only when the original process is lost
+or long-running; add `--diagnostic` once when the bounded validation failure
+itself was lost. Never pass an old candidate operation ID after HEAD changes. A
+`review-clear` verdict is not final acceptance and does not permit an acceptance
+request while the acceptance gate still has actionable findings.
 
 On `failed-finalize`, `resume-review-repair`, `resume-review-budget`, or `resume-review-command-budget`, invoke the same `review-run` with the same operation ID and let DLS reuse completed lanes. Token budget recovery validates an already completed structured output and must not start another model call. Command-budget recovery is permitted only for a legacy final-full attempt below the installed hard ceiling; it reruns that terminal lane once under the new bounded contract and never repeats native, targeted, specialist, or reconciliation lanes. A logically invalid semantic decision is repaired by one DLS-owned compact Sol pass; never read its raw output, create a correction agent, expose provisional findings, or start a replacement whole-epic review. Stop on `inspect-review-output`, `inspect-review-integrity`, `inspect-review-budget`, or `split-review-scope`.
 
@@ -85,11 +102,22 @@ If a completed standard/critical native lane returned unstructured prose, the sa
 
 When a completed exact-HEAD review returns DLS-owned `presentation.comments`, emit their prepared `::code-comment` directives verbatim after the severity-first summary. Do not invent inline comments from model transcripts or emit them for stale locations. During a long unchanged runner wait, avoid repeated narration: use the longest host wait available and provide at most one compact heartbeat per minute.
 
-Every successfully imported review also returns a deterministic `delivery_receipt`. It is a read-only projection, not a new artifact or approval. After `not-clear` or `blocked`, show findings first, then the Receipt and the short remediation handoff. After `review-clear`, make the Receipt the main summary before asking for acceptance. If the streamed process was lost after canonical import, call `delivery-receipt CHANGE_ID` once; do not reconstruct the lifecycle in prose or invoke a model/subagent for the narrative.
+Every successfully imported review also returns a deterministic
+`delivery_receipt`. It is a read-only projection, not a new artifact or
+approval. When actionable review/acceptance findings exist, show findings first,
+then the Receipt and the short remediation handoff even if the overall verdict is
+`review-clear`. Only a clean `review-clear` whose acceptance gate passes may use
+the Receipt as the main summary before asking for acceptance. If the streamed
+process was lost after canonical import, call `delivery-receipt CHANGE_ID` once;
+do not reconstruct the lifecycle in prose or invoke a model/subagent for the
+narrative.
 
 ## Finish
 
-Run the acceptance gate. Ask a scoped `accept` question naming the exact short digest; for Git-backed work also name the reviewed head. Record acceptance only after the user's direct affirmative reply.
+Run the acceptance gate. Ask a scoped `accept` question naming the exact short
+digest only when that gate passes; for Git-backed work also name the reviewed
+head. If it returns `remediate-findings`, hand off remediation instead. Record
+acceptance only after the user's direct affirmative reply.
 
 After `approve --decision accept`, show the returned accepted Delivery Receipt. Do not ask the user to run another CLI command, and do not imply that accepted means released or in production.
 

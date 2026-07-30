@@ -2,7 +2,7 @@
 
 Срез: 30 июля 2026 года
 
-Текущая линия: `v0.10.0`
+Текущая линия: `v0.10.1`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
@@ -259,6 +259,16 @@ Read-only preflight на clean draft `EPIC-05a/05b` вернул
 `record-design-source`; backend `RUCORE-E03` с canonical ADR вернул
 `approve-architecture`. Product source, approvals, ReviewPack и model calls не
 изменялись — это подтверждает routing/gates, но не полный lifecycle.
+
+## v0.10.1 — stage-correct review handoff
+
+- Любой canonical result с actionable review/acceptance findings создаёт
+  remediation manifest, даже если общий verdict уже `review-clear`.
+- Acceptance предлагается только после отдельного green acceptance gate.
+- Старые whole-definition approvals получают bounded compatibility projection
+  для неизменившейся architecture region вместо retroactive нового решения.
+- Legacy actionable review без manifest восстанавливается детерминированно без
+  повторных model lanes.
 
 ## Позже, только по данным
 

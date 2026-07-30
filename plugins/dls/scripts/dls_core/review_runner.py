@@ -52,6 +52,7 @@ from .operations import (
     _native_plaintext_projection,
     _process_is_alive,
     _read_review_result,
+    _review_actionable_findings,
     _resolve_review_pack,
     _review_lane_entries,
     _semantic_review_effort,
@@ -997,8 +998,32 @@ def review_status(
         require_definition=state.get("control_level") in {"standard", "critical"},
     )
     if result_entry:
+        result_path, result_report = _read_review_result(owner, result_entry)
+        remediation_manifest_path = _existing_remediation_manifest_path(
+            owner,
+            change_id=change_id,
+            review_entry=result_entry,
+            review_id=result_entry["review_id"],
+        )
+        needs_remediation = bool(_review_actionable_findings(result_report))
         status_value = "completed"
-        next_action = {"id": "review-complete", "detail": result_entry["result_path"]}
+        if remediation_manifest_path is not None:
+            next_action = {
+                "id": "remediate-findings",
+                "detail": remediation_manifest_path,
+            }
+        elif needs_remediation:
+            next_action = {
+                "id": "recover-remediation-manifest",
+                "detail": (
+                    f"latest review {result_entry['review_id']} has no canonical "
+                    "remediation manifest"
+                ),
+            }
+        elif result_report.get("verdict") == "review-clear":
+            next_action = {"id": "accept-review", "detail": result_path}
+        else:
+            next_action = {"id": "resolve-review-blocker", "detail": result_path}
     elif active_lane or pipeline_alive:
         status_value = "running"
         next_action = {"id": "wait-review", "detail": "review pipeline is active"}
@@ -1150,9 +1175,14 @@ def review_status(
         pack_decisions_current = review_pack_decisions_current(
             pack.get("decisions"), decision_gate["decisions"]
         )
-        if pack_entry is provenance_pack_entry and decision_gate["ready"] and pack_decisions_current:
+        if (
+            result_entry is None
+            and pack_entry is provenance_pack_entry
+            and decision_gate["ready"]
+            and pack_decisions_current
+        ):
             _validate_review_pack_current(owner, state=state, pack=pack)
-        elif pack_entry is provenance_pack_entry and (
+        elif result_entry is None and pack_entry is provenance_pack_entry and (
             not decision_gate["ready"] or not pack_decisions_current
         ):
             status_value = "not-prepared"
@@ -1214,6 +1244,10 @@ def review_status(
             pack.get("decisions"), decision_gate["decisions"]
         )
     )
+    result_exact = bool(
+        result_entry
+        and result_entry.get("head_sha") == current_head
+    )
     payload = {
         "ok": True,
         "changed": False,
@@ -1223,8 +1257,8 @@ def review_status(
         "owner_selection": owner_selection,
         "current_head": current_head,
         "candidate_head": pack.get("head_sha") if isinstance(pack, dict) else None,
-        "exact_head": pack_exact,
-        "prepared": pack_exact,
+        "exact_head": result_exact if result_entry is not None else pack_exact,
+        "prepared": result_exact if result_entry is not None else pack_exact,
         "review_id": selected_review_id,
         "prior_review_id": prior_review_id,
         "prior_review_result_path": prior_review_result_path,
