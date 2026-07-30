@@ -3034,6 +3034,7 @@ def _update_pipeline(
     failure_reason: str | None = None,
     failure_kind: str | None = None,
     task_context: dict[str, Any] | None = None,
+    pipeline_instance_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], bool]:
     updates: dict[str, Any] = {
         "status": status,
@@ -3047,6 +3048,8 @@ def _update_pipeline(
         updates["failure_kind"] = failure_kind
     if task_context is not None:
         updates["task_context"] = copy.deepcopy(task_context)
+    if pipeline_instance_id is not None:
+        updates["pipeline_instance_id"] = pipeline_instance_id
     if status in {"completed", "failed", "failed-finalize"}:
         updates["completed_at"] = utc_now()
     for lock_attempt in range(21):
@@ -3705,6 +3708,7 @@ def review_run(
         return annotate_handoff(pending)
 
     effective_operation_id = operation_id or str(uuid.uuid4())
+    pipeline_instance_id = str(uuid.uuid4())
     emit("started", operation_id=effective_operation_id)
     explicit_pack = Path(pack_path).is_absolute() if pack_path else False
     if not explicit_pack:
@@ -4074,11 +4078,9 @@ def review_run(
             stage="native",
             create=True,
             task_context=task_context,
+            pipeline_instance_id=pipeline_instance_id,
         )
-        if (
-            not claimed_pipeline
-            and active_pipeline.get("operation_id") != pipeline_operation_id
-        ):
+        if not claimed_pipeline:
             running = review_status(
                 context_owner,
                 change_id=change_id,

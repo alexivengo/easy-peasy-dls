@@ -206,7 +206,7 @@ Exit criteria v0.9.3: approved definition воспроизводится из Gi
 
 | ID | KANO | Возможность | Результат |
 |---|---|---|---|
-| M66 | Must-be / P0 | Registry-first ReviewPack resolution | `review-run`, `review-start`, status и candidate используют одного canonical owner; stale portable state и lease в main не затмевают registered worktree |
+| M66 | Must-be / P0 | Registry-first ReviewPack resolution | `review-run`, `review-start`, status и candidate используют одного canonical owner и invocation-scoped lease; stale portable state в main не затмевает registered worktree |
 
 Exit criteria v0.9.4: review, запущенный из main checkout с portable state copy,
 выбирает exact-HEAD ReviewPack зарегистрированного owner, не запускает model lane

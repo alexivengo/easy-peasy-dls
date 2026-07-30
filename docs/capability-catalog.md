@@ -105,7 +105,7 @@
 | M63 | Stage-aware change dependencies | ✅ | P0 | Dependency блокирует только названную и последующие стадии; `accepted-in-base` проверяет human acceptance и Git ancestry |
 | M64 | Change-scoped one-writer | ✅ | P0 | Atomic handoff переносит approved state до registry switch; один owner/single-flight остаётся внутри change без global lock |
 | M65 | Completed-output budget recovery | ✅ | P0 | Валидный exact-HEAD output внутри bounded ceiling импортируется без повторного model call; hard limits остаются terminal |
-| M66 | Registry-first ReviewPack resolution | ✅ | P0 | Implicit review всегда читает pack и lease registered owner; stale portable state в caller checkout остаётся только исторической копией |
+| M66 | Registry-first ReviewPack resolution | ✅ | P0 | Implicit review читает pack и invocation-scoped lease registered owner; stale portable state в caller checkout остаётся только исторической копией |
 
 ## Performance — экономия времени, контекста и ручной работы
 

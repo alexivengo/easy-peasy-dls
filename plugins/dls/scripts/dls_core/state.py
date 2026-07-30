@@ -596,6 +596,25 @@ class StateStore:
                 raise IntegrityError(
                     f"Unknown review pipeline: {review_id}/{operation_id}"
                 )
+            if index is not None and create:
+                current = state["reviews"][index]
+                requested_instance = updates.get("pipeline_instance_id")
+                current_instance = current.get("pipeline_instance_id")
+                runner_pid = current.get("runner_pid")
+                alive = False
+                if isinstance(runner_pid, int) and runner_pid > 0:
+                    try:
+                        os.kill(runner_pid, 0)
+                        alive = True
+                    except OSError:
+                        alive = False
+                if (
+                    current.get("status") == "running"
+                    and alive
+                    and isinstance(requested_instance, str)
+                    and requested_instance != current_instance
+                ):
+                    return state, copy.deepcopy(current), False
             if index is None and create:
                 running = next(
                     (

@@ -194,6 +194,12 @@ owner содержал готовый exact-HEAD candidate. Теперь implici
 single-flight preflight используют тот же registry-first контракт; stale local
 pack, pipeline или `running` lease не могут затмить canonical owner.
 
+Pipeline claim дополнительно содержит invocation-scoped instance ID. Два
+одновременных вызова с одним operation ID больше не считаются одним исполнителем
+только потому, что они работают в одном OS process: один продолжает pipeline,
+второй получает `wait-review`. Это защищает semantic context и finalization от
+конкурентной перезаписи.
+
 Overlap contract `dls-change-overlap/v1` сравнивает repository-relative product
 paths между recorded worktree base и current HEAD. Общий каталог — advisory
 proximity, одинаковый файл — integration blocker для более позднего change.
