@@ -2,7 +2,7 @@
 
 Срез: 30 июля 2026 года
 
-Текущая линия: `v0.9.5`
+Текущая линия: `v0.9.6`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
@@ -222,6 +222,19 @@ Exit criteria v0.9.4: review, запущенный из main checkout с portabl
 Exit criteria v0.9.5: реальный EPIC-02a review с legacy command stop получает
 канонический результат без повторного native, targeted или reconciliation;
 текущий ceiling, timeout, transcript и integrity failures остаются terminal.
+
+## v0.9.6 — complete input-only review context
+
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| M68 | Must-be / P0 | Полнота input-only review context | Reconciliation и final-full получают ReviewPack и requirements по digest-bound stable paths внутри разрешённого workspace |
+| P45 | Performance / P0 | Детерминированный bound-context bundle | DLS передаёт один bounded manifest и не заставляет модель искать owner-local cache или повторять repository discovery |
+
+Exit criteria v0.9.6: обе input-only decision lanes физически получают все
+заявленные prompt inputs внутри `.dls-review-input`; raw context paths не
+материализуются за этой границей; tampering останавливает lane до model call;
+реальные EPIC-02a artifacts воспроизводят тот же bundle без изменения product
+source или canonical ReviewIR.
 
 ## Следующая волна v0.10.0: UI/UX Attractive pilot
 

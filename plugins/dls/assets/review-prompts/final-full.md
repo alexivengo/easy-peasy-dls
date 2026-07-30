@@ -24,6 +24,12 @@ represented by `epic.patch`. Re-check every ticket, cross-ticket integration,
 contract conformance, blast radius, and current validation evidence. The
 returned decision supersedes the targeted decision.
 
+The bound context inputs are available only at these canonical paths:
+`.dls-review-input/context.json`, `.dls-review-input/bound-inputs.json`,
+`.dls-review-input/bound/review-pack.json`, and, when listed in the manifest,
+`.dls-review-input/bound/requirements.json`. Do not follow repository-local
+paths embedded in the context manifest.
+
 Use no more than {{FINAL_FULL_COMMAND_TARGET}} inspection command invocations.
 The runtime hard ceiling is {{FINAL_FULL_COMMAND_CEILING}}; crossing it stops
 the lane before JSON can be returned. Batch related reads and reserve enough

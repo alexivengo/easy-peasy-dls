@@ -37,6 +37,13 @@ infers branches.
    in a bounded input-only workspace with exact patch/coverage inventory;
 7. state-owned provenance, ReviewIR creation, validation, and import.
 
+For every input-only reconciliation or final-full lane, DLS must bind the
+compact ReviewPack and any filtered requirements projection under
+`.dls-review-input/bound/` and validate `.dls-review-input/bound-inputs.json`
+before the model call. Never follow owner-local cache paths from `context.json`,
+copy inputs outside `.dls-review-input`, or replace a missing bound input with
+manual repository discovery.
+
 Do not create subagents, semantic drafts, specialist prompts, ReviewIR, or
 provenance manually. Do not invoke `review-start` as the normal workflow.
 

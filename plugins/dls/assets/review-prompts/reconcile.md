@@ -16,7 +16,12 @@ require a new complete finding with a different ID, and
 `replacement_finding_id` must equal that new finding ID and must differ from
 the prior finding ID.
 
-Read the bound context and ReviewPack, then read:
+Read the bound inputs from their canonical in-workspace paths:
+
+- `.dls-review-input/context.json`;
+- `.dls-review-input/bound-inputs.json`;
+- `.dls-review-input/bound/review-pack.json`;
+- `.dls-review-input/bound/requirements.json` when listed in the bound-input manifest;
 
 - `.dls-review-input/native.txt`;
 - `.dls-review-input/semantic-independent.json`;

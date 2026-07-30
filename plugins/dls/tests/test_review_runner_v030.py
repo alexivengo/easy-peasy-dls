@@ -771,6 +771,7 @@ env_allow = []
         semantic_command_events: int = 0,
         final_full_command_events: int = 0,
         semantic_usage_tokens: int = 0,
+        require_bound_context: bool = False,
     ) -> tuple[str | None, Path, Path]:
         fake_bin = root / ".dls" / "cache" / "runner-fake-bin"
         fake_bin.mkdir(parents=True, exist_ok=True)
@@ -861,9 +862,35 @@ env_allow = []
             "            payload = {}\n"
             "    else:\n"
             "        context = json.loads(Path('.dls-review-input/context.json').read_text())\n"
-            "        pack_item = next(item for item in context['inputs'] "
+            "        input_only_lane = (prompt.startswith('# DLS review reconciliation') "
+            "or prompt.startswith('# DLS remediation final-full review'))\n"
+            "        bound_manifest_path = Path('.dls-review-input/bound-inputs.json')\n"
+            f"        if input_only_lane and {require_bound_context!r} and not "
+            "bound_manifest_path.is_file():\n"
+            "            raise SystemExit(81)\n"
+            "        if bound_manifest_path.is_file():\n"
+            "            bound_manifest = json.loads(bound_manifest_path.read_text())\n"
+            "            if bound_manifest.get('contract') != "
+            "'dls-bound-context-inputs/v1':\n"
+            "                raise SystemExit(82)\n"
+            "            bound_entries = {item['reason']: item for item in "
+            "bound_manifest['inputs']}\n"
+            "            for bound_item in bound_entries.values():\n"
+            "                if not (Path('.dls-review-input') / "
+            "bound_item['path']).is_file():\n"
+            "                    raise SystemExit(83)\n"
+            "            pack = json.loads((Path('.dls-review-input') / "
+            "bound_entries['active-review-pack']['path']).read_text())\n"
+            f"            if input_only_lane and {require_bound_context!r}:\n"
+            "                for source_item in context['inputs']:\n"
+            "                    if source_item.get('reason') in "
+            "{'active-review-pack', 'filtered-requirements-projection'} "
+            "and Path(source_item['path']).exists():\n"
+            "                        raise SystemExit(84)\n"
+            "        else:\n"
+            "            pack_item = next(item for item in context['inputs'] "
             "if item.get('reason') == 'active-review-pack')\n"
-            "        pack = json.loads(Path(pack_item['path']).read_text())\n"
+            "            pack = json.loads(Path(pack_item['path']).read_text())\n"
             "        prior_verdicts = [{'finding_id': item['finding_id'], "
             "'verdict': 'verified', 'replacement_finding_id': None, "
             "'evidence': ['verified by fake reviewer']} for item in "
@@ -1168,6 +1195,7 @@ env_allow = []
             original, counter, _ = self._install_fake_codex(
                 root,
                 native_plaintext_text=summary,
+                require_bound_context=True,
             )
             try:
                 completed = review_run(
@@ -1203,6 +1231,13 @@ env_allow = []
                 "dls-native-transcript-final-message/v1",
             )
             self.assertIn("reconciliation", report["lanes"])
+            reconciliation = report["lanes"]["reconciliation"]
+            self.assertEqual(
+                reconciliation["bound_context_contract"],
+                "dls-bound-context-inputs/v1",
+            )
+            self.assertGreaterEqual(reconciliation["bound_context_input_count"], 1)
+            self.assertGreater(reconciliation["bound_context_bytes"], 0)
 
     def test_unsafe_native_transcript_stops_without_resume_loop(self) -> None:
         summary = "The changes look correct and the focused tests pass."
@@ -1990,7 +2025,10 @@ env_allow = []
                 if item.get("lane_key") == "semantic:targeted"
             )
             (root / terminal["output_path"]).write_text("{}", encoding="utf-8")
-            original, counter, _ = self._install_fake_codex(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                require_bound_context=True,
+            )
             try:
                 with self.assertRaisesRegex(
                     IntegrityError,
@@ -2061,7 +2099,10 @@ env_allow = []
             )
             projected = review_status(root, change_id="C001")
             self.assertEqual(projected["next_action"]["id"], "retry-review")
-            original, counter, _ = self._install_fake_codex(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                require_bound_context=True,
+            )
             try:
                 completed = review_run(
                     root,
@@ -2317,7 +2358,10 @@ env_allow = []
             )
             self.assertEqual(ready["review_pack"]["review_mode"], "remediation")
 
-            original, counter, _ = self._install_fake_codex(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                require_bound_context=True,
+            )
             try:
                 completed = review_run(
                     root,
@@ -2362,6 +2406,12 @@ env_allow = []
                 final_entry["final_coverage_path_count"],
                 len(ready["review_pack"]["full_changed_files"]),
             )
+            self.assertEqual(
+                final_entry["bound_context_contract"],
+                "dls-bound-context-inputs/v1",
+            )
+            self.assertGreaterEqual(final_entry["bound_context_input_count"], 1)
+            self.assertGreater(final_entry["bound_context_bytes"], 0)
             self.assertLessEqual(final_entry["budget"]["command_events"], 24)
             self.assertEqual(final_entry["command_target"], 16)
             self.assertEqual(final_entry["command_ceiling"], 24)
@@ -2370,6 +2420,10 @@ env_allow = []
             )
             self.assertIn("no more than 16 inspection command", final_prompt)
             self.assertIn("runtime hard ceiling is 24", final_prompt)
+            self.assertIn(
+                ".dls-review-input/bound/review-pack.json",
+                final_prompt,
+            )
             self.assertEqual(
                 result["lanes"]["semantic"]["passes"][-1]["workspace_mode"],
                 "input-only",
@@ -2499,7 +2553,26 @@ env_allow = []
             create_change(root, control="critical")
             context = root / ".dls/cache/context.json"
             context.parent.mkdir(parents=True, exist_ok=True)
-            context.write_text("{}", encoding="utf-8")
+            pack_projection = root / ".dls/cache/review-pack.json"
+            pack_projection.write_text(
+                '{"review_id":"large-context-review"}',
+                encoding="utf-8",
+            )
+            context.write_text(
+                json.dumps(
+                    {
+                        "manifest_digest": "large-context-manifest",
+                        "inputs": [
+                            {
+                                "path": ".dls/cache/review-pack.json",
+                                "reason": "active-review-pack",
+                                "sha256": sha256_file(pack_projection),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
             payload = "x" * (2 * 1024 * 1024 + 4096)
             (root / "large.txt").write_text(payload, encoding="utf-8")
             git(root, "add", "large.txt")
@@ -2510,6 +2583,7 @@ env_allow = []
                 "epic_base_sha": base_sha,
                 "head_sha": head_sha,
                 "full_changed_files": ["large.txt"],
+                "pack_digest": "large-context-pack",
             }
             with self.assertRaisesRegex(
                 ReviewBudgetPlanningError,

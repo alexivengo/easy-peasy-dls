@@ -91,6 +91,11 @@ FINAL_FULL_TIMEOUT_SECONDS = 900
 FINAL_FULL_TRANSCRIPT_BYTES = 1024 * 1024
 REVIEW_BUDGET_CONTRACT = "dls-review-budget/v2"
 FINAL_COVERAGE_CONTRACT = "dls-final-coverage/v1"
+BOUND_CONTEXT_INPUT_CONTRACT = "dls-bound-context-inputs/v1"
+BOUND_CONTEXT_INPUT_PATHS = {
+    "active-review-pack": "bound/review-pack.json",
+    "filtered-requirements-projection": "bound/requirements.json",
+}
 
 
 def _installed_final_full_command_ceiling(
@@ -1334,20 +1339,7 @@ def _prepare_isolated_workspace(
             else:
                 _copy_file(value, destination)
         if input_only and (input_root / "context.json").is_file():
-            compact_manifest = read_json(input_root / "context.json")
-            for item in compact_manifest.get("inputs", []):
-                if not isinstance(item, dict) or item.get("reason") not in {
-                    "active-review-pack",
-                    "filtered-requirements-projection",
-                }:
-                    continue
-                relative = item.get("path")
-                if not isinstance(relative, str):
-                    raise IntegrityError("Compact review input path is invalid")
-                source = safe_resolve(owner, relative, must_exist=True)
-                if sha256_file(source) != item.get("sha256"):
-                    raise IntegrityError("Compact review input digest mismatch")
-                _copy_file(source, workspace / relative)
+            _validate_bound_context_workspace(input_root)
         return workspace, temporary_parent
     except Exception:
         if not input_only:
@@ -1430,6 +1422,122 @@ def _input_bundle_metadata(
         ),
         total_bytes,
     )
+
+
+def _bound_context_inputs(
+    owner: Path,
+    context_path: str,
+) -> tuple[dict[str, Path | bytes], dict[str, Any]]:
+    """Bind compact context dependencies inside the input-only workspace."""
+    context_source = safe_resolve(owner, context_path, must_exist=True)
+    context = read_json(context_source)
+    context_digest = context.get("manifest_digest")
+    if not isinstance(context_digest, str) or not context_digest:
+        raise IntegrityError("Review context is missing its manifest digest")
+
+    selected: dict[str, dict[str, Any]] = {}
+    files: dict[str, Path | bytes] = {}
+    for item in context.get("inputs", []):
+        if not isinstance(item, dict):
+            continue
+        reason = item.get("reason")
+        if reason not in BOUND_CONTEXT_INPUT_PATHS:
+            continue
+        if reason in selected:
+            raise IntegrityError(f"Review context contains duplicate {reason} input")
+        relative = item.get("path")
+        expected_digest = item.get("sha256")
+        if not isinstance(relative, str) or not isinstance(expected_digest, str):
+            raise IntegrityError(f"Review context {reason} input is incomplete")
+        source = safe_resolve(owner, relative, must_exist=True)
+        actual_digest = sha256_file(source)
+        if actual_digest != expected_digest:
+            raise IntegrityError(f"Review context {reason} input digest mismatch")
+        stable_path = BOUND_CONTEXT_INPUT_PATHS[reason]
+        size = source.stat().st_size
+        selected[reason] = {
+            "reason": reason,
+            "path": stable_path,
+            "sha256": actual_digest,
+            "bytes": size,
+        }
+        files[stable_path] = source
+
+    if "active-review-pack" not in selected:
+        raise IntegrityError("Review context is missing its active ReviewPack projection")
+
+    manifest = {
+        "contract": BOUND_CONTEXT_INPUT_CONTRACT,
+        "review_context_digest": context_digest,
+        "inputs": [
+            selected[reason]
+            for reason in BOUND_CONTEXT_INPUT_PATHS
+            if reason in selected
+        ],
+    }
+    manifest_bytes = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    manifest_digest = sha256_bytes(manifest_bytes)
+    files["bound-inputs.json"] = manifest_bytes
+    return files, {
+        "bound_context_contract": BOUND_CONTEXT_INPUT_CONTRACT,
+        "bound_context_digest": manifest_digest,
+        "bound_context_input_count": len(selected),
+        "bound_context_bytes": sum(item["bytes"] for item in selected.values()),
+    }
+
+
+def _validate_bound_context_workspace(input_root: Path) -> None:
+    context_path = input_root / "context.json"
+    manifest_path = input_root / "bound-inputs.json"
+    if not context_path.is_file() or not manifest_path.is_file():
+        raise IntegrityError("Input-only review is missing its bound context bundle")
+    context = read_json(context_path)
+    manifest = read_json(manifest_path)
+    if manifest.get("contract") != BOUND_CONTEXT_INPUT_CONTRACT:
+        raise IntegrityError("Bound context input contract is invalid")
+    if manifest.get("review_context_digest") != context.get("manifest_digest"):
+        raise IntegrityError("Bound context does not match the review context digest")
+
+    expected: dict[str, str] = {}
+    for item in context.get("inputs", []):
+        if isinstance(item, dict) and item.get("reason") in BOUND_CONTEXT_INPUT_PATHS:
+            reason = item["reason"]
+            if reason in expected:
+                raise IntegrityError(f"Review context contains duplicate {reason} input")
+            digest = item.get("sha256")
+            if not isinstance(digest, str):
+                raise IntegrityError(f"Review context {reason} input is incomplete")
+            expected[reason] = digest
+    if "active-review-pack" not in expected:
+        raise IntegrityError("Review context is missing its active ReviewPack projection")
+
+    entries = manifest.get("inputs")
+    if not isinstance(entries, list):
+        raise IntegrityError("Bound context input manifest is incomplete")
+    actual: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise IntegrityError("Bound context input entry is invalid")
+        reason = entry.get("reason")
+        if reason not in BOUND_CONTEXT_INPUT_PATHS or reason in actual:
+            raise IntegrityError("Bound context input reason is invalid or duplicated")
+        stable_path = BOUND_CONTEXT_INPUT_PATHS[reason]
+        if entry.get("path") != stable_path:
+            raise IntegrityError("Bound context input path is not canonical")
+        destination = safe_resolve(input_root, stable_path, must_exist=True)
+        digest = sha256_file(destination)
+        if digest != entry.get("sha256") or digest != expected.get(reason):
+            raise IntegrityError(f"Bound context {reason} digest mismatch")
+        if destination.stat().st_size != entry.get("bytes"):
+            raise IntegrityError(f"Bound context {reason} byte count mismatch")
+        actual[reason] = digest
+    if actual != expected:
+        raise IntegrityError("Bound context input set is incomplete")
 
 
 def _final_full_inputs(
@@ -1519,6 +1627,7 @@ def _final_full_inputs(
         "budget": _budget_projection(budget),
         "coverage_digest": sha256_bytes(coverage_bytes),
     }
+    bound_files, bound_metadata = _bound_context_inputs(owner, context_path)
     extra_files: dict[str, Path | bytes] = {
         "context.json": safe_resolve(owner, context_path, must_exist=True),
         "epic.patch": patch_bytes,
@@ -1544,20 +1653,20 @@ def _final_full_inputs(
             f"specialists/{name}": payload
             for name, payload in specialist_payloads.items()
         },
+        **bound_files,
     }
     input_digest, extra_input_bytes = _input_bundle_metadata(extra_files)
     effective_schema_path = schema_path or (SCHEMAS_ROOT / "review-decision.schema.json")
     prompt_bytes = prompt_text.encode("utf-8")
-    pack_bytes = json.dumps(pack, indent=2, sort_keys=True).encode("utf-8")
     schema_bytes = effective_schema_path.read_bytes()
-    fixed_input_bytes = len(prompt_bytes) + len(pack_bytes) + len(schema_bytes)
+    fixed_input_bytes = len(prompt_bytes) + len(schema_bytes)
     input_bytes = extra_input_bytes + fixed_input_bytes
     full_input_digest = sha256_bytes(
         json.dumps(
             {
                 "extra_digest": input_digest,
                 "prompt_digest": sha256_bytes(prompt_bytes),
-                "pack_digest": sha256_bytes(pack_bytes),
+                "pack_digest": pack["pack_digest"],
                 "schema_digest": sha256_bytes(schema_bytes),
             },
             sort_keys=True,
@@ -1585,6 +1694,7 @@ def _final_full_inputs(
         "final_input_bundle_bytes": input_bytes,
         "budget_plan": budget_plan,
         "workspace_mode": "input-only",
+        **bound_metadata,
     }
     return extra_files, metadata
 
@@ -2980,6 +3090,10 @@ def _lane_provenance(entry: dict[str, Any]) -> dict[str, Any]:
             "final_patch_bytes",
             "final_input_bundle_digest",
             "final_input_bundle_bytes",
+            "bound_context_contract",
+            "bound_context_digest",
+            "bound_context_input_count",
+            "bound_context_bytes",
             "workspace_mode",
         )
     }
@@ -3246,6 +3360,10 @@ def _build_review_ir(
                         "final_patch_bytes",
                         "final_input_bundle_digest",
                         "final_input_bundle_bytes",
+                        "bound_context_contract",
+                        "bound_context_digest",
+                        "bound_context_input_count",
+                        "bound_context_bytes",
                         "workspace_mode",
                     )
                     if final_full_entry.get(key) is not None
@@ -4453,6 +4571,7 @@ def review_run(
     reconciliation_entry: dict[str, Any] | None = None
     decision = independent_decision
     if needs_reconciliation:
+        bound_files, bound_metadata = _bound_context_inputs(owner, context_path)
         reconciliation_prompt = _render_prompt("reconcile.md", prompt_values)
         emit("lane-transition", review_id=pack["review_id"], lane="reconciliation")
         _update_pipeline(
@@ -4486,6 +4605,11 @@ def review_run(
                     f"specialists/{name}": payload
                     for name, payload in specialist_payloads.items()
                 },
+                **bound_files,
+            },
+            attempt_metadata={
+                "workspace_mode": "input-only",
+                **bound_metadata,
             },
         )
         if decision is None:

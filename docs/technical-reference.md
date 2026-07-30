@@ -696,6 +696,30 @@ batch reads и резерв для финального JSON. 15-минутны�
 и общий input bundle 2 MiB не расширялись. Превышение текущего ceiling остаётся
 terminal `inspect-review-budget`.
 
+В `v0.9.5` проявился отдельный integrity gap: compact context перечислял
+ReviewPack projection и filtered requirements по owner-local путям
+`.dls/cache/context/...`, а prompt одновременно запрещал input-only модели
+читать что-либо вне `.dls-review-input`. Runner проверял digests, но копировал
+эти два файла за объявленную sandbox-границу. Поэтому final-full мог честно
+сообщить, что заявленный ReviewPack недоступен; тот же дефект существовал в
+reconciliation.
+
+`v0.9.6` вводит `dls-bound-context-inputs/v1`. Перед обеими input-only lanes DLS
+проверяет исходный context manifest и digests, затем создаёт immutable bundle:
+
+- `.dls-review-input/bound-inputs.json`;
+- `.dls-review-input/bound/review-pack.json`;
+- `.dls-review-input/bound/requirements.json`, когда projection существует.
+
+Manifest содержит только reason, stable relative path, bytes и SHA-256; исходные
+локальные paths в model input contract не переносятся. Bundle digest, count и
+bytes записываются DLS-owned lane provenance. Workspace повторно сверяет context,
+manifest и физические copies до model call. Полный ReviewPack больше не
+учитывается как «виртуальный» input в final-full budget: учитываются реально
+переданные compact files. Исторические ReviewPack/ReviewIR остаются читаемыми и
+не переписываются; прежний finding закрывается только следующим независимым
+review.
+
 Hotfix появился после EPIC-02a: final-full успел сделать 17 команд при лимите
 16, был убит до structured output, хотя duration, transcript и aggregate token
 budgets не были исчерпаны. Старый общий текст ошибки также не различал command

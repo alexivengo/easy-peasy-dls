@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
 Срез: 30 июля 2026 года
-Текущая линия: `v0.9.5`
+Текущая линия: `v0.9.6`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -9,16 +9,16 @@
 «что делать следующим», а этот документ — «что вообще существует, планируется
 или намеренно не будет реализовано».
 
-Всего отслеживается 157 пунктов:
+Всего отслеживается 159 пунктов:
 
-- 67 Must-be: `M01–M67`;
-- 44 Performance: `P01–P44`;
+- 68 Must-be: `M01–M68`;
+- 45 Performance: `P01–P45`;
 - 10 Attractive: `A01–A10`;
 - 12 Indifferent/premature: `I01–I12`;
 - 24 Reverse anti-features: `R01–R24`.
 
 Исходный KANO-снимок содержал 129 пунктов: все они сохранены под прежними ID.
-К ним добавлены 28 публичных возможностей `M51–M67` и `P34–P44`. Удалять ID
+К ним добавлены 30 публичных возможностей `M51–M68` и `P34–P45`. Удалять ID
 нельзя: изменившееся решение помечается как заменённое, а не исчезает из карты.
 
 ## Статусы
@@ -107,6 +107,7 @@
 | M65 | Completed-output budget recovery | ✅ | P0 | Валидный exact-HEAD output внутри bounded ceiling импортируется без повторного model call; hard limits остаются terminal |
 | M66 | Registry-first ReviewPack resolution | ✅ | P0 | Implicit review читает pack и invocation-scoped lease registered owner; stale portable state в caller checkout остаётся только исторической копией |
 | M67 | Final-full completion headroom | ✅ | P0 | 16 inspection commands остаются target, а bounded ceiling 24 оставляет место для обязательного structured decision |
+| M68 | Полнота input-only review context | ✅ | P0 | Reconciliation и final-full получают digest-bound ReviewPack и requirements только внутри разрешённого model workspace |
 
 ## Performance — экономия времени, контекста и ручной работы
 
@@ -156,6 +157,7 @@
 | P42 | Active delivery map | ✅ | P1 | Bounded read-only карта показывает dependencies, parallel groups, integration order и один typed action на change |
 | P43 | Input-only final-full | ✅ | P0 | Exact patch/coverage bundle заменяет unrestricted checkout; oversized change получает explicit scope split |
 | P44 | Terminal-lane command recovery | ✅ | P0 | Legacy 17/16 повторяет только final-full один раз; native, targeted и reconciliation не оплачиваются повторно |
+| P45 | Детерминированный bound-context bundle | ✅ | P0 | Stable paths и DLS-owned manifest исключают скрытый cache lookup, повторный discovery и неоднозначную доступность inputs |
 
 ## Attractive — полезно после стабилизации core
 
@@ -263,6 +265,15 @@
 - `P44`: legacy command stop ниже нового ceiling повторяет только terminal
   final-full и сохраняет provenance завершённых upstream lanes;
 - текущие command/time/transcript/integrity ceilings остаются terminal.
+
+### v0.9.6 — complete input-only review context
+
+- `M68`: reconciliation и final-full получают физические immutable copies
+  compact ReviewPack и filtered requirements внутри `.dls-review-input`;
+- `P45`: stable paths, bound manifest и digest provenance заменяют ссылки на
+  owner-local `.dls/cache`, которые модель не имела права читать;
+- product findings не переписываются: исправление меняет runner contract, а
+  закрытие прежнего finding подтверждает следующий independent review.
 
 ### v0.10.0 — UI/UX и полный architecture lifecycle
 
