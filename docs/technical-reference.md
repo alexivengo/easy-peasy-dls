@@ -688,12 +688,24 @@ output/transcript digests и исходных non-token limits. Status возв�
 transcript, transport, integrity и over-ceiling failures так не
 восстанавливаются.
 
-Будущий remediation final-full выполняется не в product checkout, а в
-input-only workspace. DLS формирует exact `epic.patch`, coverage manifest со
-всеми changed paths/blob IDs, compact context и budget plan. Stage ограничен 16
-command events, 15 минутами, transcript 1 MiB и общим input bundle 2 MiB. Если
-полное покрытие не помещается, DLS не обрезает его молча и возвращает
-`split-review-scope` до model call.
+Remediation final-full выполняется не в product checkout, а в input-only
+workspace. DLS формирует exact `epic.patch`, coverage manifest со всеми changed
+paths/blob IDs, compact context и budget plan. В `v0.9.5` 16 inspection commands
+остаются model-facing target, но runtime hard ceiling равен 24: prompt требует
+batch reads и резерв для финального JSON. 15-минутный timeout, transcript 1 MiB
+и общий input bundle 2 MiB не расширялись. Превышение текущего ceiling остаётся
+terminal `inspect-review-budget`.
+
+Hotfix появился после EPIC-02a: final-full успел сделать 17 команд при лимите
+16, был убит до structured output, хотя duration, transcript и aggregate token
+budgets не были исчерпаны. Старый общий текст ошибки также не различал command
+и transcript overflow. Теперь state сохраняет `budget_failure_kind`, фактическое
+и допустимое значение. Legacy exact-HEAD attempt 17/16 получает typed action
+`resume-review-command-budget`: тот же `review-run` повторяет только final-full
+ровно один раз под новым digest-bound contract, переиспользуя native, targeted
+и reconciliation. Current ceiling 24, timeout, transcript, integrity и drift
+автоматически не повторяются. Если полное покрытие не помещается, DLS не
+обрезает его молча и возвращает `split-review-scope` до model call.
 
 Новые packs помечаются `runner_contract: dls-review-runner/v2`,
 `context_contract: dls-review-context/v2`, `economy_contract:

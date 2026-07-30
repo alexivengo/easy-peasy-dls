@@ -7377,6 +7377,7 @@ def _run_bounded_command(
             "command_events": 0,
             "command_event_contract": COMMAND_EVENT_CONTRACT,
             "budget_exceeded": False,
+            "budget_failure_kind": None,
         }
     assert process.stdout is not None
     selector = selectors.DefaultSelector()
@@ -7387,13 +7388,14 @@ def _run_bounded_command(
     timed_out = False
     overflow = False
     budget_exceeded = False
+    command_budget_exceeded = False
     command_events = 0
     logical_command_ids: set[str] = set()
     line_buffer = bytearray()
     last_heartbeat = started
 
     def inspect_line(raw_line: bytes) -> None:
-        nonlocal command_events, budget_exceeded
+        nonlocal command_events, budget_exceeded, command_budget_exceeded
         line = raw_line.strip()
         if not line.startswith(b"{"):
             return
@@ -7417,6 +7419,7 @@ def _run_bounded_command(
             command_events += 1
             if max_command_events is not None and command_events > max_command_events:
                 budget_exceeded = True
+                command_budget_exceeded = True
                 stop_process()
 
     def stop_process() -> None:
@@ -7472,10 +7475,10 @@ def _run_bounded_command(
     exit_code = process.returncode if process.returncode is not None else 1
     if timed_out:
         exit_code = 124
+    elif command_budget_exceeded:
+        exit_code = 126
     elif overflow and terminate_on_overflow:
         exit_code = 125
-    elif budget_exceeded:
-        exit_code = 126
     return {
         "exit_code": exit_code,
         "timed_out": timed_out,
@@ -7488,4 +7491,9 @@ def _run_bounded_command(
         "command_events": command_events,
         "command_event_contract": COMMAND_EVENT_CONTRACT,
         "budget_exceeded": budget_exceeded,
+        "budget_failure_kind": (
+            "command-events"
+            if command_budget_exceeded
+            else ("transcript-bytes" if overflow and terminate_on_overflow else None)
+        ),
     }

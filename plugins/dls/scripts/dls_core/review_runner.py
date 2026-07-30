@@ -84,11 +84,23 @@ SPECIALIST_EFFORT = "high"
 REVIEW_PROMPTS_ROOT = PLUGIN_ROOT / "assets" / "review-prompts"
 DECISION_REPAIR_INPUT_MAX_BYTES = 262144
 INPUT_ONLY_REVIEW_MAX_BYTES = 2 * 1024 * 1024
-FINAL_FULL_COMMAND_EVENTS = 16
+FINAL_FULL_COMMAND_TARGET = 16
+FINAL_FULL_COMMAND_CEILING = 24
+FINAL_FULL_COMMAND_BUDGET_CONTRACT = "dls-final-command-budget/v1"
 FINAL_FULL_TIMEOUT_SECONDS = 900
 FINAL_FULL_TRANSCRIPT_BYTES = 1024 * 1024
 REVIEW_BUDGET_CONTRACT = "dls-review-budget/v2"
 FINAL_COVERAGE_CONTRACT = "dls-final-coverage/v1"
+
+
+def _installed_final_full_command_ceiling(
+    owner: Path,
+    control_level: str,
+) -> int:
+    return min(
+        review_budget(owner, control_level).command_events,
+        FINAL_FULL_COMMAND_CEILING,
+    )
 
 
 def _final_full_budget(owner: Path, control_level: str) -> ReviewBudget:
@@ -96,7 +108,7 @@ def _final_full_budget(owner: Path, control_level: str) -> ReviewBudget:
     return ReviewBudget(
         aggregate_tokens=budget.aggregate_tokens,
         lane_tokens=budget.lane_tokens,
-        command_events=min(budget.command_events, FINAL_FULL_COMMAND_EVENTS),
+        command_events=_installed_final_full_command_ceiling(owner, control_level),
         timeout_seconds=min(budget.timeout_seconds, FINAL_FULL_TIMEOUT_SECONDS),
         transcript_bytes=min(budget.transcript_bytes, FINAL_FULL_TRANSCRIPT_BYTES),
         aggregate_recovery_tokens=budget.aggregate_ceiling,
@@ -711,6 +723,50 @@ def _terminal_lane_next_action(
     lane_key = terminal.get("lane_key")
     if terminal.get("status") == "budget-exceeded":
         reason = terminal.get("failure_reason")
+        recorded_budget = terminal.get("budget")
+        recorded_command_limit = (
+            recorded_budget.get("command_events")
+            if isinstance(recorded_budget, dict)
+            else None
+        )
+        command_events = terminal.get("command_events")
+        failure_kind = terminal.get("budget_failure_kind")
+        if (
+            lane_key == "semantic:final-full"
+            and owner is not None
+            and control_level in {"standard", "critical"}
+            and terminal.get("exit_code") == 126
+            and terminal.get("timed_out") is False
+            and terminal.get("overflow") is False
+            and terminal.get("transcript_truncated") is not True
+            and failure_kind in {None, "command-events"}
+            and isinstance(recorded_command_limit, int)
+            and isinstance(command_events, int)
+            and recorded_command_limit < _installed_final_full_command_ceiling(
+                owner, control_level
+            )
+            and command_events <= _installed_final_full_command_ceiling(
+                owner, control_level
+            )
+            and len(
+                [
+                    item
+                    for item in lane_attempts
+                    if item.get("lane_key") == lane_key
+                ]
+            )
+            < REVIEW_LANE_MAX_ATTEMPTS
+        ):
+            return {
+                "id": "resume-review-command-budget",
+                "detail": (
+                    "legacy final-full command budget is recoverable: "
+                    f"used={command_events}, limit={recorded_command_limit}; "
+                    "resume reuses completed lanes and reruns only final-full "
+                    "with hard ceiling="
+                    f"{_installed_final_full_command_ceiling(owner, control_level)}"
+                ),
+            }
         if (
             owner is not None
             and control_level in {"routine", "standard", "critical"}
@@ -1445,6 +1501,12 @@ def _final_full_inputs(
     ).encode("utf-8")
     budget_plan = {
         "contract": REVIEW_BUDGET_CONTRACT,
+        "command_budget_contract": FINAL_FULL_COMMAND_BUDGET_CONTRACT,
+        "command_target": min(
+            FINAL_FULL_COMMAND_TARGET,
+            budget.command_events,
+        ),
+        "command_ceiling": budget.command_events,
         "review_id": pack["review_id"],
         "lane_key": "semantic:final-full",
         "aggregate_before": aggregate_before,
@@ -1508,6 +1570,12 @@ def _final_full_inputs(
         )
     metadata = {
         "budget_contract": REVIEW_BUDGET_CONTRACT,
+        "command_budget_contract": FINAL_FULL_COMMAND_BUDGET_CONTRACT,
+        "command_target": min(
+            FINAL_FULL_COMMAND_TARGET,
+            budget.command_events,
+        ),
+        "command_ceiling": budget.command_events,
         "final_coverage_contract": FINAL_COVERAGE_CONTRACT,
         "final_coverage_digest": sha256_bytes(coverage_bytes),
         "final_coverage_path_count": len(coverage_entries),
@@ -2097,7 +2165,18 @@ def _execute_structured_lane(
             elif execution["exit_code"] != 0:
                 if execution.get("budget_exceeded") or execution.get("overflow"):
                     status_value = "budget-exceeded"
-                    failure_reason = "review lane exceeded command or transcript budget"
+                    if execution.get("budget_failure_kind") == "command-events":
+                        failure_reason = (
+                            "review lane command budget exceeded: "
+                            f"used={execution.get('command_events', 0)}, "
+                            f"limit={effective_budget.command_events}"
+                        )
+                    else:
+                        failure_reason = (
+                            "review lane transcript budget exceeded: "
+                            f"bytes={execution.get('output_bytes', 0)}, "
+                            f"limit={effective_budget.transcript_bytes}"
+                        )
                 else:
                     status_value = "api-failure"
                     failure_reason = _codex_failure_reason(
@@ -2188,6 +2267,7 @@ def _execute_structured_lane(
                     "command_event_contract",
                     COMMAND_EVENT_CONTRACT,
                 ),
+                "budget_failure_kind": execution.get("budget_failure_kind"),
                 "budget_contract": REVIEW_BUDGET_CONTRACT,
                 "budget": _budget_projection(effective_budget),
                 "budget_status": (
@@ -3152,6 +3232,9 @@ def _build_review_ir(
                         "budget",
                         "budget_status",
                         "budget_warning",
+                        "command_budget_contract",
+                        "command_target",
+                        "command_ceiling",
                         "budget_recovery_contract",
                         "recovered_budget",
                         "recovered_without_model_call",
@@ -4413,8 +4496,19 @@ def review_run(
         and pack["control_level"] != "routine"
         and not _has_actionable_review_finding(decision)
     ):
-        final_prompt = _render_prompt("final-full.md", prompt_values)
         final_budget = _final_full_budget(owner, pack["control_level"])
+        final_prompt = _render_prompt(
+            "final-full.md",
+            {
+                **prompt_values,
+                "FINAL_FULL_COMMAND_TARGET": str(
+                    min(FINAL_FULL_COMMAND_TARGET, final_budget.command_events)
+                ),
+                "FINAL_FULL_COMMAND_CEILING": str(
+                    final_budget.command_events
+                ),
+            },
+        )
         current_state = StateStore(owner).load(change_id)
         aggregate_before_final = sum(
             value

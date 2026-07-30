@@ -2,14 +2,14 @@
 
 Срез: 30 июля 2026 года
 
-Текущая линия: `v0.9.4`
+Текущая линия: `v0.9.5`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
 ручную работу и повтор контекста, Attractive добавляет удобство только после
 стабилизации основного цикла.
 
-Полный реестр всех 154 реализованных, запланированных, отложенных и намеренно
+Полный реестр всех 157 реализованных, запланированных, отложенных и намеренно
 исключённых возможностей находится в [карте возможностей](capability-catalog.md).
 Этот файл остаётся короткой выборкой ближайших волн, а не вторым каталогом.
 
@@ -211,6 +211,17 @@ Exit criteria v0.9.3: approved definition воспроизводится из Gi
 Exit criteria v0.9.4: review, запущенный из main checkout с portable state copy,
 выбирает exact-HEAD ReviewPack зарегистрированного owner, не запускает model lane
 в старом checkout и сохраняет single-flight внутри canonical change state.
+
+## v0.9.5 — bounded final-full command recovery
+
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| M67 | Must-be / P0 | Final-full completion headroom | 16 inspection commands остаются target, runtime ceiling 24 оставляет bounded запас для обязательного structured decision |
+| P44 | Performance / P0 | Terminal-lane recovery | Legacy 17/16 повторяет только final-full один раз; upstream lanes и их оплаченный provenance переиспользуются |
+
+Exit criteria v0.9.5: реальный EPIC-02a review с legacy command stop получает
+канонический результат без повторного native, targeted или reconciliation;
+текущий ceiling, timeout, transcript и integrity failures остаются terminal.
 
 ## Следующая волна v0.10.0: UI/UX Attractive pilot
 

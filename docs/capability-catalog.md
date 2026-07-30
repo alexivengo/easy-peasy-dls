@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
 Срез: 30 июля 2026 года
-Текущая линия: `v0.9.4`
+Текущая линия: `v0.9.5`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -9,16 +9,16 @@
 «что делать следующим», а этот документ — «что вообще существует, планируется
 или намеренно не будет реализовано».
 
-Всего отслеживается 155 пунктов:
+Всего отслеживается 157 пунктов:
 
-- 66 Must-be: `M01–M66`;
-- 43 Performance: `P01–P43`;
+- 67 Must-be: `M01–M67`;
+- 44 Performance: `P01–P44`;
 - 10 Attractive: `A01–A10`;
 - 12 Indifferent/premature: `I01–I12`;
 - 24 Reverse anti-features: `R01–R24`.
 
 Исходный KANO-снимок содержал 129 пунктов: все они сохранены под прежними ID.
-К ним добавлены 26 публичных возможностей `M51–M66` и `P34–P43`. Удалять ID
+К ним добавлены 28 публичных возможностей `M51–M67` и `P34–P44`. Удалять ID
 нельзя: изменившееся решение помечается как заменённое, а не исчезает из карты.
 
 ## Статусы
@@ -106,6 +106,7 @@
 | M64 | Change-scoped one-writer | ✅ | P0 | Atomic handoff переносит approved state до registry switch; один owner/single-flight остаётся внутри change без global lock |
 | M65 | Completed-output budget recovery | ✅ | P0 | Валидный exact-HEAD output внутри bounded ceiling импортируется без повторного model call; hard limits остаются terminal |
 | M66 | Registry-first ReviewPack resolution | ✅ | P0 | Implicit review читает pack и invocation-scoped lease registered owner; stale portable state в caller checkout остаётся только исторической копией |
+| M67 | Final-full completion headroom | ✅ | P0 | 16 inspection commands остаются target, а bounded ceiling 24 оставляет место для обязательного structured decision |
 
 ## Performance — экономия времени, контекста и ручной работы
 
@@ -154,6 +155,7 @@
 | P41 | Overlap/conflict preflight | ✅ | P1 | Exact file overlap блокирует поздний candidate handoff, proximity остаётся advisory |
 | P42 | Active delivery map | ✅ | P1 | Bounded read-only карта показывает dependencies, parallel groups, integration order и один typed action на change |
 | P43 | Input-only final-full | ✅ | P0 | Exact patch/coverage bundle заменяет unrestricted checkout; oversized change получает explicit scope split |
+| P44 | Terminal-lane command recovery | ✅ | P0 | Legacy 17/16 повторяет только final-full один раз; native, targeted и reconciliation не оплачиваются повторно |
 
 ## Attractive — полезно после стабилизации core
 
@@ -254,6 +256,13 @@
 - `P40`: selective worktree от explicit clean SHA;
 - `P41`: exact-file overlap сериализует candidate/integration, не раннюю работу;
 - `P42`: bounded delivery map без model calls и локальных paths.
+
+### v0.9.5 — bounded final-full command recovery
+
+- `M67`: model-facing target 16 отделён от bounded runtime ceiling 24;
+- `P44`: legacy command stop ниже нового ceiling повторяет только terminal
+  final-full и сохраняет provenance завершённых upstream lanes;
+- текущие command/time/transcript/integrity ceilings остаются terminal.
 
 ### v0.10.0 — UI/UX и полный architecture lifecycle
 

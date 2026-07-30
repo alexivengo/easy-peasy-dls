@@ -24,6 +24,11 @@ represented by `epic.patch`. Re-check every ticket, cross-ticket integration,
 contract conformance, blast radius, and current validation evidence. The
 returned decision supersedes the targeted decision.
 
+Use no more than {{FINAL_FULL_COMMAND_TARGET}} inspection command invocations.
+The runtime hard ceiling is {{FINAL_FULL_COMMAND_CEILING}}; crossing it stops
+the lane before JSON can be returned. Batch related reads and reserve enough
+headroom to finish the required JSON decision.
+
 Do not modify files. Return only JSON matching
 `.dls-review-input/output.schema.json`. DLS derives canonical ticket verdicts
 from the returned findings; keep review, acceptance, release, and production

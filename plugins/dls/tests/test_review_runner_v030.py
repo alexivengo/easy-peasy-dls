@@ -12,6 +12,7 @@ from unittest import mock
 
 from dls_core.candidate_runner import candidate_ready
 from dls_core.errors import IntegrityError
+from dls_core.economy import ReviewBudget
 from dls_core.io import sha256_file, utc_now
 from dls_core.operations import (
     REVIEW_DECISION_REPAIR_CONTRACT,
@@ -768,6 +769,7 @@ env_allow = []
         repair_exit: int = 0,
         repair_sleep: float = 0.0,
         semantic_command_events: int = 0,
+        final_full_command_events: int = 0,
         semantic_usage_tokens: int = 0,
     ) -> tuple[str | None, Path, Path]:
         fake_bin = root / ".dls" / "cache" / "runner-fake-bin"
@@ -948,7 +950,10 @@ env_allow = []
             "{'input_tokens': 0, 'cached_input_tokens': 0, "
             "'output_tokens': 0, 'reasoning_output_tokens': 0}}), flush=True)\n"
             f"if not native:\n"
-            f"    for event_index in range({semantic_command_events!r}):\n"
+            f"    event_count = ({final_full_command_events!r} "
+            "if kind == 'final-full' else "
+            f"{semantic_command_events!r})\n"
+            "    for event_index in range(event_count):\n"
             "        print(json.dumps({'type': 'item.started', 'item': "
             "{'id': f'command-{event_index}', 'type': 'command_execution'}}), flush=True)\n"
             f"    if {semantic_usage_tokens!r}:\n"
@@ -2357,10 +2362,133 @@ env_allow = []
                 final_entry["final_coverage_path_count"],
                 len(ready["review_pack"]["full_changed_files"]),
             )
-            self.assertLessEqual(final_entry["budget"]["command_events"], 16)
+            self.assertLessEqual(final_entry["budget"]["command_events"], 24)
+            self.assertEqual(final_entry["command_target"], 16)
+            self.assertEqual(final_entry["command_ceiling"], 24)
+            final_prompt = (root / final_entry["prompt_path"]).read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("no more than 16 inspection command", final_prompt)
+            self.assertIn("runtime hard ceiling is 24", final_prompt)
             self.assertEqual(
                 result["lanes"]["semantic"]["passes"][-1]["workspace_mode"],
                 "input-only",
+            )
+
+    def test_final_full_command_target_has_headroom_and_resumes_legacy_17_of_16(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_remediation(root)
+            current_budget = _final_full_budget(root, "standard")
+            legacy_budget = ReviewBudget(
+                aggregate_tokens=current_budget.aggregate_tokens,
+                lane_tokens=current_budget.lane_tokens,
+                command_events=16,
+                timeout_seconds=current_budget.timeout_seconds,
+                transcript_bytes=current_budget.transcript_bytes,
+                aggregate_recovery_tokens=current_budget.aggregate_ceiling,
+                lane_recovery_tokens=current_budget.lane_ceiling,
+            )
+            original, counter, _ = self._install_fake_codex(
+                root,
+                final_full_command_events=17,
+            )
+            try:
+                with mock.patch(
+                    "dls_core.review_runner._final_full_budget",
+                    return_value=legacy_budget,
+                ):
+                    failed = review_run(
+                        root,
+                        change_id="C001",
+                        pack_path=None,
+                        operation_id="final-full-command-resume",
+                    )
+                self.assertEqual(failed["status"], "failed")
+                self.assertEqual(
+                    failed["next_action"]["id"],
+                    "resume-review-command-budget",
+                )
+                self.assertIn("used=17", failed["next_action"]["detail"])
+                self.assertIn("limit=16", failed["next_action"]["detail"])
+
+                completed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="final-full-command-resume",
+                )
+            finally:
+                self._restore_path(original)
+
+            self.assertEqual(completed["status"], "completed")
+            self.assertEqual(completed["verdict"], "review-clear")
+            calls = counter.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(calls.count("native"), 1)
+            self.assertEqual(calls.count("semantic-independent"), 1)
+            self.assertEqual(calls.count("final-full"), 2)
+            final_attempts = [
+                item
+                for item in StateStore(root).load("C001")["reviews"]
+                if item.get("review_id") == completed["review_id"]
+                and item.get("lane_key") == "semantic:final-full"
+            ]
+            self.assertEqual(
+                [item["status"] for item in final_attempts],
+                ["budget-exceeded", "completed"],
+            )
+            self.assertEqual(
+                final_attempts[0]["budget_failure_kind"],
+                "command-events",
+            )
+            self.assertEqual(
+                final_attempts[1]["command_budget_contract"],
+                "dls-final-command-budget/v1",
+            )
+            self.assertEqual(final_attempts[1]["command_target"], 16)
+            self.assertEqual(final_attempts[1]["command_ceiling"], 24)
+            self.assertNotEqual(
+                final_attempts[0]["lane_contract_digest"],
+                final_attempts[1]["lane_contract_digest"],
+            )
+
+    def test_final_full_current_command_ceiling_remains_terminal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._prepared_remediation(root)
+            original, counter, _ = self._install_fake_codex(
+                root,
+                final_full_command_events=25,
+            )
+            try:
+                failed = review_run(
+                    root,
+                    change_id="C001",
+                    pack_path=None,
+                    operation_id="final-full-hard-ceiling",
+                )
+                repeated = review_status(root, change_id="C001")
+            finally:
+                self._restore_path(original)
+
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(
+                failed["next_action"]["id"],
+                "inspect-review-budget",
+            )
+            self.assertEqual(
+                repeated["next_action"]["id"],
+                "inspect-review-budget",
+            )
+            self.assertIn("used=25", repeated["next_action"]["detail"])
+            self.assertIn("limit=24", repeated["next_action"]["detail"])
+            self.assertEqual(
+                counter.read_text(encoding="utf-8").splitlines().count(
+                    "final-full"
+                ),
+                1,
             )
 
     def test_final_full_refuses_unbounded_whole_change_bundle_before_model(self) -> None:
@@ -2898,6 +3026,9 @@ env_allow = []
         self.assertIn("Do not poll `review-status`", review)
         self.assertIn("failed-finalize", review)
         self.assertIn("same stable operation ID", review)
+        self.assertIn("resume-review-command-budget", combined)
+        self.assertIn("retries only the", review)
+        self.assertIn("legacy final-full once", review)
         self.assertIn("prepare-candidate", review)
         self.assertIn("guarded remediation recovery", review)
         self.assertIn("trusted named validation", review)

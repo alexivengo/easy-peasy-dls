@@ -75,6 +75,12 @@ and is eligible for deterministic zero-call recovery. Re-run the same public
 `review-run` with the same stable operation ID. DLS verifies HEAD, source,
 definition, pack, raw output/transcript digests and original command/time/output
 limits, then resumes only assembly/import. Never start another model lane.
+`resume-review-command-budget` is narrower: a legacy final-full stopped just
+above its old command limit but still below the installed hard ceiling. Re-run
+the same public `review-run` with the same stable operation ID. DLS reuses every
+completed upstream lane and permits exactly one new final-full attempt under
+the changed bounded contract. The installed hard ceiling, timeout and
+transcript limits remain terminal and return `inspect-review-budget`.
 `split-review-scope` means the exact whole-change input bundle exceeds the
 bounded final-pass contract; return to definition/implementation planning and
 split the change instead of silently truncating coverage.
@@ -153,6 +159,9 @@ approval, release, or production gates and never requires a model call.
   compact repair and only the downstream lanes that have not completed.
 - `resume-review-budget`: call the same `review-run`; DLS validates and imports
   the already completed output without a model call.
+- `resume-review-command-budget`: call the same `review-run`; DLS preserves
+  native/targeted/specialist/reconciliation provenance and retries only the
+  legacy final-full once with its current bounded command contract.
 - `split-review-scope`: stop and split the review scope; DLS did not truncate
   the whole-change coverage bundle.
 - `resume-review` for legacy native invalid-output: call the same `review-run`
