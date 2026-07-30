@@ -26,6 +26,7 @@ from dls_core.parallel_delivery import (
 )
 from dls_core.io import utc_now
 from dls_core.repo import git_product_tree_digest
+from dls_core.review_runner import review_run
 from dls_core.state import (
     StateStore,
     current_definition_digest,
@@ -171,6 +172,38 @@ env_allow = []
             mutator=mutate,
         )
 
+    def _registered_candidate_with_stale_main(
+        self,
+        directory: str,
+    ) -> tuple[Path, Path, dict]:
+        root, owner, _, base = self._pair(directory)
+        self._configure_candidate(owner, "C001")
+        git(owner, "add", ".dls/config.toml")
+        git(owner, "commit", "-m", "configure candidate validation")
+        self._approve_definition(owner, "C001")
+
+        portable_config = root / ".dls/config.toml"
+        portable_config.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(owner / ".dls/config.toml", portable_config)
+        portable_state = root / ".dls/state/C001.json"
+        portable_state.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(owner / ".dls/state/C001.json", portable_state)
+
+        (owner / "shared.txt").write_text("candidate\n", encoding="utf-8")
+        git(owner, "add", "shared.txt")
+        git(owner, "commit", "-m", "prepare candidate")
+        candidate = candidate_ready(
+            owner,
+            change_id="C001",
+            base_ref=base,
+            addressed=[],
+            noted=[],
+            extra_commands=[],
+            operation_id="candidate-ready-owner",
+        )
+        self.assertEqual(candidate["status"], "completed")
+        return root, owner, candidate
+
     def test_implementation_dependency_does_not_block_definition(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             _, first, second, _ = self._pair(directory)
@@ -236,6 +269,68 @@ env_allow = []
             stale_copy = second / ".dls/state/C001.json"
             shutil.copy2(first / ".dls/state/C001.json", stale_copy)
             self.assertEqual(resolve_change_root(second, "C001"), first.resolve())
+
+    def test_review_run_uses_registered_owner_when_main_has_stale_portable_state(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, owner, candidate = self._registered_candidate_with_stale_main(
+                directory
+            )
+
+            projected = review_run(
+                root,
+                change_id="C001",
+                pack_path=None,
+                operation_id="review-from-main",
+                dry_run=True,
+            )
+
+            self.assertEqual(projected["status"], "ready")
+            self.assertEqual(projected["review_id"], candidate["review_id"])
+            self.assertEqual(projected["owner_root"], str(owner.resolve()))
+            self.assertEqual(projected["owner_selection"], "registered-worktree")
+
+    def test_review_run_ignores_stale_running_lease_in_portable_main_state(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root, owner, candidate = self._registered_candidate_with_stale_main(
+                directory
+            )
+            store = StateStore(root)
+            state = store.load("C001")
+
+            def add_stale_lease(value: dict) -> None:
+                value["reviews"].append(
+                    {
+                        "kind": "pipeline",
+                        "review_id": "stale-portable-review",
+                        "status": "running",
+                        "runner_pid": os.getpid(),
+                    }
+                )
+
+            store.mutate(
+                "C001",
+                expected_revision=state["state_revision"],
+                operation_id="stale-portable-running-lease",
+                operation_kind="fixture",
+                mutator=add_stale_lease,
+            )
+
+            projected = review_run(
+                root,
+                change_id="C001",
+                pack_path=None,
+                operation_id="review-from-main-with-stale-lease",
+                dry_run=True,
+            )
+
+            self.assertEqual(projected["status"], "ready")
+            self.assertEqual(projected["review_id"], candidate["review_id"])
+            self.assertEqual(projected["owner_root"], str(owner.resolve()))
+            self.assertEqual(projected["owner_selection"], "registered-worktree")
 
     def test_dependency_contract_and_target_drift_stale_approval(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1,8 +1,8 @@
 # Roadmap Easy Peasy DLS
 
-Срез: 29 июля 2026 года
+Срез: 30 июля 2026 года
 
-Текущая линия: `v0.9.3`
+Текущая линия: `v0.9.4`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
@@ -201,6 +201,16 @@ Exit criteria v0.9.2: реальный EPIC-01 остаётся accepted пос�
 Exit criteria v0.9.3: approved definition воспроизводится из Git, перенос в owner
 не теряет governance state, execution evidence не вызывает ложный reapproval,
 а status/context/candidate возвращают один и тот же stage-correct action.
+
+## v0.9.4 — authoritative review routing
+
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| M66 | Must-be / P0 | Registry-first ReviewPack resolution | `review-run`, `review-start`, status и candidate используют одного canonical owner; stale portable state и lease в main не затмевают registered worktree |
+
+Exit criteria v0.9.4: review, запущенный из main checkout с portable state copy,
+выбирает exact-HEAD ReviewPack зарегистрированного owner, не запускает model lane
+в старом checkout и сохраняет single-flight внутри canonical change state.
 
 ## Следующая волна v0.10.0: UI/UX Attractive pilot
 

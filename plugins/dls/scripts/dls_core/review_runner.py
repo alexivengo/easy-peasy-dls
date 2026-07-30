@@ -76,7 +76,7 @@ from .telemetry import (
     review_task_context,
     unavailable_task_context,
 )
-from .worktrees import resolve_change_root
+from .worktrees import registry_routes_change_elsewhere, resolve_change_root
 
 SEMANTIC_MODEL = "gpt-5.6-sol"
 SPECIALIST_MODEL = "gpt-5.6-terra"
@@ -3716,13 +3716,12 @@ def review_run(
         if (
             (quick_candidate / ".dls" / "config.toml").is_file()
             and StateStore(quick_candidate).path(change_id).is_file()
+            and not registry_routes_change_elsewhere(quick_candidate, change_id)
         ):
-            # This first read is deliberately registry-free. If the caller is
-            # already inside the running review's owner checkout, Git/worktree
-            # validation is slow enough for very short lanes to finish before
-            # a duplicate observes their lease. A live local lease is always
-            # safe to wait on; when no lease exists, the normal owner resolver
-            # below still enforces registry ownership before launching work.
+            # This fast read is allowed only when the caller is the canonical
+            # owner. Registry validation can be slow enough for very short
+            # lanes to finish before a duplicate observes their lease, while a
+            # portable state copy must never hide the registered owner.
             quick_owner = quick_candidate
             quick_owner_selection = "current-checkout"
         else:

@@ -186,6 +186,14 @@ changelog evidence изменением definition. Неоднозначный `
 `run-candidate-ready` и `approve-definition` и применяет те же guards в status,
 context и candidate runtime.
 
+RCA v0.9.4: `status` и `candidate-ready` уже считали worktree registry
+authoritative, но implicit ReviewPack resolver повторял routing самостоятельно и
+сначала принимал portable state текущего checkout. Review-задача из main поэтому
+могла видеть старый HEAD и сообщать об отсутствии pack, хотя зарегистрированный
+owner содержал готовый exact-HEAD candidate. Теперь implicit review selection и
+single-flight preflight используют тот же registry-first контракт; stale local
+pack, pipeline или `running` lease не могут затмить canonical owner.
+
 Overlap contract `dls-change-overlap/v1` сравнивает repository-relative product
 paths между recorded worktree base и current HEAD. Общий каталог — advisory
 proximity, одинаковый файл — integration blocker для более позднего change.
@@ -449,6 +457,11 @@ ReviewIR как текущий. `review-run` пытается только guard
 `wait-review`. Если доказуемое восстановление невозможно, runner возвращает один
 typed action без model calls. Поля `prior_review_id` и
 `prior_review_result_path` остаются только исторической ссылкой.
+
+Implicit `review-run` сначала разрешает registered owner и лишь затем читает
+state, pack и lease этого owner. Текущий checkout используется только когда для
+change нет отдельной registry binding. Relative `--pack` остаётся строгим
+current-checkout selector, absolute `--pack` — явным one-off owner selector.
 
 ### Наблюдаемость и финализация
 

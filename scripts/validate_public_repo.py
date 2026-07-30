@@ -55,7 +55,7 @@ SEMVER = re.compile(
 )
 CAPABILITY_ROW = re.compile(r"^\| ([MPAIR])(\d{2}) \|", re.MULTILINE)
 CAPABILITY_RANGES = {
-    "M": 65,
+    "M": 66,
     "P": 43,
     "A": 10,
     "I": 12,

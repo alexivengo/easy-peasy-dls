@@ -18,9 +18,11 @@ python3 <plugin-root>/scripts/dls.py --root <current-project> --json \
   review-run CHANGE_ID --operation-id <stable-id> --stream
 ```
 
-The current project may be the main checkout. DLS may route only through its
-explicit worktree registry or an explicit absolute `--pack`; it never scans
-sibling folders or infers branches.
+The current project may be the main checkout. For an implicit pack selection,
+the explicit worktree registry is authoritative even when the current checkout
+still contains a portable or stale state copy. An explicit absolute `--pack`
+remains the only one-off owner override. DLS never scans sibling folders or
+infers branches.
 
 `review-run` owns:
 

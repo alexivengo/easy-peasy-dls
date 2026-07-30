@@ -1,6 +1,6 @@
 {
   "name": "dls",
-  "version": "0.9.3+codex.20260730072704",
+  "version": "0.9.4+codex.20260730091243",
   "description": "\u041f\u0440\u043e\u0441\u0442\u043e\u0439 \u0443\u043f\u0440\u0430\u0432\u043b\u044f\u0435\u043c\u044b\u0439 AI-delivery \u0434\u043b\u044f Codex \u0441 \u043f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u043c\u044b\u043c \u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u043e\u043c.",
   "author": {
     "name": "Alexey Burlakov",

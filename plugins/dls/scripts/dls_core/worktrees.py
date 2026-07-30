@@ -93,6 +93,30 @@ def resolve_change_root(root: Path, change_id: str) -> Path:
     return resolve_registered_worktree(candidate, change_id)
 
 
+def registry_routes_change_elsewhere(root: Path, change_id: str) -> bool:
+    """Return whether the explicit registry routes this change away from root.
+
+    This is a bounded hint for single-flight checks. It deliberately does not
+    replace ``resolve_change_root`` validation; callers must still use the
+    authoritative resolver before reading or mutating owner state.
+    """
+    caller = git_toplevel(root)
+    _, registry = _load_registry(caller, required=False)
+    registered = registry["worktrees"].get(change_id)
+    if registered is None:
+        return False
+    if not isinstance(registered, dict):
+        raise IntegrityError(
+            f"Registered owner for {change_id} is not a metadata object"
+        )
+    owner_root = registered.get("owner_root")
+    if not isinstance(owner_root, str) or not Path(owner_root).is_absolute():
+        raise IntegrityError(
+            f"Registered owner for {change_id} has an invalid owner_root"
+        )
+    return Path(owner_root).resolve() != caller
+
+
 def worktree_registry_path(root: Path) -> Path:
     return git_common_dir(root) / REGISTRY_DIRECTORY / REGISTRY_FILENAME
 

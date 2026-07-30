@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
-Срез: 29 июля 2026 года
-Текущая линия: `v0.9.3`
+Срез: 30 июля 2026 года
+Текущая линия: `v0.9.4`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -9,16 +9,16 @@
 «что делать следующим», а этот документ — «что вообще существует, планируется
 или намеренно не будет реализовано».
 
-Всего отслеживается 154 пункта:
+Всего отслеживается 155 пунктов:
 
-- 65 Must-be: `M01–M65`;
+- 66 Must-be: `M01–M66`;
 - 43 Performance: `P01–P43`;
 - 10 Attractive: `A01–A10`;
 - 12 Indifferent/premature: `I01–I12`;
 - 24 Reverse anti-features: `R01–R24`.
 
 Исходный KANO-снимок содержал 129 пунктов: все они сохранены под прежними ID.
-К ним добавлены 25 публичных возможностей `M51–M65` и `P34–P43`. Удалять ID
+К ним добавлены 26 публичных возможностей `M51–M66` и `P34–P43`. Удалять ID
 нельзя: изменившееся решение помечается как заменённое, а не исчезает из карты.
 
 ## Статусы
@@ -105,6 +105,7 @@
 | M63 | Stage-aware change dependencies | ✅ | P0 | Dependency блокирует только названную и последующие стадии; `accepted-in-base` проверяет human acceptance и Git ancestry |
 | M64 | Change-scoped one-writer | ✅ | P0 | Atomic handoff переносит approved state до registry switch; один owner/single-flight остаётся внутри change без global lock |
 | M65 | Completed-output budget recovery | ✅ | P0 | Валидный exact-HEAD output внутри bounded ceiling импортируется без повторного model call; hard limits остаются terminal |
+| M66 | Registry-first ReviewPack resolution | ✅ | P0 | Implicit review всегда читает pack и lease registered owner; stale portable state в caller checkout остаётся только исторической копией |
 
 ## Performance — экономия времени, контекста и ручной работы
 

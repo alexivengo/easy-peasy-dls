@@ -72,7 +72,6 @@ from .state import (
 from .worktrees import (
     owner_preparation_required,
     resolve_change_root,
-    resolve_registered_worktree,
 )
 
 AFFIRMATIVE_PATTERN = re.compile(
@@ -3529,13 +3528,8 @@ def _resolve_review_pack(
             owner = root
             candidate = safe_resolve(owner, requested, must_exist=True)
     else:
-        owner = root
-        local_state_path = StateStore(owner).path(change_id)
-        if not (
-            (owner / ".dls" / "config.toml").is_file()
-            and local_state_path.is_file()
-        ):
-            owner = resolve_registered_worktree(root, change_id)
+        owner = resolve_change_root(root, change_id)
+        if owner != root:
             owner_selection = "registered-worktree"
         state = StateStore(owner).load(change_id)
         completed_review_ids = {
