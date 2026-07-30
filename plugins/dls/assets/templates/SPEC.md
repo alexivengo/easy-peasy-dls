@@ -22,9 +22,11 @@ ID: `{{ID}}`
 
 - `REQ-001`: {{REQUIREMENT}}
 
+<!-- dls:architecture:start -->
 ## Architecture and alternatives
 
 {{APPROACH}}
+<!-- dls:architecture:end -->
 
 ## Interfaces, state, and failure behavior
 

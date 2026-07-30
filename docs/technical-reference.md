@@ -45,6 +45,7 @@ python3 plugins/dls/scripts/dls.py --root /path/to/project doctor
 | `dependency set/list/remove` | Управлять stage-aware same-repository dependencies |
 | `delivery-map` | Прочитать bounded карту активных changes, dependencies и overlap |
 | `status` | Показать производное состояние изменения |
+| `design set/status` | Записать typed UI/UX source или bypass и прочитать bounded status |
 | `check` | Выполнить детерминированные gates |
 | `context` | Создать digest-bound context manifest |
 | `approve` | Записать scoped human decision |
@@ -116,6 +117,45 @@ evidence. Bounded implementation context составил `143 365` bytes / `17 
 words. Draft definition остановил pipeline на `approve-definition`; ReviewPack,
 candidate run и model call не создавались. Эти числа не являются backend token
 baseline и не обосновывают изменение default budgets или model routing.
+
+### UI/UX source и architecture decisions
+
+Optional state contract `dls-design-source/v1` хранит tier, affected surfaces и
+один из двух режимов. `source` использует `precedent`, `artifact` или
+`external-version`; `bypass` содержит human rationale и `low | medium | high`
+UX risk. Tier 1 допускает exact precedent. Tier 2 требует достаточную
+версионированную source. Tier 3 не принимает один precedent: нужен immutable
+artifact/external version либо явный bypass.
+
+Repository source должна быть repository-relative, regular, tracked, clean и
+привязана к exact Git blob плюс SHA-256 canonical content. Absolute path,
+traversal, symlink escape и untracked/dirty source являются integrity failure.
+External source использует credential-free HTTPS и обязательную explicit
+immutable version; DLS её не загружает и не делает скрытых API calls.
+
+Design approval использует `dls-design-digest/v1`: tier, surfaces, mode и
+immutable provenance. Architecture approval использует
+`dls-architecture-digest/v1`: один canonical ADR либо bounded SPEC region между
+`dls:architecture` markers. Adopted packages могут использовать один
+однозначный `## Architecture`/`## Architecture and alternatives`; missing или
+несколько кандидатов возвращают `record-architecture-decision`.
+
+Architecture approval обязателен только при impact `architecture` или наличии
+canonical ADR. `approve --decision definition --include-design` атомарно
+записывает два независимых approvals из одного scoped human ответа. Definition
+и accept сохраняют snapshots scoped decisions. Поэтому unrelated SPEC edit
+инвалидирует полный definition approval, но сохраняет design/architecture;
+изменение самого design/architecture делает stale и scoped approval, и полный
+definition approval. Legacy approvals без markers продолжают whole-definition
+семантику и не переписываются.
+
+Единый readiness resolver возвращает `record-design-source`, `approve-design`,
+`approve-definition-and-design`, `record-architecture-decision` или
+`approve-architecture` до context generation, validation и model calls. Context,
+новые ReviewPack v2 и Delivery Receipt получают только tier/surfaces/source
+kind/digest/approval status. Metrics получают только UI tier, source kind,
+bypass boolean и architecture-required. Source refs, raw design content,
+bypass rationale, credentials и absolute paths туда не включаются.
 
 ### Dependency-aware parallel delivery
 
@@ -763,6 +803,6 @@ python3 scripts/validate_public_repo.py
 
 ## Версионирование
 
-GitHub releases используют обычные теги, например `v0.9.0`. Plugin manifest
+GitHub releases используют обычные теги, например `v0.10.0`. Plugin manifest
 добавляет build metadata `+codex.<cachebuster>`, чтобы Codex отличал обновлённые
 локальные и marketplace bundles без искусственного изменения feature version.

@@ -56,6 +56,15 @@
       },
       "additionalProperties": false
     },
+    "decisions": {
+      "type": "object",
+      "required": ["design", "architecture"],
+      "properties": {
+        "design": { "type": "object" },
+        "architecture": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
     "delivery_readiness": {
       "type": "object",
       "required": [

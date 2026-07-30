@@ -11,6 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .decisions import (
+    decision_projection,
+    decision_readiness,
+    review_pack_decisions_current,
+)
 from .errors import IntegrityError, LockError, UsageError
 from .io import read_json, safe_resolve, sha256_bytes, utc_now
 from .operations import (
@@ -171,6 +176,15 @@ def _idle_candidate_action(
 ) -> dict[str, str]:
     if delivery_readiness["next_action"] is not None:
         return delivery_readiness["next_action"]
+    decision_gate = decision_readiness(
+        owner,
+        state,
+        derived_approval_statuses(owner, state),
+        require_definition=state.get("control_level") in {"standard", "critical"},
+    )
+    if not decision_gate["ready"]:
+        assert decision_gate["next_action"] is not None
+        return decision_gate["next_action"]
     approval = _current_definition_approval(owner, state)
     if state.get("control_level") in {"standard", "critical"} and approval is None:
         return _next_action(
@@ -280,6 +294,7 @@ def _eligible_declaration_run(
     manifest_digest: str,
     policy_digest: str,
     profile_digest: str,
+    decisions_digest: str,
     active_finding_ids: list[str],
 ) -> dict[str, Any] | None:
     eligible: list[tuple[int, int, dict[str, Any]]] = []
@@ -299,6 +314,7 @@ def _eligible_declaration_run(
             or item.get("definition_digest") != definition_digest
             or item.get("policy_digest") != policy_digest
             or item.get("platform_profile_digest") != profile_digest
+            or item.get("decisions_digest") != decisions_digest
             or item.get("active_finding_ids") != active_finding_ids
             or not isinstance(run_head, str)
             or not isinstance(statuses, dict)
@@ -360,6 +376,12 @@ def _exact_head_pack(
     if (
         isinstance(pack_profile, dict)
         and pack_profile.get("digest") != current_profile["digest"]
+    ):
+        return None
+    pack_decisions = pack.get("decisions")
+    if not review_pack_decisions_current(
+        pack_decisions,
+        decision_projection(root, state, derived_approval_statuses(root, state)),
     ):
         return None
     if (
@@ -459,6 +481,7 @@ def _run_contract(
     manifest_digest: str | None,
     policy_digest: str,
     profile_digest: str,
+    decisions_digest: str,
     delivery_readiness_digest: str,
     statuses: dict[str, str],
 ) -> tuple[str, str]:
@@ -467,6 +490,7 @@ def _run_contract(
         "head_sha": head_sha,
         "source_digest": source_digest,
         "definition_digest": definition_digest,
+        "decisions_digest": decisions_digest,
         "base_ref": base_ref,
         "prior_review_id": prior_review_id,
         "manifest_digest": manifest_digest,
@@ -661,6 +685,31 @@ def _candidate_ready_impl(
         raise IntegrityError("Candidate readiness requires Git")
     store = StateStore(owner)
     state = store.load(change_id)
+    decision_gate = decision_readiness(
+        owner,
+        state,
+        derived_approval_statuses(owner, state),
+        require_definition=state.get("control_level") in {"standard", "critical"},
+    )
+    if not decision_gate["ready"]:
+        action = decision_gate["next_action"]
+        assert action is not None
+        return _blocked(
+            change_id=change_id,
+            owner=owner,
+            owner_selection=owner_selection,
+            action=action["id"],
+            detail=action["detail"],
+            dry_run=dry_run,
+        )
+    decisions_digest = sha256_bytes(
+        json.dumps(
+            decision_gate["decisions"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
     if owner_preparation_required(owner, change_id=change_id, state=state):
         return _blocked(
             change_id=change_id,
@@ -810,6 +859,7 @@ def _candidate_ready_impl(
             manifest_digest=manifest_digest,
             policy_digest=policy_digest,
             profile_digest=profile_digest,
+            decisions_digest=decisions_digest,
             active_finding_ids=active_finding_ids,
         )
         if set(overrides) == set(active_finding_ids):
@@ -852,6 +902,7 @@ def _candidate_ready_impl(
         manifest_digest=manifest_digest,
         policy_digest=policy_digest,
         profile_digest=profile_digest,
+        decisions_digest=decisions_digest,
         delivery_readiness_digest=delivery_readiness["digest"],
         statuses=statuses,
     )
@@ -943,6 +994,7 @@ def _candidate_ready_impl(
             "head_sha": head_sha,
             "source_digest": source_digest,
             "definition_digest": definition_digest,
+            "decisions_digest": decisions_digest,
             "delivery_readiness_digest": delivery_readiness["digest"],
             "review_base_sha": str(effective_base),
             "review_mode": review_mode,
@@ -1193,12 +1245,28 @@ def _candidate_ready_impl(
         stage="review",
         include_overlap=True,
     )
+    current_decision_gate = decision_readiness(
+        owner,
+        state,
+        derived_approval_statuses(owner, state),
+        require_definition=state.get("control_level") in {"standard", "critical"},
+    )
+    current_decisions_digest = sha256_bytes(
+        json.dumps(
+            current_decision_gate["decisions"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
     if (
         git_head(owner) != head_sha
         or git_source_snapshot_digest(owner) != source_digest
         or current_definition_digest(owner, state) != definition_digest
         or current_policy_digest != policy_digest
         or current_profile_digest != profile_digest
+        or not current_decision_gate["ready"]
+        or current_decisions_digest != decisions_digest
         or not current_delivery_readiness["ready"]
         or current_delivery_readiness["digest"] != delivery_readiness["digest"]
     ):

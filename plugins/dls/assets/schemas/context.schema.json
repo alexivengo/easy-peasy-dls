@@ -26,7 +26,19 @@
     "manifest_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "state_revision": { "type": "integer", "minimum": 1 },
     "inputs": { "type": "array" },
-    "exclusions": { "type": "array" }
+    "exclusions": { "type": "array" },
+    "decisions": { "$ref": "#/$defs/decisions" }
+  },
+  "$defs": {
+    "decisions": {
+      "type": "object",
+      "required": ["design", "architecture"],
+      "properties": {
+        "design": { "type": "object" },
+        "architecture": { "type": "object" }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": true
 }

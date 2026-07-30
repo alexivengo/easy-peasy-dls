@@ -8,6 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .decisions import decision_projection, decision_readiness
 from .errors import IntegrityError
 from .io import (
     canonical_file_digest,
@@ -376,6 +377,9 @@ def _render_markdown(receipt: dict[str, Any]) -> str:
     review = receipt["review"]
     acceptance = receipt["acceptance"]["status"]
     next_action = receipt["next_action"]
+    decisions = receipt["decisions"]
+    design = decisions["design"]
+    architecture = decisions["architecture"]
     lines = [
         f"# Delivery Receipt — {receipt['change_id']}",
         "",
@@ -397,6 +401,18 @@ def _render_markdown(receipt: dict[str, Any]) -> str:
             "## Доказательства",
             "",
             f"- Definition: **{_STATUS_LABELS.get(definition, definition)}**",
+            (
+                "- Design: "
+                f"tier `{design.get('tier') or 'n/a'}`, "
+                f"{('bypass' if design.get('bypass') else design.get('source_kind') or 'not recorded')}, "
+                f"approval **{design.get('approval')}**"
+            ),
+            (
+                "- Architecture: "
+                f"**{'required' if architecture.get('required') else 'not required'}**, "
+                f"source `{architecture.get('source_kind') or 'none'}`, "
+                f"approval **{architecture.get('approval')}**"
+            ),
             (
                 "- Implementation: "
                 f"candidate `{implementation['candidate_status']}`, "
@@ -466,6 +482,13 @@ def delivery_receipt(root: Path, *, change_id: str) -> dict[str, Any]:
     source_digest = git_source_snapshot_digest(owner) if is_git_repo(owner) else None
     definition_digest = current_definition_digest(owner, state)
     approvals = derived_approval_statuses(owner, state)
+    decisions = decision_projection(owner, state, approvals)
+    decision_gate = decision_readiness(
+        owner,
+        state,
+        approvals,
+        require_definition=state["control_level"] in {"standard", "critical"},
+    )
     definition_status, definition_approval = _approval_projection(
         approvals, decision="definition"
     )
@@ -588,6 +611,8 @@ def delivery_receipt(root: Path, *, change_id: str) -> dict[str, Any]:
             "detail": "DLS core принят; release и production остаются отдельными границами",
         }
         if accepted_current
+        else decision_gate["next_action"]
+        if not decision_gate["ready"]
         else (
             delivery_readiness["next_action"]
             if delivery_readiness["next_action"] is not None
@@ -623,6 +648,7 @@ def delivery_receipt(root: Path, *, change_id: str) -> dict[str, Any]:
             ),
             "artifacts": _bounded(artifact_items, limit=16),
         },
+        "decisions": decisions,
         "implementation": {
             "candidate_status": candidate.get("status"),
             "candidate_head_sha": candidate.get("candidate_head"),

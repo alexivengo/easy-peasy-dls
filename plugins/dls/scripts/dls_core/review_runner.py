@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from .decisions import decision_readiness, review_pack_decisions_current
 from .delivery_receipt import delivery_receipt
 from .errors import IntegrityError, LockError
 from .economy import (
@@ -69,6 +70,7 @@ from .repo import (
     git_source_snapshot_digest,
     run_git,
 )
+from .state import derived_approval_statuses
 from .review_presentation import build_review_presentation
 from .state import StateStore
 from .telemetry import (
@@ -988,6 +990,12 @@ def review_status(
         change_id=change_id,
         _inspect_task_context=_inspect_task_context,
     )
+    decision_gate = decision_readiness(
+        owner,
+        state,
+        derived_approval_statuses(owner, state),
+        require_definition=state.get("control_level") in {"standard", "critical"},
+    )
     if result_entry:
         status_value = "completed"
         next_action = {"id": "review-complete", "detail": result_entry["result_path"]}
@@ -1110,6 +1118,15 @@ def review_status(
                         f"candidate-ready for current HEAD {current_head}"
                     ),
                 }
+    if (
+        not decision_gate["ready"]
+        and result_entry is None
+        and active_lane is False
+        and pipeline is None
+        and terminal_lane is None
+    ):
+        status_value = "not-prepared"
+        next_action = decision_gate["next_action"]
     runner_contract = "legacy-provenance"
     provenance_pack_entry = pack_entry
     if provenance_pack_entry is None and isinstance(selected_review_id, str):
@@ -1130,8 +1147,23 @@ def review_status(
         _validate_review_pack(pack, change_id)
         if provenance_pack_entry.get("pack_digest") != pack.get("pack_digest"):
             raise IntegrityError("ReviewPack digest does not match DLS state")
-        if pack_entry is provenance_pack_entry:
+        pack_decisions_current = review_pack_decisions_current(
+            pack.get("decisions"), decision_gate["decisions"]
+        )
+        if pack_entry is provenance_pack_entry and decision_gate["ready"] and pack_decisions_current:
             _validate_review_pack_current(owner, state=state, pack=pack)
+        elif pack_entry is provenance_pack_entry and (
+            not decision_gate["ready"] or not pack_decisions_current
+        ):
+            status_value = "not-prepared"
+            next_action = (
+                decision_gate["next_action"]
+                if not decision_gate["ready"]
+                else {
+                    "id": "run-candidate-ready",
+                    "detail": "design or architecture decision changed after ReviewPack creation",
+                }
+            )
         runner_contract = pack.get("runner_contract", runner_contract)
         prior = pack.get("prior_review")
         if isinstance(prior, dict):
@@ -1177,6 +1209,10 @@ def review_status(
         and candidate is not None
         and candidate.get("prepared")
         and candidate.get("review_id") == selected_review_id
+        and decision_gate["ready"]
+        and review_pack_decisions_current(
+            pack.get("decisions"), decision_gate["decisions"]
+        )
     )
     payload = {
         "ok": True,
@@ -1207,6 +1243,7 @@ def review_status(
             or remediation_manifest_path
         ),
         "presentation": presentation,
+        "decisions": decision_gate["decisions"],
         "next_action": next_action,
         "task_context": task_context,
     }

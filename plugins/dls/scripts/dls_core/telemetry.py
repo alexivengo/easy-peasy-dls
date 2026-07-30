@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .decisions import decision_readiness
 from .errors import IntegrityError, LockError
 from .io import FileLock, atomic_write_json, read_json, safe_resolve, utc_now
 from .operations import _codex_usage_from_output, _validate_review_pack
@@ -624,6 +625,7 @@ def review_metrics(
         None,
     )
     platform_profile: dict[str, str] | None = None
+    decision_metrics: dict[str, Any] | None = None
     if pack_entry is not None:
         pack = read_json(safe_resolve(owner, pack_entry["pack_path"], must_exist=True))
         _validate_review_pack(pack, change_id)
@@ -633,6 +635,16 @@ def review_metrics(
                 "contract": candidate_profile["contract"],
                 "name": candidate_profile["name"],
                 "digest": candidate_profile["digest"],
+            }
+        pack_decisions = pack.get("decisions")
+        if isinstance(pack_decisions, dict):
+            design = pack_decisions.get("design", {})
+            architecture = pack_decisions.get("architecture", {})
+            decision_metrics = {
+                "ui_tier": design.get("tier"),
+                "source_kind": design.get("source_kind"),
+                "bypass": bool(design.get("bypass")),
+                "architecture_required": bool(architecture.get("required")),
             }
     attempts = [
         item
@@ -815,6 +827,7 @@ def review_metrics(
         "review_id": selected,
         "review_completed": result_entry is not None,
         "platform_profile": platform_profile,
+        "decisions": decision_metrics,
         "usage_status": usage_status,
         "completeness_reasons": sorted(set(completeness_reasons)),
         "child_usage": child_usage,
@@ -1050,10 +1063,17 @@ def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
         and review.get("candidate_head") == candidate.get("current_head")
     )
     state = StateStore(owner).load(change_id)
+    approval_statuses = derived_approval_statuses(owner, state)
+    decision_gate = decision_readiness(
+        owner,
+        state,
+        approval_statuses,
+        require_definition=state.get("control_level") in {"standard", "critical"},
+    )
     current_acceptance = next(
         (
             item
-            for item in reversed(derived_approval_statuses(owner, state))
+            for item in reversed(approval_statuses)
             if item.get("decision") == "accept" and item.get("status") == "current"
         ),
         None,
@@ -1095,7 +1115,17 @@ def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
         stage=stage,
         include_overlap=stage in {"review", "acceptance"},
     )
-    if readiness["next_action"] is not None:
+    decision_action = decision_gate["next_action"]
+    decision_blocks = bool(
+        decision_action
+        and (
+            decision_action.get("id") != "approve-definition"
+            or not review.get("review_result_path")
+        )
+    )
+    if decision_blocks:
+        next_action = decision_gate["next_action"]
+    elif readiness["next_action"] is not None:
         next_action = readiness["next_action"]
     elif current_acceptance is not None:
         next_action = {
@@ -1169,6 +1199,7 @@ def delivery_status(root: Path, *, change_id: str) -> dict[str, Any]:
         },
         "usage_status": metrics.get("usage_status"),
         "cache_bytes": cache["bytes"],
+        "decisions": decision_gate["decisions"],
         "next_action": next_action,
         "task_context": (
             review.get("task_context")

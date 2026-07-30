@@ -17,6 +17,7 @@ dls worktree create|prepare|register|list|verify|unregister
 dls dependency set|list|remove
 dls delivery-map
 dls status
+dls design set|status
 dls check
 dls context
 dls approve
@@ -60,6 +61,8 @@ Rules:
 - `dls dependency set CHANGE_ID --on OTHER --blocks STAGE --requires STATE --rationale TEXT` records a stage-aware same-repository dependency. Earlier stages continue. `accepted-in-base` requires current human acceptance plus Git ancestry, unless an exact scoped human exception names both SHAs and the dependency digest.
 - `dls dependency list|remove` are deterministic state operations. Dependency changes stale the dependent definition approval, context, candidate contract, and ReviewPack.
 - `dls delivery-map` is read-only and bounded. It shows active registered changes, dependency readiness, overlap counts, safe parallel groups, and one typed next action without local paths unless `--verbose` is explicit.
+- `dls design set CHANGE_ID --tier ... --surface ...` records either an exact source (`precedent | artifact | external-version`) or an explicit `--bypass --rationale ... --risk ...`. Repository sources must be tracked and clean; external sources require HTTPS plus `--source-version`. `design status` is read-only and never returns the source ref, raw content, or bypass rationale.
+- `dls approve CHANGE_ID --decision definition --include-design` atomically records independent definition and design approvals from one scoped confirmation. Standalone `--decision design` and `--decision architecture` remain low-level early-decision/diagnostic paths. The approval prompt must name every decision and its current short digest.
 - `dls review-start CHANGE_ID` resolves the canonical owner through the explicit worktree registry before selecting the latest unfinished exact-HEAD ReviewPack. A portable or stale state copy in the caller checkout never overrides a registered owner. It never initializes/adopts, scans sibling directories, or infers branches. An absolute `--pack` remains the explicit one-off cross-checkout selector.
 - `dls remediation-start CHANGE_ID` verifies and returns the canonical manifest created atomically with the latest actionable ReviewIR. It is read-only and may route to a registered owner worktree.
 - `dls remediation-recover CHANGE_ID [--review-id ID]` is the explicit legacy-only repair path. It validates exact Git objects, ancestry, definition, ReviewPack and ReviewIR digests without switching the checkout, then creates the missing canonical manifest.

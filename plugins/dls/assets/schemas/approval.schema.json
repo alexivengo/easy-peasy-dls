@@ -25,6 +25,17 @@
       ]
     },
     "object_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "decision_contract": {
+      "enum": ["dls-design-digest/v1", "dls-architecture-digest/v1"]
+    },
+    "decision_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "decision_snapshots_contract": { "const": "dls-definition-decisions/v1" },
+    "design_decision_digest": {
+      "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"
+    },
+    "architecture_decision_digest": {
+      "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"
+    },
     "git_sha": { "type": ["string", "null"] },
     "actor": { "enum": ["codex", "user"] },
     "authority": { "const": "user" },

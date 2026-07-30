@@ -10,6 +10,12 @@ Codex-плагин для управляемой, risk-adaptive доставки
 
 Domain skills могут добавлять экспертизу платформы, но не владеют DLS approvals, state, evidence и gates.
 
+UI changes получают typed Tier 1/2/3 source или explicit human bypass без
+обязательной привязки к Figma/Sketch. Architecture approval появляется только
+при явном architecture trigger или ADR. Оба решения используют scoped digests и
+передаются в context/ReviewPack/Delivery Receipt как bounded projection без raw
+design content и локальных путей.
+
 ## Локальный CLI
 
 Kernel использует только Python standard library:

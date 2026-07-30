@@ -11,6 +11,7 @@ from dls_core.operations import (
     approve,
     build_context,
     check,
+    design_set,
     evidence_add,
     finding_disposition,
     new_change,
@@ -50,7 +51,9 @@ class WorkflowTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (root / artifacts["spec"]).write_text(
-                "# Contract\n\n- F-01: behavior\n- N-01: quality\n- C-01: constraint\n",
+                "# Contract\n\n"
+                "- F-01: behavior\n- N-01: quality\n- C-01: constraint\n\n"
+                "## Architecture\n\nKeep the existing bounded contract.\n",
                 encoding="utf-8",
             )
             (root / artifacts["tickets"]).write_text(
@@ -358,11 +361,24 @@ class WorkflowTests(unittest.TestCase):
                 [item["id"] for item in blocked["checks"] if not item["ok"]],
             )
             revision = status(root, change_id="C001")["state_revision"]
+            design_set(
+                root,
+                change_id="C001",
+                tier=1,
+                surfaces=["settings-row"],
+                source_kind=None,
+                source_ref=None,
+                source_version=None,
+                bypass=True,
+                rationale="Reuse the existing settings row without a new mockup.",
+                risk="low",
+                operation_id="design-source-1",
+            )
             approve(
                 root,
                 change_id="C001",
                 decision="design",
-                expected_revision=revision,
+                expected_revision=revision + 1,
                 actor="user",
                 prompt=None,
                 response=None,

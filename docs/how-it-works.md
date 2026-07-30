@@ -54,7 +54,19 @@ concurrency и testing без Apple UI или App Store gates.
 - `TICKETS.md` делит реализацию на независимо проверяемые части;
 - ADR нужен только для решения, которое действительно важно сохранить отдельно.
 
-Если изменение затрагивает UI, definition должен ссылаться на принятый макет или содержать явное решение работать без него.
+Если изменение затрагивает UI, DLS фиксирует typed design source, но не навязывает
+конкретный инструмент. Tier 1 может переиспользовать exact precedent без нового
+макета. Tier 2 использует достаточный versioned precedent/artifact. Tier 3 —
+immutable artifact или external version. Во всех tiers человек может явно
+разрешить работу без макета, указав rationale и UX risk. Repository-source
+привязывается к clean tracked Git blob, внешний — к HTTPS URL и immutable
+version; raw design content не попадает в status, metrics или review context.
+
+Отдельная architecture boundary появляется только при impact `architecture`
+или canonical ADR. Источником служит ADR либо один bounded region в SPEC.
+Раннее дорогообратимое решение подтверждается до завершения остальной SPEC;
+обычная архитектура проверяется вместе с definition. Поэтому ADR остаётся
+полезным долговечным артефактом, а не обязательным документом для каждого epic.
 
 ## 2. Сделали
 
@@ -65,6 +77,13 @@ concurrency и testing без Apple UI или App Store gates.
 - привязывает evidence к текущей ревизии;
 - умеет зарегистрировать отдельный worktree без добавления каждого worktree как проекта Codex;
 - возвращает одно типизированное `next_action`, когда следующий шаг пока невозможен.
+
+Для UI/architecture changes этот context содержит только bounded projection:
+tier, surfaces, source kind, scoped digest и approval status. Source path,
+design content, bypass rationale и credentials не повторяются между задачами.
+Design и architecture approvals имеют собственные digests: несвязанная правка
+SPEC сохраняет их, но новый design/decision одновременно делает stale и
+соответствующее решение, и полный definition approval.
 
 Для параллельного standard/critical change approval сначала привязывается к
 закоммиченным authored-документам. Затем один атомарный handoff создаёт owner

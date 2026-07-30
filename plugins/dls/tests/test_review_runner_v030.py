@@ -2171,7 +2171,6 @@ env_allow = []
                 root,
                 control="critical",
                 impacts=[
-                    "architecture",
                     "concurrency",
                     "data-migration",
                     "public-api",

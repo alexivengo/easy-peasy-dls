@@ -19,9 +19,10 @@ For other work:
 2. Read `doctor.platform_profile` and the resolved profile from the generated context manifest. Use its discovery hints, evidence vocabulary, capabilities, and currently available domain skills only as advisory routing. The profile never adds commands, gates, models, budgets, approvals, or process ownership. Missing domain skills never block delivery.
 3. Restate the intended outcome in one sentence. Ask only questions whose answers change scope, risk, UX, architecture, or acceptance.
 4. Recommend a work kind, control level, and impact tags. The user may override the recommendation; record a rationale when lowering a material risk floor.
-5. If the repository already has a compatible canonical change or epic package, use `dls adopt` to register its files and current ticket states. Do not regenerate, normalize, or rewrite existing artifacts merely to fit DLS.
-6. Otherwise choose the smallest path from [paths.md](references/paths.md). Do not create a brief, plan document, epic, ADR, or ticket file unless that path requires it.
-7. Use [cli.md](references/cli.md) for state-changing commands. Preview mutations with `--dry-run`.
+5. When `user-interface` is affected, recommend UI tier from the actual scope and platform profile. Reuse an exact Tier 1 precedent instead of inventing a mockup. Ask one focused question only when no sufficient versioned source or explicit bypass decision is known; never require Figma, Sketch, or another specific tool.
+6. If the repository already has a compatible canonical change or epic package, use `dls adopt` to register its files and current ticket states. Do not regenerate, normalize, or rewrite existing artifacts merely to fit DLS.
+7. Otherwise choose the smallest path from [paths.md](references/paths.md). Do not create a brief, plan document, epic, ADR, or ticket file unless that path requires it.
+8. Use [cli.md](references/cli.md) for state-changing commands. Preview mutations with `--dry-run`.
 
 For a new standard or critical change, read `delivery-map` before choosing its checkout. Definition work may use `worktree create`, but after approval an isolated implementation owner must be created with the atomic `worktree prepare` handoff from the committed approved revision. That command transfers the immutable change state, approvals and dependencies, verifies the same definition digest, and registers the exact owner. Never reconstruct the handoff with `init` + `adopt`, copy files manually, or fall back to another checkout after preparation fails. Stop with `prepare-owner-worktree`. Use isolation only when parallel work is materially useful; routine work and a single active change do not require a worktree. Never scan sibling directories, infer a branch, create a Codex task, or create a subagent. The user still opens each parallel Codex task.
 
@@ -34,11 +35,15 @@ For routine work, keep intent, scope, approach, and validation in one `CHANGE.md
 For standard, roadmap, or critical work:
 
 1. Discover only affected repository facts.
-2. Draft the canonical contract and tickets before semantic review when there is more than one coherent implementation slice.
-3. Run `dls check --gate definition`.
-4. Perform independent semantic definition review. Architecture is part of this review unless an early critical decision is triggered.
-5. Remediate the contract, rerun checks, and commit the authored definition artifacts. Standard and critical approval must be reproducible from that exact Git revision; never approve dirty definition files.
-6. Ask one scoped approval question containing `definition` and the current short digest, then record approval only after the user's direct affirmative reply.
+2. If a public/cross-system contract, trust boundary, data-loss exposure, foundational consistency model, migration, or durable alternative makes reversal expensive, record one bounded architecture decision first. Ask a separate scoped architecture confirmation only for that early trigger; an ADR remains optional when the SPEC region is sufficient.
+3. Draft the canonical contract and tickets before semantic review when there is more than one coherent implementation slice.
+4. For a UI change, record the exact versioned design source or explicit bypass in DLS. Tier 1 may cite an exact precedent; Tier 2 needs a sufficient versioned source; Tier 3 uses an immutable artifact/external version or an explicit risk-bearing bypass.
+5. Run `dls check --gate definition`.
+6. Perform independent semantic definition review. Architecture is part of this review unless the early decision was already confirmed.
+7. Remediate the contract, rerun checks, and commit the authored definition artifacts. Standard and critical approval must be reproducible from that exact Git revision; never approve dirty definition files.
+8. Ask one scoped approval question containing `definition` and the current short digest. When design is also ready, include its short digest in the same confirmation; treat `approve-definition-and-design` as one user boundary and record definition + design atomically. Record either decision only after the user's direct affirmative reply.
+
+For a routine UI change, keep one `CHANGE.md` and one scoped design confirmation. Do not create an epic or ADR merely because a UI surface is affected. Once confirmed, later tasks consume only the bounded decision projection from the generated context; do not replay source details or approval history.
 
 Changelog, validation evidence, finding status and generated regions are execution data, not authored definition inputs. Keep them in DLS state/evidence or an artifact explicitly classified as `execution`; updating them must not request another definition approval. Scope, behavior, architecture, requirements and acceptance criteria remain authored inputs and always stale the approval when changed.
 

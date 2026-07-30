@@ -10,6 +10,13 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from .decisions import (
+    ARCHITECTURE_DIGEST_CONTRACT,
+    DESIGN_DIGEST_CONTRACT,
+    architecture_digest,
+    design_digest,
+    validate_design_source_shape,
+)
 from .errors import IntegrityError, UsageError
 from .io import FileLock, atomic_write_json, read_json, sha256_bytes, utc_now
 from .repo import (
@@ -49,6 +56,7 @@ DEPENDENCY_REQUIREMENTS = {
     "accepted-in-base",
 }
 DEFINITION_DIGEST_CONTRACT = "dls-definition-digest/v2"
+DEFINITION_DECISIONS_CONTRACT = "dls-definition-decisions/v1"
 ARTIFACT_ROLES = {"definition", "execution"}
 EXECUTION_ARTIFACT_KEYS = {
     "changelog",
@@ -189,6 +197,29 @@ def validate_state(state: dict[str, Any]) -> None:
         artifact_role(name, metadata)
     if "candidate_runs" in state and not isinstance(state["candidate_runs"], list):
         raise IntegrityError("state.candidate_runs must be list")
+    if state.get("design_source") is not None:
+        validate_design_source_shape(state["design_source"])
+    for approval in state["approvals"]:
+        if not isinstance(approval, dict):
+            raise IntegrityError("state.approvals entries must be objects")
+        contract = approval.get("decision_contract")
+        if contract is not None and contract not in {
+            DESIGN_DIGEST_CONTRACT,
+            ARCHITECTURE_DIGEST_CONTRACT,
+        }:
+            raise IntegrityError(f"Unsupported approval decision contract: {contract!r}")
+        decision_digest = approval.get("decision_digest")
+        if decision_digest is not None and not re.fullmatch(r"[0-9a-f]{64}", decision_digest):
+            raise IntegrityError("Approval decision_digest must be SHA-256")
+        snapshot_contract = approval.get("decision_snapshots_contract")
+        if snapshot_contract is not None and snapshot_contract != DEFINITION_DECISIONS_CONTRACT:
+            raise IntegrityError(
+                f"Unsupported approval decision snapshots contract: {snapshot_contract!r}"
+            )
+        for key in ("design_decision_digest", "architecture_decision_digest"):
+            value = approval.get(key)
+            if value is not None and not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise IntegrityError(f"Approval {key} must be SHA-256 or null")
     dependencies = state.get("dependencies", [])
     if not isinstance(dependencies, list):
         raise IntegrityError("state.dependencies must be list")
@@ -1015,6 +1046,8 @@ def _legacy_approval_matches_definition(
 
 def derived_approval_statuses(root: Path, state: dict[str, Any]) -> list[dict[str, Any]]:
     definition_digest = current_definition_digest(root, state)
+    current_design_digest = design_digest(root, state)
+    current_architecture_digest = architecture_digest(root, state)
     head = git_head(root)
     approvals: list[dict[str, Any]] = []
     dependency_drift: list[str] = []
@@ -1031,6 +1064,24 @@ def derived_approval_statuses(root: Path, state: dict[str, Any]) -> list[dict[st
             approvals.append(item)
             continue
         decision = item.get("decision")
+        decision_contract = item.get("decision_contract")
+        scoped_contract = {
+            "design": DESIGN_DIGEST_CONTRACT,
+            "architecture": ARCHITECTURE_DIGEST_CONTRACT,
+        }.get(decision)
+        scoped_digest = {
+            "design": current_design_digest,
+            "architecture": current_architecture_digest,
+        }.get(decision)
+        if scoped_contract is not None and decision_contract is not None:
+            if decision_contract != scoped_contract:
+                item["status"] = "stale"
+                item["stale_reason"] = "decision-contract-changed"
+            elif item.get("decision_digest") != scoped_digest:
+                item["status"] = "stale"
+                item["stale_reason"] = "decision-content-digest-changed"
+            approvals.append(item)
+            continue
         if (
             decision in {"definition", "design", "architecture", "exception", "accept"}
             and item.get("object_digest") != definition_digest
@@ -1052,6 +1103,17 @@ def derived_approval_statuses(root: Path, state: dict[str, Any]) -> list[dict[st
         elif decision in {"definition", "design", "architecture"} and dependency_drift:
             item["status"] = "stale"
             item["stale_reason"] = "dependency-definition-digest-changed"
+        if (
+            item.get("status") == "current"
+            and decision in {"definition", "accept"}
+            and item.get("decision_snapshots_contract") == DEFINITION_DECISIONS_CONTRACT
+            and (
+                item.get("design_decision_digest") != current_design_digest
+                or item.get("architecture_decision_digest") != current_architecture_digest
+            )
+        ):
+            item["status"] = "stale"
+            item["stale_reason"] = "scoped-decision-digest-changed"
         if decision == "accept":
             accepted_sha = item.get("git_sha")
             if item.get("object_digest") != definition_digest:

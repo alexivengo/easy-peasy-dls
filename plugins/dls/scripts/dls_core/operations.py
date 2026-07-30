@@ -18,6 +18,17 @@ from pathlib import Path
 from typing import Any
 
 from . import SCHEMA_VERSION, VERSION
+from .decisions import (
+    ARCHITECTURE_DIGEST_CONTRACT,
+    DESIGN_DIGEST_CONTRACT,
+    architecture_digest,
+    architecture_source,
+    build_design_source,
+    decision_projection,
+    decision_readiness,
+    design_digest,
+    review_pack_decisions_current,
+)
 from .errors import ConfigError, IntegrityError, UsageError
 from .economy import processed_tokens, review_budget, token_budget_failure
 from .io import (
@@ -59,6 +70,7 @@ from .repo import (
 from .state import (
     CONTROL_LEVELS,
     DEFINITION_DIGEST_CONTRACT,
+    DEFINITION_DECISIONS_CONTRACT,
     IMPACT_TAGS,
     WORK_KINDS,
     StateStore,
@@ -567,6 +579,12 @@ def status(root: Path, *, change_id: str) -> dict[str, Any]:
     state = StateStore(root).load(change_id)
     definition_digest = current_definition_digest(root, state)
     approvals = derived_approval_statuses(root, state)
+    decisions = decision_readiness(
+        root,
+        state,
+        approvals,
+        require_definition=state["control_level"] in {"standard", "critical"},
+    )
     head = git_head(root)
     dirty = git_source_dirty_paths(root) if is_git_repo(root) else []
     latest_review = _latest_review_result(state)
@@ -616,6 +634,9 @@ def status(root: Path, *, change_id: str) -> dict[str, Any]:
         "lifecycle": state["lifecycle"],
         "definition_digest": definition_digest,
         "approvals": approvals,
+        "decisions": decisions["decisions"],
+        "decision_next_action": decisions["next_action"],
+        "next_action": decisions["next_action"] or readiness["next_action"],
         "tickets": state["tickets"],
         "evidence_count": len(state["evidence"]),
         "latest_review": latest_review,
@@ -720,6 +741,13 @@ def check(root: Path, *, change_id: str, gate: str) -> dict[str, Any]:
             )
         )
     approvals = derived_approval_statuses(root, state)
+    decisions = decision_projection(root, state, approvals)
+    decision_gate = decision_readiness(
+        root,
+        state,
+        approvals,
+        require_definition=state["control_level"] in {"standard", "critical"},
+    )
     definition_approved = any(
         item.get("decision") == "definition" and item.get("status") == "current"
         for item in approvals
@@ -756,25 +784,56 @@ def check(root: Path, *, change_id: str, gate: str) -> dict[str, Any]:
     )
     source_dirty = git_source_dirty_paths(root) if is_git_repo(root) else ["not-a-git-repository"]
     strict_path = state["control_level"] in {"standard", "critical"}
+    if gate == "definition":
+        if decisions["design"]["required"]:
+            checks.append(
+                _check(
+                    "ui:design-source",
+                    decisions["design"]["contract"] is not None,
+                    "typed source or explicit bypass required",
+                )
+            )
+        if decisions["architecture"]["required"]:
+            checks.append(
+                _check(
+                    "architecture:source",
+                    decisions["architecture"]["digest"] is not None,
+                    "bounded ADR or SPEC decision required",
+                )
+            )
     if gate in {"review", "accept", "all"}:
         if strict_path:
             checks.append(
                 _check("definition:approved", definition_approved, "current approval required")
             )
-        if "user-interface" in state["impact_tags"]:
+        if decisions["design"]["required"]:
+            checks.append(
+                _check(
+                    "ui:design-source",
+                    decisions["design"]["contract"] is not None,
+                    "typed source or explicit bypass required",
+                )
+            )
             checks.append(
                 _check(
                     "ui:design-decision",
                     design_approved,
-                    "accepted source or explicit bypass decision required",
+                    "current scoped design approval required",
                 )
             )
-        if "adr" in state["artifacts"]:
+        if decisions["architecture"]["required"]:
+            checks.append(
+                _check(
+                    "architecture:source",
+                    decisions["architecture"]["digest"] is not None,
+                    "bounded ADR or SPEC decision required",
+                )
+            )
             checks.append(
                 _check(
                     "architecture:decision",
                     architecture_approved,
-                    "current architecture decision required for ADR",
+                    "current scoped architecture approval required",
                 )
             )
         if strict_path:
@@ -884,6 +943,115 @@ def check(root: Path, *, change_id: str, gate: str) -> dict[str, Any]:
         "change_id": change_id,
         "state_revision": state["state_revision"],
         "checks": checks,
+        "next_action": decision_gate["next_action"],
+    }
+
+
+def design_set(
+    root: Path,
+    *,
+    change_id: str,
+    tier: int,
+    surfaces: list[str],
+    source_kind: str | None,
+    source_ref: str | None,
+    source_version: str | None,
+    bypass: bool,
+    rationale: str | None,
+    risk: str | None,
+    operation_id: str | None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    root = resolve_change_root(root, change_id)
+    store = StateStore(root)
+    state = store.load(change_id)
+    if "user-interface" not in state.get("impact_tags", []):
+        raise UsageError("Design source is only available for user-interface changes")
+    value = build_design_source(
+        root,
+        tier=tier,
+        surfaces=surfaces,
+        source_kind=source_kind,
+        source_ref=source_ref,
+        source_version=source_version,
+        bypass=bypass,
+        rationale=rationale,
+        risk=risk,
+    )
+    candidate_state = {**state, "design_source": value}
+    digest = design_digest(root, candidate_state)
+    assert digest is not None
+    effective_operation_id = operation_id or str(uuid.uuid4())
+    operation_kind = "design-source-set"
+    existing_operation = _operation(state, effective_operation_id)
+    if existing_operation:
+        _require_operation_kind(existing_operation, operation_kind)
+        current_digest = design_digest(root, state)
+        if current_digest != digest:
+            raise IntegrityError("Design source operation ID belongs to another contract")
+        return design_status(root, change_id=change_id) | {
+            "dry_run": False,
+            "changed": False,
+            "operation_id": effective_operation_id,
+        }
+    if dry_run:
+        approvals = derived_approval_statuses(root, candidate_state)
+        readiness = decision_readiness(
+            root,
+            candidate_state,
+            approvals,
+            require_definition=candidate_state["control_level"]
+            in {"standard", "critical"},
+        )
+        return {
+            "ok": True,
+            "dry_run": True,
+            "changed": False,
+            "change_id": change_id,
+            "state_revision": state["state_revision"],
+            "operation_id": effective_operation_id,
+            "design": readiness["decisions"]["design"],
+            "next_action": readiness["next_action"],
+        }
+
+    def mutate(updated: dict[str, Any]) -> None:
+        updated["design_source"] = value
+
+    updated, changed = store.mutate(
+        change_id,
+        expected_revision=state["state_revision"],
+        operation_id=effective_operation_id,
+        operation_kind=operation_kind,
+        mutator=mutate,
+    )
+    result = design_status(root, change_id=change_id)
+    result.update(
+        {
+            "dry_run": False,
+            "changed": changed,
+            "state_revision": updated["state_revision"],
+            "operation_id": effective_operation_id,
+        }
+    )
+    return result
+
+
+def design_status(root: Path, *, change_id: str) -> dict[str, Any]:
+    root = resolve_change_root(root, change_id)
+    state = StateStore(root).load(change_id)
+    approvals = derived_approval_statuses(root, state)
+    readiness = decision_readiness(
+        root,
+        state,
+        approvals,
+        require_definition=state["control_level"] in {"standard", "critical"},
+    )
+    return {
+        "ok": True,
+        "change_id": change_id,
+        "state_revision": state["state_revision"],
+        "design": readiness["decisions"]["design"],
+        "next_action": readiness["next_action"],
     }
 
 
@@ -899,56 +1067,85 @@ def approve(
     git_sha: str | None,
     conditions: str | None,
     operation_id: str | None,
+    include_design: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     if decision not in {"definition", "accept", "exception", "design", "architecture"}:
         raise UsageError(f"Invalid approval decision: {decision}")
     if actor not in {"codex", "user"}:
         raise UsageError("actor must be codex or user")
+    if include_design and decision != "definition":
+        raise UsageError("--include-design is available only with --decision definition")
     root = resolve_change_root(root, change_id)
     state_store = StateStore(root)
     state = state_store.load(change_id)
     effective_operation_id = operation_id or str(uuid.uuid4())
-    operation_kind = f"approve:{decision}"
-    approval_id = str(
-        uuid.uuid5(
-            uuid.NAMESPACE_URL,
-            f"dls:{change_id}:approval:{decision}:{effective_operation_id}",
+    decisions = [decision, "design"] if include_design else [decision]
+    operation_kind = "approve:" + "+".join(decisions)
+    approval_ids = {
+        item: str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"dls:{change_id}:approval:{item}:{effective_operation_id}",
+            )
         )
-    )
+        for item in decisions
+    }
     existing_operation = _operation(state, effective_operation_id)
     if existing_operation:
         _require_operation_kind(existing_operation, operation_kind)
-        recorded = next(
-            (item for item in state["approvals"] if item.get("id") == approval_id),
-            None,
-        )
-        if not recorded:
+        recorded = [
+            item for item in state["approvals"] if item.get("id") in approval_ids.values()
+        ]
+        if len(recorded) != len(decisions):
             raise IntegrityError(f"Approval operation has no matching record: {effective_operation_id}")
-        return {
+        result = {
             "ok": True,
             "dry_run": False,
             "changed": False,
             "change_id": change_id,
             "state_revision": state["state_revision"],
             "operation_id": effective_operation_id,
-            "approval": recorded,
+            "approval": next(item for item in recorded if item["decision"] == decision),
+            "approvals": recorded,
         }
         if decision == "accept":
             from .delivery_receipt import delivery_receipt
-
-            result["delivery_receipt"] = delivery_receipt(
-                root, change_id=change_id
-            )
+            result["delivery_receipt"] = delivery_receipt(root, change_id=change_id)
         return result
     _require_revision(state, expected_revision)
     if state["lifecycle"] == "accepted" and decision != "exception":
         raise IntegrityError("Accepted work cannot receive another decision without a new change")
-    object_digest = current_definition_digest(root, state)
+    definition_digest = current_definition_digest(root, state)
+    design_decision_digest = design_digest(root, state)
+    architecture_decision_digest = architecture_digest(root, state)
+    if decision == "definition" and "user-interface" in state.get("impact_tags", []):
+        if design_decision_digest is None:
+            raise IntegrityError("Definition approval requires a typed design source or bypass")
+    if decision == "definition":
+        current_approvals = derived_approval_statuses(root, state)
+        architecture_gate = decision_projection(root, state, current_approvals)[
+            "architecture"
+        ]
+        if architecture_gate["required"] and architecture_decision_digest is None:
+            raise IntegrityError("Definition approval requires a bounded architecture decision")
+        if architecture_gate["required"] and architecture_gate["approval"] != "current":
+            raise IntegrityError("Definition approval requires current architecture approval")
+    if "design" in decisions and design_decision_digest is None:
+        raise IntegrityError("Design approval requires a current typed design source")
+    if decision == "architecture" and architecture_decision_digest is None:
+        raise IntegrityError("Architecture approval requires a bounded ADR or SPEC decision")
+    object_digests = {
+        "definition": definition_digest,
+        "accept": definition_digest,
+        "exception": definition_digest,
+        "design": design_decision_digest,
+        "architecture": architecture_decision_digest,
+    }
     current_head = git_head(root)
     acceptance_source_digest: str | None = None
     if (
-        decision in {"definition", "design", "architecture"}
+        decision == "definition"
         and state["control_level"] in {"standard", "critical"}
     ):
         if not current_head:
@@ -970,6 +1167,29 @@ def approve(
                 + ", ".join(dirty_artifacts)
             )
         git_sha = current_head
+    if decision in {"design", "architecture"}:
+        if state["control_level"] in {"standard", "critical"} and not current_head:
+            raise IntegrityError("Scoped decision approval requires Git")
+        if git_sha and git_sha != current_head:
+            raise IntegrityError(
+                f"Scoped decision approval SHA is not current HEAD: {git_sha} != {current_head}"
+            )
+        if decision == "architecture" and current_head:
+            source = architecture_source(root, state)
+            if source is None:
+                raise IntegrityError("Architecture decision source is missing")
+            source_artifact = {
+                "architecture": {"path": source["path"], "role": "definition"}
+            }
+            reproducible, dirty_artifacts = artifact_paths_matching_revision(
+                root, source_artifact, current_head
+            )
+            if not reproducible:
+                raise IntegrityError(
+                    "Architecture approval requires a committed decision source: "
+                    + ", ".join(dirty_artifacts)
+                )
+        git_sha = current_head
     if decision == "accept":
         strict_path = state["control_level"] in {"standard", "critical"}
         if strict_path and not current_head:
@@ -988,24 +1208,43 @@ def approve(
             failed = [item["id"] for item in gate["checks"] if not item["ok"]]
             raise IntegrityError(f"Acceptance gate failed: {', '.join(failed)}")
     if actor == "codex":
-        _validate_scoped_confirmation(decision, object_digest, prompt, response)
-    approval = {
-        "id": approval_id,
-        "decision": decision,
-        "object_digest": object_digest,
-        "git_sha": git_sha,
-        "actor": actor,
-        "authority": "user",
-        "recorded_at": utc_now(),
-        "status": "current",
-        "conditions": conditions,
-        "prompt": prompt,
-        "response": response,
-    }
-    if decision in {"definition", "design", "architecture", "accept"}:
-        approval["definition_digest_contract"] = DEFINITION_DIGEST_CONTRACT
-    if decision == "accept" and acceptance_source_digest is not None:
-        approval["source_digest"] = acceptance_source_digest
+        for item in decisions:
+            digest = object_digests[item]
+            assert isinstance(digest, str)
+            _validate_scoped_confirmation(item, digest, prompt, response)
+    recorded_at = utc_now()
+    approvals_to_record: list[dict[str, Any]] = []
+    for item in decisions:
+        digest = object_digests[item]
+        assert isinstance(digest, str)
+        approval: dict[str, Any] = {
+            "id": approval_ids[item],
+            "decision": item,
+            "object_digest": digest,
+            "git_sha": git_sha,
+            "actor": actor,
+            "authority": "user",
+            "recorded_at": recorded_at,
+            "status": "current",
+            "conditions": conditions,
+            "prompt": prompt,
+            "response": response,
+        }
+        if item in {"definition", "accept"}:
+            approval["definition_digest_contract"] = DEFINITION_DIGEST_CONTRACT
+            approval["decision_snapshots_contract"] = DEFINITION_DECISIONS_CONTRACT
+            approval["design_decision_digest"] = design_decision_digest
+            approval["architecture_decision_digest"] = architecture_decision_digest
+        elif item == "design":
+            approval["decision_contract"] = DESIGN_DIGEST_CONTRACT
+            approval["decision_digest"] = digest
+        elif item == "architecture":
+            approval["decision_contract"] = ARCHITECTURE_DIGEST_CONTRACT
+            approval["decision_digest"] = digest
+        if item == "accept" and acceptance_source_digest is not None:
+            approval["source_digest"] = acceptance_source_digest
+        approvals_to_record.append(approval)
+    primary_approval = next(item for item in approvals_to_record if item["decision"] == decision)
     if dry_run:
         return {
             "ok": True,
@@ -1014,15 +1253,18 @@ def approve(
             "change_id": change_id,
             "state_revision": state["state_revision"],
             "operation_id": effective_operation_id,
-            "approval": approval,
+            "approval": primary_approval,
+            "approvals": approvals_to_record,
         }
 
     def mutate(value: dict[str, Any]) -> None:
-        for existing in value["approvals"]:
-            if existing.get("decision") == decision and existing.get("status") == "current":
-                existing["status"] = "superseded"
-                existing["superseded_by"] = approval_id
-        value["approvals"].append(approval)
+        for approval in approvals_to_record:
+            item_decision = approval["decision"]
+            for existing in value["approvals"]:
+                if existing.get("decision") == item_decision and existing.get("status") == "current":
+                    existing["status"] = "superseded"
+                    existing["superseded_by"] = approval["id"]
+            value["approvals"].append(approval)
         if decision == "definition":
             value["phase"] = "implementation"
             value["lifecycle"] = "approved"
@@ -1037,9 +1279,11 @@ def approve(
         operation_kind=operation_kind,
         mutator=mutate,
     )
+    recorded_approvals = [
+        item for item in updated["approvals"] if item.get("id") in approval_ids.values()
+    ]
     recorded_approval = next(
-        (item for item in updated["approvals"] if item.get("id") == approval_id),
-        approval,
+        item for item in recorded_approvals if item.get("decision") == decision
     )
     result = {
         "ok": True,
@@ -1049,6 +1293,7 @@ def approve(
         "state_revision": updated["state_revision"],
         "operation_id": effective_operation_id,
         "approval": recorded_approval,
+        "approvals": recorded_approvals,
     }
     if decision == "accept":
         from .delivery_receipt import delivery_receipt
@@ -1543,13 +1788,33 @@ def build_context(
         raise UsageError(f"Invalid context phase: {phase}")
     root = resolve_change_root(root, change_id)
     state = StateStore(root).load(change_id)
+    approvals = derived_approval_statuses(root, state)
+    decision_gate = decision_readiness(
+        root,
+        state,
+        approvals,
+        require_definition=state["control_level"] in {"standard", "critical"},
+    )
+    if not decision_gate["ready"]:
+        return {
+            "ok": True,
+            "dry_run": dry_run,
+            "changed": False,
+            "change_id": change_id,
+            "phase": phase,
+            "status": "blocked",
+            "manifest": None,
+            "manifest_path": None,
+            "decisions": decision_gate["decisions"],
+            "next_action": decision_gate["next_action"],
+        }
     if phase == "implementation" and state["control_level"] in {
         "standard",
         "critical",
     }:
         definition_approved = any(
             item.get("decision") == "definition" and item.get("status") == "current"
-            for item in derived_approval_statuses(root, state)
+            for item in approvals
         )
         if not definition_approved:
             return {
@@ -1695,6 +1960,7 @@ def build_context(
             "dls_version": VERSION,
             "profile": profile,
             "platform_profile": platform_profile,
+            "decisions": decision_gate["decisions"],
             "change_id": change_id,
             "phase": phase,
             "state_revision": state["state_revision"],
@@ -1713,6 +1979,7 @@ def build_context(
         "dls_version": VERSION,
         "profile": profile,
         "platform_profile": platform_profile,
+        "decisions": decision_gate["decisions"],
         "change_id": change_id,
         "phase": phase,
         "generated_at": utc_now(),
@@ -1811,6 +2078,7 @@ def _review_context_v2(
         "pack_digest": pack["pack_digest"],
         "definition_digest": pack["definition_digest"],
         "platform_profile": legacy.get("platform_profile"),
+        "decisions": pack.get("decisions"),
         "tickets": pack["tickets"],
         "required_prior_findings": pack.get("required_prior_findings", []),
         "finding_dispositions": pack.get("finding_dispositions", []),
@@ -1888,6 +2156,7 @@ def _review_context_v2(
         "dls_version": VERSION,
         "profile": legacy["profile"],
         "platform_profile": legacy.get("platform_profile"),
+        "decisions": pack.get("decisions"),
         "change_id": change_id,
         "phase": "review",
         "generated_at": utc_now(),
@@ -2695,6 +2964,16 @@ def _validate_review_pack(pack: dict[str, Any], change_id: str) -> None:
             raise IntegrityError(f"ReviewPack field must be a string array: {field}")
     if not isinstance(pack["tickets"], dict) or not isinstance(pack["artifacts"], dict):
         raise IntegrityError("ReviewPack artifacts and tickets must be objects")
+    decisions = pack.get("decisions")
+    if decisions is not None:
+        if not isinstance(decisions, dict) or set(decisions) != {"design", "architecture"}:
+            raise IntegrityError("ReviewPack decisions projection is malformed")
+        encoded_decisions = json.dumps(decisions, ensure_ascii=False).encode("utf-8")
+        if len(encoded_decisions) > 4096:
+            raise IntegrityError("ReviewPack decisions projection exceeds 4 KiB")
+        forbidden = {"ref", "rationale", "content", "path", "git_blob"}
+        if any(f'"{key}"' in encoded_decisions.decode("utf-8") for key in forbidden):
+            raise IntegrityError("ReviewPack decisions projection contains private provenance")
     if schema_version == REVIEW_PACK_SCHEMA_VERSION:
         native_workspace_contract = pack.get("native_workspace_contract")
         if native_workspace_contract not in {None, NATIVE_WORKSPACE_CONTRACT}:
@@ -3021,6 +3300,7 @@ def _review_pack_state_entry(
         "native_workspace_contract": pack.get("native_workspace_contract"),
         "identifier_contract": pack.get("identifier_contract"),
         "decision_repair_contract": pack.get("decision_repair_contract"),
+        "decisions": pack.get("decisions"),
         "pack_path": relative_path,
         "base_sha": pack["base_sha"],
         "comparison_base_sha": pack["comparison_base_sha"],
@@ -3170,6 +3450,19 @@ def review_pack(
         else []
     )
     platform_profile = resolve_profile(root, config=load_config(root))
+    pack_approvals = derived_approval_statuses(root, state)
+    decision_gate = decision_readiness(
+        root,
+        state,
+        pack_approvals,
+        require_definition=state["control_level"] in {"standard", "critical"},
+    )
+    if not decision_gate["ready"]:
+        action = decision_gate["next_action"]
+        assert action is not None
+        raise IntegrityError(
+            f"ReviewPack decision gate failed: {action['id']}: {action['detail']}"
+        )
     pack = {
         "schema_version": REVIEW_PACK_SCHEMA_VERSION,
         "runner_contract": REVIEW_RUNNER_CONTRACT,
@@ -3186,6 +3479,7 @@ def review_pack(
             "name": platform_profile["name"],
             "digest": platform_profile["digest"],
         },
+        "decisions": decision_gate["decisions"],
         "delivery_readiness": {
             "contract": delivery_readiness["contract"],
             "digest": delivery_readiness["digest"],
@@ -3308,6 +3602,22 @@ def review_ready(
         raise IntegrityError("Review readiness requires Git")
     state = StateStore(root).load(change_id)
     _require_revision(state, expected_revision)
+    review_decision_gate = decision_readiness(
+        root,
+        state,
+        derived_approval_statuses(root, state),
+        require_definition=state["control_level"] in {"standard", "critical"},
+    )
+    if not review_decision_gate["ready"]:
+        action = review_decision_gate["next_action"]
+        assert action is not None
+        return _review_ready_blocked(
+            change_id=change_id,
+            state_revision=state["state_revision"],
+            next_action=action["id"],
+            detail=action["detail"],
+            dry_run=dry_run,
+        )
     from .parallel_delivery import change_readiness
 
     delivery_readiness = change_readiness(
@@ -3615,6 +3925,14 @@ def _validate_review_pack_current(
     current_definition = current_definition_digest(root, state)
     if current_definition != pack["definition_digest"]:
         raise IntegrityError("ReviewPack definition digest is stale")
+    pack_decisions = pack.get("decisions")
+    current_decisions = decision_projection(
+        root,
+        state,
+        derived_approval_statuses(root, state),
+    )
+    if not review_pack_decisions_current(pack_decisions, current_decisions):
+        raise IntegrityError("ReviewPack design or architecture decision is stale")
     pack_profile = pack.get("platform_profile")
     if isinstance(pack_profile, dict):
         current_profile = resolve_profile(root, config=load_config(root))
@@ -6629,6 +6947,7 @@ def _context_manifest_content_digest(manifest: dict[str, Any]) -> str:
             "dls_version": manifest.get("dls_version"),
             "profile": manifest.get("profile"),
             "platform_profile": manifest.get("platform_profile"),
+            "decisions": manifest.get("decisions"),
             "change_id": manifest.get("change_id"),
             "phase": manifest.get("phase"),
             "state_revision": manifest.get("state_revision"),

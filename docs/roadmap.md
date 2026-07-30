@@ -2,14 +2,14 @@
 
 Срез: 30 июля 2026 года
 
-Текущая линия: `v0.9.6`
+Текущая линия: `v0.10.0`
 
 Этот roadmap использует KANO как практический способ расставить приоритеты для
 solo AI-delivery. Must-be защищает доверие к процессу, Performance уменьшает
 ручную работу и повтор контекста, Attractive добавляет удобство только после
 стабилизации основного цикла.
 
-Полный реестр всех 157 реализованных, запланированных, отложенных и намеренно
+Полный реестр всех 159 реализованных, запланированных, отложенных и намеренно
 исключённых возможностей находится в [карте возможностей](capability-catalog.md).
 Этот файл остаётся короткой выборкой ближайших волн, а не вторым каталогом.
 
@@ -31,6 +31,8 @@ Must-be ядро реализовано и защищается regression-те�
   change без model call и нового source of truth.
 - stage-aware parallel delivery: selective worktrees, explicit dependencies,
   overlap preflight и one-writer на change вместо глобальной очереди.
+- typed UI/UX source и conditional architecture decisions: scoped digests,
+  staleness и bounded provenance без обязательного design tool или ADR.
 
 Ранее открытые gaps launcher/PATH, semantic write prevention, remediation
 launcher и единого review-ready handoff закрыты текущим CLI и skills.
@@ -236,21 +238,32 @@ Exit criteria v0.9.6: обе input-only decision lanes физически пол
 реальные EPIC-02a artifacts воспроизводят тот же bundle без изменения product
 source или canonical ReviewIR.
 
-## Следующая волна v0.10.0: UI/UX Attractive pilot
+## v0.10.0 — UI/UX и architecture decision runtime
 
-- `M38–M39` — проверить Tier 1 precedent и Tier 2/3 versioned design artifact на
-  реальном UI change;
-- `M40` — завершить early architecture decision lifecycle на approved critical
-  change;
-- `P30`, `P39` — сравнить routing/context/usage на разрешённых Swift и backend
-  reviews;
-- `P10`, `P12` — менять budgets или model routing только после сопоставимых
-  абсолютных baseline, без публичного процента экономии по одному pilot.
+| ID | KANO | Возможность | Результат |
+|---|---|---|---|
+| M38 | Must-be / P0 | UI/UX source prerequisite | UI change получает typed source либо explicit human bypass до implementation context |
+| M39 | Must-be / P0 | Tiered UI policy | Tier 1 exact precedent, Tier 2 sufficient versioned source, Tier 3 immutable artifact/external version или risk-bearing bypass |
+| M40 | Must-be / P0 | Conditional architecture lifecycle | Separate scoped approval только для explicit architecture impact/ADR; SPEC region достаточен, ADR не обязателен |
+
+Runtime exit criteria v0.10.0: один resolver управляет check/context/candidate/
+review/status/Receipt; design и architecture используют независимые digests;
+combined definition+design approval атомарен; unresolved boundary не запускает
+validation/model calls; context/pack/metrics не раскрывают source refs или raw
+content. Regression и disposable pilots закрывают runtime-контракт.
+
+Реальные Swift UI и backend approved-review pilots зависят от готовности
+product changes и прямых user approvals. До них `M38–M40` остаются partial в
+capability catalog, а `P30`, `P39`, `P10`, `P12` не меняют модели или budgets.
+Read-only preflight на clean draft `EPIC-05a/05b` вернул
+`record-design-source`; backend `RUCORE-E03` с canonical ADR вернул
+`approve-architecture`. Product source, approvals, ReviewPack и model calls не
+изменялись — это подтверждает routing/gates, но не полный lifecycle.
 
 ## Позже, только по данным
 
 - P22 — следующий adapter только из реального web или Android pilot;
-- A01 — Figma, Sketch или другой design connector после UI-пилота и решения
+- A01 — Figma, Sketch или другой design connector после реального UI-пилота и решения
   privacy/versioning;
 - A06 — cross-project dashboard, только если CLI status перестанет справляться;
 - release/production profiles — после стабильного acceptance loop в нескольких

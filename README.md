@@ -47,6 +47,24 @@ DLS не принимает продуктовые решения за вас. �
 
 DLS спроектирован так, чтобы меньше повторять контекст и не тратить модельные вызовы на механическую работу. Мы не обещаем выдуманный процент экономии токенов: сначала измерения, потом цифры.
 
+### UI/UX без обязательного Figma-ритуала
+
+Если изменение затрагивает интерфейс, DLS просит не «нарисовать макет для галочки»,
+а зафиксировать достаточный источник решения:
+
+- Tier 1 переиспользует точный существующий экран или компонент;
+- Tier 2 опирается на версионированный precedent, screenshot, prototype или design artifact;
+- Tier 3 требует immutable artifact/external version либо явного решения человека идти без макета с зафиксированным UX-риском.
+
+Figma, Sketch и конкретный формат не обязательны. Источник привязывается к Git
+blob или внешней immutable version, а человек подтверждает design вместе с
+definition одним вопросом. Изменение макета делает решение stale; правка
+несвязанного текста SPEC не заставляет подтверждать тот же design повторно.
+
+Architecture gate тоже условный. Отдельное раннее подтверждение появляется
+только для явного architecture impact или canonical ADR. В остальных случаях
+архитектура остаётся частью обычного definition review; отдельный ADR не нужен.
+
 ## Proof included
 
 Для DLS доказательство — не длинный отчёт и не уверенный тон агента.
@@ -233,7 +251,10 @@ review запускается в отдельной задаче только д
   `server-backend` дают discovery/evidence vocabulary и advisory domain routing,
   но не могут добавлять команды, gates, approvals, модели или budgets.
 - `server-backend` проверен локальным Vapor/Linux pilot; полноценный backend
-  model-review baseline и UI-пилоты ещё впереди.
+  model-review baseline ещё впереди.
+- Typed UI/UX и architecture runtime покрыт regression и disposable pilots;
+  completion claims для реальных UI/backend pilots останутся partial до
+  пользовательских approvals и готовых product changes.
 - Для работы с существующим проектом нужен Git.
 - DLS не заменяет CI, продуктовую аналитику, security assessment или release-процесс.
 - Установка в общий OpenAI Plugins Directory пока не выполнялась.

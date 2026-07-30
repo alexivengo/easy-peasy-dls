@@ -8,20 +8,22 @@ Insert one early focused architecture decision before completing the SPEC only w
 
 Create an ADR only when the decision outlives the change, controls multiple deliverables or a public contract, governs a migration, or may be superseded independently.
 
-When an ADR is created, ask a scoped `architecture` approval question with the current contract digest before definition approval. Later authored changes stale both records.
+When the trigger applies, record exactly one canonical source: the ADR when one exists, otherwise the bounded `dls:architecture` region in SPEC. Adopted packages may use one unambiguous `## Architecture` or `## Architecture and alternatives` section. Missing or ambiguous content returns `record-architecture-decision`; DLS never guesses.
+
+Ask a scoped `architecture` approval question with the architecture digest before definition approval. Unrelated SPEC edits stale definition approval but preserve the unchanged architecture approval. Editing the decision or ADR stales both architecture and definition approvals.
 
 ## UI and UX
 
-Every `user-interface` change needs one of:
+Every `user-interface` change needs a typed tier and one of:
 
 - an accepted exact existing screen, component, style, prototype, design file, image, PDF, or HTML source; or
 - a scoped user decision to proceed without a sufficient source, naming affected surfaces and UX risk.
 
-Tier 1 precedent changes may use an exact existing implementation reference. Tier 2 material composition needs versioned screenshots, a prototype/design file, or exact accepted precedent. Tier 3 new or complex experience needs a versioned immutable design artifact.
+Tier 1 precedent changes may use an exact existing implementation reference and do not need an artificial mockup. Tier 2 material composition needs versioned screenshots, a prototype/design file, an immutable external version, or exact accepted precedent. Tier 3 new or complex experience needs a versioned immutable design artifact or external version. Any tier may use an explicit human-approved bypass with rationale and `low | medium | high` UX risk.
 
 Cover only applicable states: flow, loading, empty, error, disabled, success, adaptive behavior, accessibility, localization, design-system use, and behavior-changing motion.
 
-Record the source or bypass in the authored contract and the user's design decision in DLS state. Material source changes stale that decision and the definition approval.
+Record source/bypass provenance in DLS state and product intent in the authored contract. Repository sources must be tracked exact Git blobs; external sources require credential-free HTTPS plus an explicit immutable version. Material source, tier, surface, or bypass changes stale design and definition approvals. Unrelated SPEC edits stale definition approval without erasing the unchanged scoped design approval.
 
 ## Scoped approval
 
@@ -35,7 +37,7 @@ or:
 
 Only a direct affirmative reply to that question may be recorded with `actor=codex`, `authority=user`, the prompt, and the response. A user may instead invoke the CLI directly with `actor=user`.
 
-Any authored-content digest change stales definition and design approval. Any commit after review stales review-clear.
+Any authored-content digest change stales definition approval. Design and architecture approvals use their own scoped digests: unrelated authored edits preserve them, while changing the corresponding decision also stales definition approval. Any product commit after review stales review-clear.
 
 Generated Markdown regions, finding dispositions, evidence, and DLS state do not change the authored definition digest. Changing accepted behavior, architecture, a public contract, or acceptance criteria does.
 

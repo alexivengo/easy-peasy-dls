@@ -18,6 +18,8 @@ from .operations import (
     approve,
     build_context,
     check,
+    design_set,
+    design_status,
     doctor,
     evidence_add,
     finding_disposition,
@@ -224,6 +226,33 @@ def build_parser() -> argparse.ArgumentParser:
     status_parser = subparsers.add_parser("status", help="Show derived change status.")
     status_parser.add_argument("change_id")
 
+    design_parser = subparsers.add_parser(
+        "design", help="Manage the typed UI/UX design-source contract."
+    )
+    design_subparsers = design_parser.add_subparsers(
+        dest="design_command", required=True
+    )
+    design_set_parser = design_subparsers.add_parser(
+        "set", help="Record an exact design source or explicit bypass."
+    )
+    design_set_parser.add_argument("change_id")
+    design_set_parser.add_argument("--tier", type=int, required=True, choices=(1, 2, 3))
+    design_set_parser.add_argument("--surface", action="append", default=[], required=True)
+    design_set_parser.add_argument(
+        "--source-kind", choices=("precedent", "artifact", "external-version")
+    )
+    design_set_parser.add_argument("--source-ref")
+    design_set_parser.add_argument("--source-version")
+    design_set_parser.add_argument("--bypass", action="store_true")
+    design_set_parser.add_argument("--rationale")
+    design_set_parser.add_argument("--risk", choices=("low", "medium", "high"))
+    _operation_id(design_set_parser)
+    _dry_run(design_set_parser)
+    design_status_parser = design_subparsers.add_parser(
+        "status", help="Read scoped design status without changing state."
+    )
+    design_status_parser.add_argument("change_id")
+
     check_parser = subparsers.add_parser("check", help="Run deterministic gate checks.")
     check_parser.add_argument("change_id")
     check_parser.add_argument(
@@ -256,6 +285,11 @@ def build_parser() -> argparse.ArgumentParser:
     approve_parser.add_argument("--response")
     approve_parser.add_argument("--git-sha")
     approve_parser.add_argument("--conditions")
+    approve_parser.add_argument(
+        "--include-design",
+        action="store_true",
+        help="Atomically record definition and design from one scoped confirmation.",
+    )
     approve_parser.add_argument("--rationale")
     _revision(approve_parser)
     _operation_id(approve_parser)
@@ -695,6 +729,23 @@ def dispatch(
         )
     if command == "status":
         return status(root, change_id=args.change_id)
+    if command == "design" and args.design_command == "set":
+        return design_set(
+            root,
+            change_id=args.change_id,
+            tier=args.tier,
+            surfaces=_split_values(args.surface),
+            source_kind=args.source_kind,
+            source_ref=args.source_ref,
+            source_version=args.source_version,
+            bypass=args.bypass,
+            rationale=args.rationale,
+            risk=args.risk,
+            operation_id=args.operation_id,
+            dry_run=args.dry_run,
+        )
+    if command == "design" and args.design_command == "status":
+        return design_status(root, change_id=args.change_id)
     if command == "check":
         return check(root, change_id=args.change_id, gate=args.gate)
     if command == "context":
@@ -731,6 +782,7 @@ def dispatch(
             git_sha=args.git_sha,
             conditions=args.conditions,
             operation_id=args.operation_id,
+            include_design=args.include_design,
             dry_run=args.dry_run,
         )
     if command == "ticket" and args.ticket_command == "set":
@@ -959,6 +1011,14 @@ def _human_result(args: argparse.Namespace, result: dict[str, Any]) -> str:
             f"{result['change_id']} r{result['state_revision']} "
             f"{result['phase']}/{result['lifecycle']}; approvals={approval_summary}; "
             f"dirty={len(result['source_dirty_paths'])}; digest={result['definition_digest'][:8]}"
+        )
+    if command == "design":
+        design = result["design"]
+        action = result.get("next_action")
+        return prefix + (
+            f"{result['change_id']}: design tier={design.get('tier')}; "
+            f"mode={design.get('mode')}; approval={design.get('approval')}; "
+            f"next={action.get('id') if isinstance(action, dict) else 'ready'}"
         )
     if command == "check":
         failed = [item["id"] for item in result["checks"] if not item["ok"]]

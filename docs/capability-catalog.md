@@ -1,7 +1,7 @@
 # Полная карта возможностей Easy Peasy DLS
 
 Срез: 30 июля 2026 года
-Текущая линия: `v0.9.6`
+Текущая линия: `v0.10.0`
 
 Этот каталог — канонический реестр возможностей и anti-features продукта. Он
 сохраняет все исторические KANO-ID и дополняет их возможностями, появившимися
@@ -77,9 +77,9 @@
 | M35 | Review не завершается без result path | ✅ | P0 | Успех требует canonical `review_result_path`; actionable result — remediation path |
 | M36 | Findings lifecycle | ✅ | P0 | Implementer ставит addressed/note; verified принадлежит independent review; waiver — человеку |
 | M37 | Latest-only remediation context | ✅ | P0 | Рабочий manifest строится только из последнего canonical ReviewIR |
-| M38 | UI/UX source prerequisite | 🟨 | P0 | Policy и approvals реализованы; реальный UI pilot перенесён в v0.10.0 |
-| M39 | Tiered UI policy | 🟨 | P0 | Tier 1 допускает precedent, Tier 2/3 требуют versioned artifact; реальный pilot перенесён в v0.10.0 |
-| M40 | Architecture decision до завершения SPEC | 🟨 | P0 | Critical E03 adoption и Draft/approval boundary дают backend preflight evidence; нужен полный approved definition/review lifecycle |
+| M38 | UI/UX source prerequisite | 🟨 | P0 | Typed source/bypass, scoped approval и common gates реализованы; completion ждёт реальный UI pilot |
+| M39 | Tiered UI policy | 🟨 | P0 | Tier 1 exact precedent, Tier 2 sufficient versioned source, Tier 3 immutable source/bypass защищены regression; нужен реальный pilot |
+| M40 | Architecture decision до завершения SPEC | 🟨 | P0 | Conditional trigger, SPEC/ADR source и scoped approval реализованы; полный approved backend lifecycle ещё нужен |
 | M41 | ADR только для долговечного решения | ✅ | P0 | ADR остаётся conditional artifact, а не ритуалом для каждого change |
 | M42 | Release/production evidence не подменяет review | ✅ | P0 | External gaps не блокируют code review без прямой ссылки на ticket DoD |
 | M43 | Doctor и runtime/source drift diagnostics | ✅ | P0 | Проверяются plugin provenance, config, schemas, Git и конфликтующие process plugins |
@@ -277,9 +277,15 @@
 
 ### v0.10.0 — UI/UX и полный architecture lifecycle
 
-- `M38–M39`: UI tiers и immutable design source на реальном change;
-- `M40`: approved critical definition/review lifecycle;
-- `P30`, `P39`: сравнимые Swift/backend/UI routing и usage pilots.
+- `M38–M39`: typed UI source/bypass, tier policy, scoped digest/staleness и
+  combined definition+design approval реализованы; real-product pilot остаётся
+  условием статуса completed;
+- `M40`: conditional architecture trigger, bounded SPEC/ADR source и scoped
+  approval реализованы; approved backend definition/review pilot ещё нужен;
+- `P30`, `P39`: безопасная provenance есть, но сравнимые Swift/backend/UI usage
+  данные ещё не собраны; models и budgets не меняются.
+- Read-only product preflight: `EPIC-05a/05b → record-design-source`,
+  `RUCORE-E03 → approve-architecture`; без mutations или model calls.
 
 ### Следующая P1-волна — platform и conflict UX
 
