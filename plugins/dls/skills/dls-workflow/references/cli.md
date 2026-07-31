@@ -1,83 +1,31 @@
-# DLS CLI usage
+# DLS v0.11 CLI
 
-Resolve the plugin root from this skill's installed location and invoke:
-
-```text
-python3 <plugin-root>/scripts/dls.py --root <repo> [--json] <command>
-```
-
-Core commands:
+Invoke the installed plugin-local launcher:
 
 ```text
-dls init
-dls doctor
-dls new
-dls adopt
-dls worktree create|prepare|register|list|verify|unregister
-dls dependency set|list|remove
-dls delivery-map
-dls status
-dls design set|status
-dls check
-dls context
-dls approve
-dls ticket set
-dls evidence add
-dls review-pack
-dls remediation-start
-dls remediation-recover
-dls candidate-ready
-dls candidate-status
-dls review-ready
-dls review-start
-dls review-run
-dls review-status
-dls review-metrics
-dls delivery-status
-dls delivery-receipt
-dls cache-status
-dls cache-prune
-dls review-import
-dls finding set
-dls validate
+python3 <plugin-root>/scripts/dls.py --root <repo> --json <command>
 ```
 
-Rules:
+Public commands:
 
-- Run `--help` for exact arguments; do not guess flags.
-- Use `dls adopt` when compatible authored artifacts already exist. Pass repository-relative `--artifact KEY=PATH` values, an explicit `--ticket-status ID=STATUS` for every declared ticket, and any legacy requirement prefixes. Adoption registers state only; it does not rewrite the package. A shared JSON `traceability` artifact is scoped by the adopted ticket IDs so unrelated epic rows do not stale the definition digest.
-- Use `--dry-run` before a mutation when practical.
-- Low-level mutations require the current revision from `dls status`; `candidate-ready` owns its own state transitions and does not accept one.
-- Reuse a caller-stable `--operation-id` for retries of the same mutation. Never reuse it for a different mutation.
-- Use `--json` when another tool or agent consumes output.
-- Keep named command argv/cwd/env/timeout/output caps in `.dls/config.toml`.
-- Do not add shell commands to Markdown and do not execute model-authored command strings.
-- Evidence summaries must be concise and secret-free. Large raw output belongs only in ignored cache and is bounded by the runner.
-- Resolve this CLI from the loaded skill location as `<plugin-root>/scripts/dls.py`. Never probe `PATH` for `dls`.
-- Review model runs store the bounded final structured result separately from the JSONL diagnostic transcript. Transcript truncation is diagnostic metadata, not a review failure.
-- `dls worktree create CHANGE_ID --base REF --purpose definition|implementation` is the low-level Git-only primitive. It resolves the exact base commit and creates only the requested linked worktree.
-- `dls worktree prepare CHANGE_ID --base REF --purpose implementation` is the standard/critical implementation handoff. It requires a committed current definition approval, transfers state/approval/dependencies and immutable DLS references, verifies the same authored digest, registers one canonical owner, and returns `continue-implementation`. On failure it rolls back a newly-created worktree and never falls back to `adopt` or another checkout.
-- `dls worktree register CHANGE_ID /absolute/path [--base REF] [--purpose ...]` stores local routing under the repository's Git common-dir. Registration requires the same Git repository, a real linked worktree, unchanged branch identity, initialized DLS state, and the named change.
-- `dls dependency set CHANGE_ID --on OTHER --blocks STAGE --requires STATE --rationale TEXT` records a stage-aware same-repository dependency. Earlier stages continue. `accepted-in-base` requires current human acceptance plus Git ancestry, unless an exact scoped human exception names both SHAs and the dependency digest.
-- `dls dependency list|remove` are deterministic state operations. Dependency changes stale the dependent definition approval, context, candidate contract, and ReviewPack.
-- `dls delivery-map` is read-only and bounded. It shows active registered changes, dependency readiness, overlap counts, safe parallel groups, and one typed next action without local paths unless `--verbose` is explicit.
-- `dls design set CHANGE_ID --tier ... --surface ...` records either an exact source (`precedent | artifact | external-version`) or an explicit `--bypass --rationale ... --risk ...`. Repository sources must be tracked and clean; external sources require HTTPS plus `--source-version`. `design status` is read-only and never returns the source ref, raw content, or bypass rationale.
-- `dls approve CHANGE_ID --decision definition [--include-design] [--include-architecture]` atomically records every explicitly confirmed definition/design/architecture decision as separate records in one bundle. Standalone `--decision design` and `--decision architecture` remain available for early decisions and legacy recovery. Definition approval is rejected when a required scoped decision is neither already explicit-current nor included. The prompt and user response must name every bundled decision and current short digest.
-- `dls review-start CHANGE_ID` resolves the canonical owner through the explicit worktree registry before selecting the latest unfinished exact-HEAD ReviewPack. A portable or stale state copy in the caller checkout never overrides a registered owner. It never initializes/adopts, scans sibling directories, or infers branches. An absolute `--pack` remains the explicit one-off cross-checkout selector.
-- `dls remediation-start CHANGE_ID` verifies and returns the canonical manifest created atomically with the latest actionable ReviewIR. It is read-only and may route to a registered owner worktree.
-- `dls remediation-recover CHANGE_ID [--review-id ID]` is the explicit legacy-only repair path. It validates exact Git objects, ancestry, definition, ReviewPack and ReviewIR digests without switching the checkout, then creates the missing canonical manifest.
-- `dls candidate-ready CHANGE_ID [--base BASE] [--address ID] [--note ID] [--extra-command ID]` is the implementation-side orchestration command. It requires explicit `policy.review_required_commands`, reuses only exact-contract evidence, runs trusted commands sequentially, records dispositions, and atomically creates the ReviewPack. The first review requires `--base`; remediation infers it. The first remediation attempt declares every actionable finding. A later descendant candidate inherits that declaration only when ReviewIR, manifest, definition, policy, finding set, and Git ancestry still match; supplied finding flags then act as explicit overrides. The skill invokes it after the candidate commit; the user does not.
-- `dls candidate-status CHANGE_ID [--diagnostic]` is read-only telemetry and never runs a command. Default output remains compact and log-free. `--diagnostic` adds only the last bounded redacted validation failure when the original command payload was lost.
-- `dls review-ready CHANGE_ID [--base BASE]` is the candidate gateway. The first review requires `--base`; remediation infers it from the latest ReviewIR. It either creates a full/remediation ReviewPack v2 and returns `open-review-task`, or returns one typed `next_action`. Repeat review must not call raw `review-pack`.
-- `dls review-run CHANGE_ID --stream` is the public standard/critical review orchestration command. It resolves human decision readiness before looking for a ReviewPack. A pending decision returns `status: not-prepared` plus the exact typed approval action without creating a pipeline or model call. After a green decision gate it selects the exact-HEAD pack, runs the risk-adaptive bounded pipeline with single-flight protection, creates ReviewIR, and imports it. The stream replaces status polling. A completed `not-clear` verdict exits successfully.
-- A completed standard/critical native call that returned only unstructured prose may be recovered as transcript-verified `indeterminate` input. It is never treated as clean, forces semantic reconciliation, and does not rerun the native model. Unsafe output returns `inspect-review-output`; digest or input drift returns `inspect-review-integrity`.
-- `dls review-metrics CHANGE_ID [--refresh] [--verbose]` reads sanitized child and controller usage. Active controller totals are lower bounds; unavailable native usage is never reported as zero.
-- `dls delivery-status CHANGE_ID` returns one compact typed next action. `cache-status` is read-only; `cache-prune` previews retention unless `--apply` is explicit.
-- `dls delivery-receipt CHANGE_ID` renders a deterministic Russian Markdown summary; global `--json` returns `dls-delivery-receipt/v1`. It reads only canonical state and immutable artifacts, writes nothing, launches no model, and never treats `review-clear`, `accept`, release, or production as the same boundary. Normal workflow shows it automatically after imported review and acceptance; the user does not run it manually.
-- `dls review-status CHANGE_ID [--review-id ID]` is read-only and compact by
-  default. It never launches a model. `--verbose` adds full argv, paths, and
-  provenance only for diagnostics.
-- `dls review-start CHANGE_ID` remains a native-only compatibility and diagnostic primitive.
-- Implementation/remediation tasks call only `candidate-ready` after commit and stop at `open-review-task`; only a separate explicit review task invokes `review-run`.
-- `finding set`, `validate`, `evidence add`, and `review-ready` remain low-level diagnostics and compatibility primitives. Normal implementation/remediation uses `candidate-ready`, which binds all required successful evidence to each addressed finding. `verified` remains available only through independent `review-import`; legacy `resolved` is treated as `addressed`.
-- Native review model and effort are fixed inside `review-start`; do not change global Codex model configuration.
+```text
+init
+doctor
+new
+adopt
+upgrade --dry-run|--apply
+status CHANGE_ID [--details findings|receipt|metrics|history]
+approve CHANGE_ID --decision definition|architecture|design|accept
+ticket CHANGE_ID TICKET_ID --status STATUS
+dependency set|list|remove
+candidate-ready CHANGE_ID [--base REF] [--address ID] [--note ID]
+review-run CHANGE_ID --kind definition|code --stream
+worktree prepare CHANGE_ID --base REF
+```
+
+Use `--help` for exact flags. Normal users do not type these commands. The skill
+does not pass operation IDs, state revisions, ReviewPack paths, evidence paths,
+or arbitrary argv.
+
+Expected boundary results use exit code 0 and a typed `next_action`. Non-zero
+means usage, integrity, configuration, or infrastructure failure.

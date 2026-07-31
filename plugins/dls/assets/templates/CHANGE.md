@@ -33,4 +33,6 @@ Kind: `{{KIND}}`
 
 ## UI/UX source
 
+<!-- dls:design:start -->
 {{UI_SOURCE}}
+<!-- dls:design:end -->

@@ -3,12 +3,7 @@ docs_root = "docs/changes"
 default_profile = "generic"
 
 [policy]
-require_git_for_acceptance_review = true
-max_spawned_agents = 3
-max_agent_depth = 1
-# Stage-specific validation gates. candidate-ready requires an explicit
-# review_required_commands list. Low-level review-ready keeps the compatibility
-# rule of at least one current successful command when the list is omitted.
+# candidate-ready executes only these repository-owned named commands.
 # review_required_commands = ["test", "lint"]
 # acceptance_required_commands = ["test", "integration"]
 
@@ -21,11 +16,3 @@ max_agent_depth = 1
 # timeout_seconds = 300
 # max_output_bytes = 131072
 # env_allow = ["CI"]
-
-# Optional risk-budget overrides. Omitted values use plugin-owned defaults.
-# [review_budgets.standard]
-# aggregate_tokens = 3000000
-# lane_tokens = 1500000
-# command_events = 24
-# timeout_seconds = 900
-# transcript_bytes = 786432

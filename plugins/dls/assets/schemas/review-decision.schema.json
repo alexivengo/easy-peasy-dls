@@ -1,36 +1,43 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "dls://schemas/review-decision/v1",
+  "$id": "dls://schemas/review-decision/v3",
   "title": "DLS review decision",
   "type": "object",
   "required": [
     "verdict",
     "summary",
     "findings",
+    "ticket_verdicts",
+    "requirement_verdicts",
     "prior_finding_verdicts"
   ],
   "properties": {
     "verdict": {
-      "enum": [
-        "review-clear",
-        "not-clear",
-        "blocked"
-      ]
+      "enum": ["review-clear", "not-clear", "blocked"]
     },
     "summary": {
-      "type": "string"
+      "type": "string",
+      "maxLength": 4000
     },
     "findings": {
       "type": "array",
-      "items": {
-        "$ref": "#/$defs/finding"
-      }
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/finding"}
+    },
+    "ticket_verdicts": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {"$ref": "#/$defs/ticketVerdict"}
+    },
+    "requirement_verdicts": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/requirementVerdict"}
     },
     "prior_finding_verdicts": {
       "type": "array",
-      "items": {
-        "$ref": "#/$defs/priorFindingVerdict"
-      }
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/priorFindingVerdict"}
     }
   },
   "$defs": {
@@ -50,65 +57,58 @@
         "provenance"
       ],
       "properties": {
-        "id": {
-          "type": "string"
-        },
-        "severity": {
-          "enum": [
-            "blocker",
-            "should-fix",
-            "note"
-          ]
-        },
+        "id": {"type": "string"},
+        "severity": {"enum": ["blocker", "should-fix", "note"]},
         "kind": {
-          "enum": [
-            "defect",
-            "validation-gap",
-            "governance",
-            "external",
-            "design"
-          ]
+          "enum": ["defect", "validation-gap", "governance", "external", "design"]
         },
-        "location": {
-          "type": "string"
-        },
-        "issue": {
-          "type": "string"
-        },
-        "impact": {
-          "type": "string"
-        },
-        "required_fix": {
-          "type": "string"
-        },
+        "location": {"type": "string"},
+        "issue": {"type": "string"},
+        "impact": {"type": "string"},
+        "required_fix": {"type": "string"},
         "ticket_ids": {
           "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "items": {"type": "string"}
         },
         "requirement_ids": {
           "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "items": {"type": "string"}
         },
         "blocks": {
           "type": "array",
           "items": {
-            "enum": [
-              "review",
-              "acceptance",
-              "release",
-              "production"
-            ]
+            "enum": ["review", "acceptance", "release", "production"]
           }
         },
         "provenance": {
           "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "ticketVerdict": {
+      "type": "object",
+      "required": ["ticket_id", "verdict", "finding_ids"],
+      "properties": {
+        "ticket_id": {"type": "string"},
+        "verdict": {"enum": ["clear", "not-clear", "blocked"]},
+        "finding_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "requirementVerdict": {
+      "type": "object",
+      "required": ["requirement_id", "verdict", "finding_ids"],
+      "properties": {
+        "requirement_id": {"type": "string"},
+        "verdict": {"enum": ["clear", "not-clear", "blocked"]},
+        "finding_ids": {
+          "type": "array",
+          "items": {"type": "string"}
         }
       },
       "additionalProperties": false
@@ -122,29 +122,12 @@
         "evidence"
       ],
       "properties": {
-        "finding_id": {
-          "type": "string"
-        },
-        "verdict": {
-          "enum": [
-            "verified",
-            "still-open",
-            "regressed",
-            "waived"
-          ]
-        },
-        "replacement_finding_id": {
-          "description": "Must be null for verified/waived. For still-open/regressed it must name a new complete finding in this decision and must differ from finding_id.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
+        "finding_id": {"type": "string"},
+        "verdict": {"enum": ["verified", "still-open", "regressed", "waived"]},
+        "replacement_finding_id": {"type": ["string", "null"]},
         "evidence": {
           "type": "array",
-          "items": {
-            "type": "string"
-          }
+          "items": {"type": "string"}
         }
       },
       "additionalProperties": false

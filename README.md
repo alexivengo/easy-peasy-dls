@@ -1,271 +1,89 @@
 <p align="center">
-  <img src="assets/easy-peasy-dls-github-cover.png" alt="Easy Peasy DLS cover: бегущий лимон и логотип Easy Peasy DLS">
+  <img src="assets/easy-peasy-dls-logo.png" alt="Easy Peasy DLS" width="420">
 </p>
 
 # Easy Peasy DLS
 
-*Simple AI delivery. Proof included.*
-
-[![Проверка](https://github.com/alexivengo/easy-peasy-dls/actions/workflows/ci.yml/badge.svg)](https://github.com/alexivengo/easy-peasy-dls/actions/workflows/ci.yml)
-[![Релиз](https://img.shields.io/github/v/release/alexivengo/easy-peasy-dls?display_name=tag)](https://github.com/alexivengo/easy-peasy-dls/releases)
-[![Лицензия: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+Simple AI delivery. Proof included.
 
 > [!WARNING]
-> **Альфа-версия / Public Preview.**
->
-> Возможны сбои, несовместимые изменения и некорректная работа отдельных workflow. Держите работу в Git и не используйте DLS как единственный механизм контроля критичных изменений или релизов.
+> **Public preview.** Easy Peasy DLS is alpha software. Contracts may change and
+> failures are possible. Keep Git backups and inspect human decision prompts.
 
-## AI-разработка становилась умнее. Мой процесс становился тяжелее.
+**AI-разработка становилась умнее. Мой процесс становился тяжелее.**
 
-За год мой рабочий процесс оброс длинными промтами, десятками документов, конфликтующими навыками, лишними агентами и повторной передачей одного и того же контекста. Сначала этот набор помогал соло разрабатывать iOS-приложения. Затем появились веб, Android и backend, а вместе с новой линейкой моделей Codex часть старых правил превратилась из преимущества в помеху.
+Длинные промты, повтор одного контекста, десятки промежуточных документов и
+сложный recovery начали отнимать больше внимания, чем продукт. Easy Peasy DLS
+оставляет важные решения человеку, а проверяемую механику выполняет локально.
 
-Каждая новая функция начинала требовать церемонии: отдельный бриф, список эпиков, пакет спецификации, несколько сессий критики, implementation tickets, очередной длинный промт для реализации, отдельный review и ручное копирование findings обратно. Даже когда изменение было небольшим.
+## Как это выглядит
 
-В результате:
+1. **Сформулировали.** Для небольшой задачи достаточно `CHANGE.md`; для
+   существенной — SPEC и при необходимости tickets/ADR. Definition,
+   architecture и design подтверждаются отдельно.
+2. **Сделали.** Codex пишет код. `candidate-ready` запускает только заранее
+   зарегистрированные проверки и связывает PASS с точным Git HEAD.
+3. **Независимо проверили.** Отдельный read-only review анализирует exact HEAD и
+   возвращает canonical ReviewIR.
+4. **Приняли.** Человек отдельно принимает реализацию. Release и production
+   остаются отдельными границами.
 
-- модели тратили токены на перечитывание одинакового контекста;
-- документы начинали обслуживать процесс, а не продукт;
-- навыки и промты спорили между собой за право управлять работой;
-- соло-разработчик получал имитацию большой команды вместо полезного контроля;
-- зелёные тесты и слова «готово» не всегда относились к одной и той же версии кода.
+Обычный пользователь не вводит CLI, SHA, пути к evidence или ReviewPack.
 
-Easy Peasy DLS появился как попытка оставить контроль и качество — но убрать процесс ради процесса.
+## Что изменилось в v0.11 Core Reset
 
-## Что меняется
+- 12 публичных команд вместо 30;
+- один current state вместо operation/recovery ledger;
+- routine/standard — один structured Terra review;
+- critical — Terra и максимум один Sol reviewer по доказанному риску;
+- один compact repair для некорректного JSON, без повторного анализа source;
+- одна dependency: `implementation requires OTHER_CHANGE accepted-in-base`;
+- Git остаётся источником истины о worktree;
+- legacy v1/v2 artifacts архивируются и больше не исполняются.
 
-DLS не принимает продуктовые решения за вас. Он автоматизирует механику вокруг них.
-
-1. **Сформулировали.** Человек подтверждает, что именно нужно сделать и по каким признакам результат будет принят.
-2. **Сделали.** Codex реализует изменение, а повторяемые проверки, состояние и evidence ведут детерминированные инструменты.
-3. **Независимо проверили.** Review привязан к точной Git-ревизии, утверждённому definition и актуальным результатам проверок.
-
-Небольшая правка не обязана становиться эпиком. DLS выбирает минимальный путь:
-
-- `micro` и `routine` остаются короткими;
-- `standard` добавляет ровно столько определения и review, сколько нужно;
-- `roadmap` и `critical` получают архитектурные, UX и risk-gates только при реальном основании.
-
-DLS спроектирован так, чтобы меньше повторять контекст и не тратить модельные вызовы на механическую работу. Мы не обещаем выдуманный процент экономии токенов: сначала измерения, потом цифры.
-
-### UI/UX без обязательного Figma-ритуала
-
-Если изменение затрагивает интерфейс, DLS просит не «нарисовать макет для галочки»,
-а зафиксировать достаточный источник решения:
-
-- Tier 1 переиспользует точный существующий экран или компонент;
-- Tier 2 опирается на версионированный precedent, screenshot, prototype или design artifact;
-- Tier 3 требует immutable artifact/external version либо явного решения человека идти без макета с зафиксированным UX-риском.
-
-Figma, Sketch и конкретный формат не обязательны. Источник привязывается к Git
-blob или внешней immutable version, а человек подтверждает design вместе с
-definition одним вопросом. Изменение макета делает решение stale; правка
-несвязанного текста SPEC не заставляет подтверждать тот же design повторно.
-
-Architecture gate тоже условный. Отдельное раннее подтверждение появляется
-только для явного architecture impact или canonical ADR. В остальных случаях
-архитектура остаётся частью обычного definition review; отдельный ADR не нужен.
-
-## Proof included
-
-Для DLS доказательство — не длинный отчёт и не уверенный тон агента.
-
-- candidate привязан к точному Git SHA;
-- validation запускает только доверенные команды из конфигурации репозитория;
-- evidence должно относиться к текущей ревизии;
-- native review работает в чистом standalone clone и не видит локальный DLS sidecar рабочего checkout;
-- independent review нельзя закрыть силами implementer;
-- remediation проверяет предыдущие findings и изменившийся blast radius;
-- review имеет risk-adjusted targets и hard ceilings; уже завершённый валидный
-  output внутри bounded recovery window не оплачивается второй раз;
-- финальная whole-change проверка remediation получает exact patch/coverage
-  bundle без unrestricted product checkout;
-- `review-clear`, пользовательский `accept` и готовность к release остаются разными состояниями.
-
-Это позволяет ответить не только «что сделал Codex?», но и «для какой версии это действительно проверено?».
-
-После канонического review DLS автоматически показывает **Delivery Receipt** —
-короткую русскую сводку для конкретного change. Она собирается на лету из
-state, exact-HEAD evidence, ReviewIR и human approvals: без LLM, без нового файла
-в репозитории и без второго source of truth. Receipt отдельно показывает
-definition, implementation, validation, review, acceptance, release и
-production, поэтому зелёный review не выглядит как готовый production release.
-Тот же Receipt обновляется после `accept`.
-
-## Это не ещё одна виртуальная software-компания
-
-[Superpowers](https://github.com/obra/superpowers), [GSD Core](https://github.com/open-gsd/gsd-core) и [BMAD](https://github.com/bmad-code-org/BMAD-METHOD) решают более широкие задачи: предлагают полноценную методологию, фазовый процесс, специализированные роли или автономную работу агентов.
-
-Easy Peasy DLS намеренно уже. Это небольшой Codex-native delivery layer для разработчика, который хочет:
-
-- сам принимать продуктовые и архитектурные решения;
-- не запускать команду агентов по умолчанию;
-- создавать документы только когда они разделяют реальную ответственность;
-- автоматизировать state, evidence, review handoff и integrity checks;
-- одинаково работать с iOS, Android, web и backend.
-
-Если вам нужна готовая методология или виртуальная команда — рассмотрите BMAD, GSD Core или Superpowers. Если вы уже умеете создавать продукт и хотите меньше процессного шума, сохранив контроль и проверяемость, — для этого создан Easy Peasy DLS.
-
-[Подробное сравнение подходов](docs/comparison.md)
+Подробности и migration: [Core Reset](docs/v0.11.0-core-reset.md).
 
 ## Установка
-
-Нужен актуальный Codex App или Codex CLI с поддержкой plugins.
 
 ```sh
 codex plugin marketplace add alexivengo/easy-peasy-dls
 codex plugin add dls@easy-peasy-dls
 ```
 
-После установки откройте новую задачу. Skills загружаются только в новых задачах.
-
-## Первые команды
-
-Навык **Easy Peasy DLS: процесс** можно выбрать вручную. В репозитории с уже
-настроенным DLS он также активируется без skill-chip, но только при однозначном
-DLS-контексте. Обычные coding/review-задачи без DLS-сигналов не перехватываются.
-
-Для изменения или новой функции напишите:
+В Codex выберите **Easy Peasy DLS: процесс** или просто продолжайте работу в
+репозитории с `.dls`:
 
 ```text
-Помоги сформулировать и реализовать эту функцию.
+Реализуй EPIC-02a.
+Проведи code review EPIC-02a.
+Исправь findings последнего review EPIC-02a.
 ```
 
-Для бага выберите **Easy Peasy DLS: отладка** и напишите:
+## Proof included
 
-```text
-Разберись, почему это не работает, и исправь причину.
-```
+DLS различает:
 
-Для `standard` и `critical` review достаточно:
+- implemented;
+- validated на exact HEAD;
+- review-clear;
+- accepted человеком;
+- release;
+- production.
 
-```text
-Проведи code review EPIC-01.
-```
+Один статус не подменяет другой. Receipt доступен через
+`status CHANGE_ID --details receipt` и вычисляется без LLM.
 
-После любого actionable review — включая `review-clear` с замечанием, которое
-блокирует только acceptance, — откройте свежую implementation-задачу и напишите
-только:
+## Не ещё один большой framework
 
-```text
-Исправь findings последнего review EPIC-01.
-```
+BMAD, GSD и Superpowers полезны, когда нужна готовая методология или виртуальная
+команда. Easy Peasy DLS — компактный Codex-native delivery layer для
+разработчика, который уже принимает продуктовые решения сам и хочет
+автоматизировать proof, а не бюрократию.
 
-После готовности candidate откройте свежую review-задачу с предыдущей короткой
-командой. ReviewIR, manifest, SHA и пути между задачами переносить не нужно.
+- [Как это работает](docs/how-it-works.md)
+- [Технический контракт](docs/technical-reference.md)
+- [Сравнение](docs/comparison.md)
+- [Roadmap](docs/roadmap.md)
+- [Текущие возможности](docs/capability-catalog.md)
 
-После committed candidate handoff короткой команды достаточно. DLS найдёт
-зарегистрированный worktree и выберет exact-HEAD pack, подготовленный
-`candidate-ready`. Если remediation pack ещё не создан, но current-HEAD
-dispositions уже полны, runner сам выполнит trusted validation и безопасно
-достроит handoff. Product source при этом остаётся read-only.
-
-Затем один single-flight runner выполнит только нужные native, specialist и
-semantic passes, соберёт ReviewIR и импортирует его. Переносить пути, запускать
-subagents или вручную собирать provenance не нужно. Human approval DLS всё равно
-не запишет без вашего прямого подтверждения.
-
-Если на definition-границе одновременно готовы design или architecture,
-DLS задаёт один вопрос со всеми short digests. Ваш ответ должен явно назвать
-каждое решение; после этого отдельные approvals записываются атомарно. Review,
-встретивший неподтверждённое решение, не падает из-за отсутствующего pack и не
-пытается принять решение за вас — он возвращает короткий handoff в
-implementation/definition-задачу.
-
-Для параллельного standard/critical change DLS сначала требует закоммитировать
-authored definition, а затем одним атомарным handoff создаёт owner worktree и
-переносит туда approval, dependencies и state. Повторно инициализировать change
-или копировать документы не нужно. Changelog и validation evidence не считаются
-изменением спецификации и не вызывают ложный запрос нового approval.
-
-Если встроенный `codex exec review` завершился успешно, но вместо обещанного
-structured JSON вернул обычный итоговый текст, DLS не объявляет такой ответ
-чистым review. Для standard/critical change runner сверяет его с неизменяемым
-JSONL transcript, помечает native decision как `indeterminate` и передаёт на
-независимую semantic reconciliation. Уже завершённый native-вызов при этом не
-оплачивается повторно.
-
-До review evidence тоже не нужно вести вручную. После того как Codex исправил
-код и закоммитил candidate, навык сам запускает один внутренний
-`candidate-ready`: DLS последовательно выполняет доверенные проверки из
-`.dls/config.toml`, сохраняет компактное evidence, связывает его с findings и
-создаёт ReviewPack. Пользователь видит итоговый handoff в отдельную
-review-задачу, а не цепочку SHA, revision и evidence-команд. Для `routine`
-отдельная задача не нужна: `candidate-ready` запускает ровно один изолированный
-Terra/high review и возвращает обычный канонический ReviewIR.
-
-Исторический candidate никогда не выдаётся за текущий: status проверяет HEAD,
-pack и digest. DLS использует CLI только из реально загруженного plugin bundle;
-при отсутствующей или несовпадающей версии он просит переустановить плагин, а не
-ищет случайный `dls` в `PATH` или соседнем checkout.
-
-Во время длинного review один процесс отдаёт компактный поток переходов и не
-вываливает сырые model transcripts или предварительные findings. Техническая
-телеметрия хранится локально: длительность, retries, размер контекста и доступные
-token counters. Недоступные токены показываются как `unavailable`, активная
-управляющая задача — как lower bound. Если финальная сборка прервётся, DLS
-возобновит её из завершённых lanes без повторной оплаты model-review.
-
-DLS также различает свежую задачу, продолжение того же delivery-cycle и
-повторное использование длинной задачи для другого cycle или роли. Это
-advisory, а не новый gate: работа не останавливается, но один раз появляется
-рекомендация открыть свежую задачу. Raw Codex thread/turn ID остаются только в
-ignored локальной telemetry; state и публичные artifacts получают лишь
-безопасный агрегат `task_context`.
-
-Несколько независимых changes больше не блокируют друг друга на уровне всего
-репозитория. Для standard/critical работы DLS может подготовить отдельный
-linked worktree от явно выбранного Git SHA, записать stage-aware dependency и
-показать общую `delivery-map`. Definition разрешено вести параллельно, даже если
-implementation ждёт принятия другого change. Один writer сохраняется внутри
-каждого change; одинаковые файлы сериализуют только поздний candidate handoff,
-а не запрещают раннюю работу. DLS не создаёт Codex-задачи, не запускает
-subagents и не выполняет rebase/merge автоматически.
-
-Если semantic-модель вернула логически противоречивый JSON — например, оставила
-finding открытым, но не создала обязательную replacement-ссылку, — DLS не
-повторяет весь анализ репозитория. Один компактный Sol repair получает только
-исходный JSON, полный список точных ошибок и допустимые ID. Все однозначно
-классифицированные ошибки исправляются за один bounded pass. Product source,
-native output и другие review-драфты в этот вызов не передаются.
-
-После импорта DLS показывает findings как обычный severity-first отчёт и как
-inline-комментарии непосредственно у проверенных строк. Комментарии строятся из
-канонического ReviewIR и выводятся только пока checkout остаётся на reviewed
-HEAD; они не становятся отдельным источником статуса review.
-
-Следом DLS показывает Delivery Receipt. При любом actionable finding замечания
-остаются первыми, затем идёт сводка и короткий remediation handoff. Чистый
-`review-clear` становится итогом перед вашим `accept` только когда acceptance
-gate действительно проходит. Отдельную команду для этого запускать не нужно.
-
-Если review находит проблемы, DLS в той же атомарной операции сохраняет
-канонический remediation-контекст. Исправления выполняются в implementation-
-задаче, которая заканчивается готовым candidate и handoff. Следующий независимый
-review запускается в отдельной задаче только для `standard` и `critical`.
-
-## Что читать дальше
-
-- [Как устроен рабочий процесс](docs/how-it-works.md)
-- [Чем DLS отличается от других подходов](docs/comparison.md)
-- [Технический справочник](docs/technical-reference.md)
-- [Roadmap и приоритеты KANO](docs/roadmap.md)
-- [Полная карта возможностей и anti-features](docs/capability-catalog.md)
-- [Как внести вклад](CONTRIBUTING.md)
-- [Как сообщить об уязвимости](SECURITY.md)
-
-## Границы Public Preview
-
-- DLS пока ориентирован на Codex.
-- Platform profiles теперь участвуют в runtime: `generic`, `apple` и
-  `server-backend` дают discovery/evidence vocabulary и advisory domain routing,
-  но не могут добавлять команды, gates, approvals, модели или budgets.
-- `server-backend` проверен локальным Vapor/Linux pilot; полноценный backend
-  model-review baseline ещё впереди.
-- Typed UI/UX и architecture runtime покрыт regression и disposable pilots;
-  completion claims для реальных UI/backend pilots останутся partial до
-  пользовательских approvals и готовых product changes.
-- Для работы с существующим проектом нужен Git.
-- DLS не заменяет CI, продуктовую аналитику, security assessment или release-процесс.
-- Установка в общий OpenAI Plugins Directory пока не выполнялась.
-
-MIT © 2026 Alexey Burlakov
+MIT © Alexey Burlakov

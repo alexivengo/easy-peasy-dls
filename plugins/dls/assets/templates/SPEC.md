@@ -38,7 +38,26 @@ ID: `{{ID}}`
 
 ## UI/UX contract
 
+<!-- dls:design:start -->
 {{UI_SOURCE}}
+<!-- dls:design:end -->
+
+For a UI change use one committed contract:
+
+```text
+Mode: source
+Kind: precedent | artifact | external-version
+Reference: repository/path-or-https-url
+Version: git:<blob-sha> | immutable-external-version
+Rationale: why this source governs the change
+```
+
+Or explicitly bypass mockups:
+
+```text
+Mode: bypass
+Rationale: why implementation without a design source is acceptable
+```
 
 ## Validation intent
 

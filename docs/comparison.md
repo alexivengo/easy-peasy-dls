@@ -8,7 +8,7 @@
 |---|---|---|---|---|
 | Главная задача | Управляемая доставка с exact-revision proof | Полная методология разработки через composable skills | Context engineering и spec-driven phase loop | Полный scale-adaptive lifecycle с ролями и workflows |
 | Базовый режим | Минимальный путь по риску | Skills включаются автоматически, процесс обязателен | Discuss → Plan → Execute → Verify → Ship | Структурированные analysis, planning, architecture и implementation |
-| Агенты | Не по умолчанию; до трёх specialist lanes по риску | Subagent-driven development и отдельные review-этапы | Heavy work в fresh-context subagents, parallel execution waves | 12+ специализированных ролей и Party Mode |
+| Агенты | Не по умолчанию; critical получает не более одного дополнительного risk-reviewer | Subagent-driven development и отдельные review-этапы | Heavy work в fresh-context subagents, parallel execution waves | 12+ специализированных ролей и Party Mode |
 | Документы | Условные: от отсутствия пакета до EPIC/SPEC/TICKETS | Design и детальный implementation plan | Structured artifacts между фазами и сессиями | Артефакты полного жизненного цикла |
 | Контроль человека | Явные definition approval, waiver и accept | Человек подтверждает design, далее возможна длительная автономная работа | Решения фиксируются перед plan, затем фазовый execution | Фасилитируемая работа с экспертными AI-ролями |
 | Проверяемость | Candidate SHA, current evidence, ReviewPack/ReviewIR, независимое закрытие findings | TDD, verification и code-review skills | Verify step и fix plans перед завершением фазы | Risk-based testing и workflow-specific проверки |
@@ -24,7 +24,7 @@ Easy Peasy DLS отличается не отказом от discipline, а об
 
 - skills выбираются явно либо активируются только в подтверждённом DLS-контексте;
 - TDD, worktree и subagents не обязательны для каждой задачи;
-- механические инварианты принадлежат CLI и schemas;
+- механические инварианты принадлежат компактному CLI и одному runtime schema;
 - human approvals и exact-revision review являются отдельными проверяемыми объектами.
 
 ## GSD Core
@@ -41,7 +41,10 @@ Easy Peasy DLS тоже сокращает replay контекста, но не 
 
 Это сильный выбор, если нужна готовая структура продуктовой и инженерной команды или фасилитация незнакомых ролей.
 
-Easy Peasy DLS не моделирует организацию. В нём нет обязательных PM, Architect, UX и Developer personas. Domain specialist подключается только при реальном risk trigger, а владелец продукта остаётся в диалоге напрямую с Codex.
+Easy Peasy DLS не моделирует организацию. В нём нет обязательных PM, Architect,
+UX и Developer personas. Для critical change DLS может добавить ровно одного
+независимого risk-reviewer по фиксированному trigger, а владелец продукта
+остаётся в диалоге напрямую с Codex.
 
 ## Как выбрать
 

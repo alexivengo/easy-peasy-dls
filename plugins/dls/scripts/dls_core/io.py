@@ -7,7 +7,7 @@ import json
 import os
 import re
 import tempfile
-import time
+import fcntl
 from contextlib import AbstractContextManager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,11 +33,8 @@ def sha256_bytes(payload: bytes) -> str:
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def canonical_text(text: str) -> str:
@@ -132,10 +129,8 @@ def safe_resolve(root: Path, relative: str | Path, *, must_exist: bool = False) 
         raise IntegrityError(f"Absolute paths are not allowed: {relative}")
     root_resolved = root.resolve()
     resolved = (root_resolved / candidate).resolve(strict=must_exist)
-    try:
-        resolved.relative_to(root_resolved)
-    except ValueError as exc:
-        raise IntegrityError(f"Path escapes repository root: {relative}") from exc
+    if not resolved.is_relative_to(root_resolved):
+        raise IntegrityError(f"Path escapes repository root: {relative}")
     return resolved
 
 
@@ -148,39 +143,35 @@ def redact_text(value: str) -> str:
 
 
 class FileLock(AbstractContextManager["FileLock"]):
-    """Exclusive lock with diagnostics; stale locks are never silently removed."""
+    """Crash-safe advisory lock for the supported macOS/Linux runtimes."""
 
     def __init__(self, path: Path, *, stale_after_seconds: int = 300) -> None:
         self.path = path
-        self.stale_after_seconds = stale_after_seconds
-        self._acquired = False
+        self._handle: Any | None = None
 
     def __enter__(self) -> "FileLock":
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "pid": os.getpid(),
-            "created_at": utc_now(),
-            "monotonic": time.monotonic(),
-        }
+        handle = self.path.open("a+", encoding="utf-8")
         try:
-            descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError as exc:
-            age = max(0.0, time.time() - self.path.stat().st_mtime)
-            stale = age >= self.stale_after_seconds
-            qualifier = "stale" if stale else "active"
-            raise LockError(
-                f"State lock is {qualifier}: {self.path} (age={age:.1f}s). "
-                "Inspect the owner before removing it."
-            ) from exc
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        self._acquired = True
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            handle.close()
+            raise LockError(f"State lock is active: {self.path}") from exc
+        handle.seek(0)
+        handle.truncate()
+        json.dump({"pid": os.getpid(), "created_at": utc_now()}, handle, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+        self._handle = handle
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        if self._acquired:
-            self.path.unlink(missing_ok=True)
-            self._acquired = False
+        if self._handle is not None:
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+            self._handle.close()
+            self._handle = None
+            try:
+                self.path.unlink()
+            except FileNotFoundError:
+                pass

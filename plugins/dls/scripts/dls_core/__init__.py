@@ -15,4 +15,4 @@ def _plugin_version() -> str:
 
 
 VERSION = _plugin_version()
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
