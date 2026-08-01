@@ -42,6 +42,8 @@ Simple AI delivery. Proof included.
   should-fix и не тратит второй model call;
 - валидный actionable result больше не теряется из-за budget failure
   необязательной lane.
+- промежуточный remediation-коммит остаётся checkpoint: DLS готовит ReviewPack
+  один раз, только после полной обработки текущих findings.
 
 ## Что изменилось в v0.11 Core Reset
 

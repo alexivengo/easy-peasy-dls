@@ -139,6 +139,13 @@ A canonical completion always returns `review_result_path`.
 Implementation owns only `addressed` and `note`. A human may explicitly waive.
 Independent ReviewIR owns `verified`, `still-open` and `regressed`.
 
+A clean commit inside a `not-clear` remediation is only a checkpoint while any
+current blocker or should-fix for review/acceptance lacks a current-HEAD
+`addressed` or `note` disposition. Status remains `continue-implementation`;
+the workflow invokes `candidate-ready` once after the complete remediation.
+`note` requests independent adjudication and is never a shortcut for unfinished
+work. Waived and release/production-only findings do not hold code handoff.
+
 `review-clear`, `accepted`, `release` and `production` are separate. Receipt is
 a deterministic read-only projection available through status; it creates no
 artifact and performs no model call.
@@ -190,3 +197,6 @@ for review completion while DLS continues in the background.
 `v0.12.0` introduces one-reply decision cards for approval and acceptance.
 
 `v0.13.0` adds owner-first execution routing and budget-safe early `not-clear`.
+
+`v0.13.1` prevents a clean intermediate remediation commit from becoming a
+partial review candidate.

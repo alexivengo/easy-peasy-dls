@@ -219,7 +219,10 @@ class CoreResetTests(unittest.TestCase):
             self.assertEqual("pass", state["candidate"]["evidence"][0]["status"])
             (self.root / "src.py").write_text("value = 2\n", encoding="utf-8")
             commit(self.root, "new head")
-            self.assertEqual("run-candidate-ready", status(self.root, "C001")["next_action"]["id"])
+            self.assertEqual(
+                "run-candidate-ready",
+                status(self.root, "C001")["next_action"]["id"],
+            )
         finally:
             restore_environment(previous)
 
@@ -269,7 +272,10 @@ class CoreResetTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            self.assertEqual("run-candidate-ready", status(self.root, "C001")["next_action"]["id"])
+            self.assertEqual(
+                "run-candidate-ready",
+                status(self.root, "C001")["next_action"]["id"],
+            )
             refreshed = candidate_ready(
                 self.root,
                 change_id="C001",
@@ -452,6 +458,87 @@ class CoreResetTests(unittest.TestCase):
             second = review_run(self.root, change_id="C001", kind="code")
             self.assertEqual("review-clear", second["verdict"])
             self.assertEqual({}, load_state(self.root, "C001")["findings"])
+        finally:
+            restore_environment(previous)
+
+    def test_intermediate_remediation_commit_is_not_a_candidate_boundary(self) -> None:
+        log, previous = self._prepare_code(control="routine")
+        try:
+            fake = self.root / ".dls" / "cache" / "fake-bin"
+            (fake / "mode").write_text("finding", encoding="utf-8")
+            result = review_run(self.root, change_id="C001", kind="code")
+            self.assertEqual("not-clear", result["verdict"])
+
+            def add_findings(value: dict) -> None:
+                original = next(iter(value["findings"].values()))
+                for index in range(2, 5):
+                    finding = json.loads(json.dumps(original))
+                    finding["id"] = f"NEW-{index}"
+                    value["findings"][finding["id"]] = finding
+
+            mutate_state(self.root, "C001", add_findings)
+            calls_before = len(self._calls(log))
+            packs = self.root / ".dls" / "reviews" / "C001" / "packs"
+            packs_before = len(list(packs.glob("*.json")))
+
+            (self.root / "src.py").write_text("value = 2\n", encoding="utf-8")
+            commit(self.root, "fix first two findings")
+            self.assertEqual(
+                "continue-implementation",
+                status(self.root, "C001")["next_action"]["id"],
+            )
+            self.assertEqual(
+                packs_before,
+                len(list(packs.glob("*.json"))),
+            )
+            self.assertEqual(calls_before, len(self._calls(log)))
+
+            (self.root / "src.py").write_text("value = 3\n", encoding="utf-8")
+            commit(self.root, "fix remaining findings")
+            finding_ids = sorted(load_state(self.root, "C001")["findings"])
+            ready = candidate_ready(
+                self.root,
+                change_id="C001",
+                base=None,
+                addressed=finding_ids,
+                noted=[],
+                dry_run=False,
+            )
+            self.assertEqual("open-review-task", ready["next_action"]["id"])
+            self.assertEqual(packs_before + 1, len(list(packs.glob("*.json"))))
+            self.assertEqual(calls_before, len(self._calls(log)))
+        finally:
+            restore_environment(previous)
+
+    def test_waived_and_release_only_findings_do_not_hold_candidate_handoff(self) -> None:
+        _, previous = self._prepare_code(control="routine")
+        try:
+            fake = self.root / ".dls" / "cache" / "fake-bin"
+            (fake / "mode").write_text("finding", encoding="utf-8")
+            review_run(self.root, change_id="C001", kind="code")
+
+            def release_only(value: dict) -> None:
+                finding = next(iter(value["findings"].values()))
+                finding["blocks"] = ["release", "production"]
+
+            mutate_state(self.root, "C001", release_only)
+            (self.root / "src.py").write_text("value = 2\n", encoding="utf-8")
+            commit(self.root, "release evidence update")
+            self.assertEqual(
+                "run-candidate-ready",
+                status(self.root, "C001")["next_action"]["id"],
+            )
+
+            def waived(value: dict) -> None:
+                finding = next(iter(value["findings"].values()))
+                finding["blocks"] = ["review", "acceptance"]
+                finding["status"] = "waived"
+
+            mutate_state(self.root, "C001", waived)
+            self.assertEqual(
+                "run-candidate-ready",
+                status(self.root, "C001")["next_action"]["id"],
+            )
         finally:
             restore_environment(previous)
 
@@ -676,6 +763,8 @@ class CoreResetTests(unittest.TestCase):
         self.assertIn("Use `owner_root` as the working directory", skill)
         self.assertIn("worktree prepare\n  CHANGE_ID", skill)
         self.assertIn("immediately imports canonical `not-clear`", skill)
+        self.assertIn("intermediate remediation commit is a checkpoint", skill)
+        self.assertIn("Never use `--note` for unfinished work", skill)
         self.assertNotIn("Existing worktree branch does not match requested branch", skill)
         self.assertNotIn("ask the user to accept the exact reviewed HEAD", skill)
 

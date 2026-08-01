@@ -630,6 +630,22 @@ def next_action(root: Path, state: dict[str, Any]) -> dict[str, Any]:
         return {"id": "remediate-findings"}
     if isinstance(candidate, dict) and candidate.get("head_sha") == head and candidate.get("status") == "ready":
         return {"id": "open-review-task"}
+    pending_remediation = (
+        isinstance(state.get("review"), dict)
+        and state["review"].get("verdict") == "not-clear"
+        and any(
+            finding.get("severity") in {"blocker", "should-fix"}
+            and set(finding.get("blocks", [])) & {"review", "acceptance"}
+            and finding.get("status") != "waived"
+            and not (
+                finding.get("status") in {"addressed", "note"}
+                and finding.get("head_sha") == head
+            )
+            for finding in state["findings"].values()
+        )
+    )
+    if pending_remediation:
+        return {"id": "continue-implementation"}
     if (
         not git_source_dirty_paths(root)
         and state["tickets"]

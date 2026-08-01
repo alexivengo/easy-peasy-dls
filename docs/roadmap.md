@@ -1,6 +1,6 @@
 # Roadmap
 
-Текущая линия: `v0.13.0 Owner Workspace & Reliable Review UX`
+Текущая линия: `v0.13.1 Remediation Continuity`
 
 Полный прежний KANO-каталог заморожен как
 [planning snapshot](archive/kano-snapshot-2026-07-30.md). Он больше не участвует
@@ -14,6 +14,7 @@
 - `P48`: critical review завершается ранним `not-clear` без лишней lane;
 - `P28`: workspace conflicts получают одно безопасное typed действие;
 - повторно подтвердить `M53/M65` реальным EPIC-03a recovery без model call.
+- промежуточный remediation-коммит не создаёт partial candidate/review loop.
 
 ## Next
 

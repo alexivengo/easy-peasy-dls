@@ -44,14 +44,19 @@ when asking for a human decision.
   not branch naming, owns the change.
 - Stop on dirty, missing, or ambiguous owner conflicts. Never stash, reset,
   transfer, delete, or merge an uncommitted draft automatically.
-- Follow the single lifecycle `next_action`; do not inspect state internals or
-  reconstruct history.
+- Use the single lifecycle `next_action` to select the current stage; do not
+  inspect state internals or reconstruct history.
 - Implement the accepted scope, run focused tests while coding, commit the
   candidate, then invoke only `candidate-ready`.
 - If DLS already has a candidate lineage, do not supply or replace its review
   base. Invoke `candidate-ready` without `--base`; DLS reuses the preserved base.
 - On remediation, read current findings via `status --details findings`.
   Declare each as `--address` or `--note`; never set `verified`.
+- A clean intermediate remediation commit is a checkpoint, not a candidate
+  boundary. Continue in the same owner until every current actionable finding
+  has a deliberate disposition, then invoke `candidate-ready` once.
+- Never use `--note` for unfinished work. It is only for a genuine dispute or
+  independent reclassification that the next reviewer must adjudicate.
 - `candidate-ready` runs repository-owned required commands, records exact-HEAD
   evidence, and prepares the current ReviewPack. Stop at `open-review-task`.
 - Never run code review from a standard/critical implementation task.
