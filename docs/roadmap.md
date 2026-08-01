@@ -1,6 +1,6 @@
 # Roadmap
 
-Текущая линия: `v0.11.2 Core Reset candidate-base fix`
+Текущая линия: `v0.11.3 Core Reset review-session fix`
 
 Полный прежний KANO-каталог заморожен как
 [planning snapshot](archive/kano-snapshot-2026-07-30.md). Он больше не участвует

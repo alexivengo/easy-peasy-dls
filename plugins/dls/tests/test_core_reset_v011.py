@@ -466,6 +466,15 @@ class CoreResetTests(unittest.TestCase):
         finally:
             restore_environment(previous)
 
+    def test_workflow_skill_polls_nested_review_session(self) -> None:
+        plugin = Path(__file__).resolve().parents[1]
+        skill = (plugin / "skills" / "dls-workflow" / "SKILL.md").read_text()
+        cli = (plugin / "skills" / "dls-workflow" / "references" / "cli.md").read_text()
+        self.assertIn("tools.write_stdin", skill)
+        self.assertIn("while (result.session_id)", cli)
+        self.assertIn("tools.write_stdin", cli)
+        self.assertIn("Never print only `result.output`", cli)
+
     def test_dependency_requires_accepted_head_in_base(self) -> None:
         change(self.root, change_id="A", control="routine")
         change(self.root, change_id="B", control="routine")

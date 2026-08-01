@@ -60,11 +60,14 @@ python3 <plugin-root>/scripts/dls.py --root <current-project> --json \
 ```
 
 Wait for that exact process. `started` and `lane-transition` are non-terminal.
-If the shell tool returns `Script running with cell ID ...` or another session
-handle, resume it with the provided wait mechanism until `completed` has
-`terminal=true` or the process exits. Do not replace that wait with `status`,
-start a second runner, create reviewer subagents, read raw model output, or
-invent a verdict. A completed review requires a non-null `review_result_path`.
+When using `functions.exec`, use the nested-session bridge in [cli.md](references/cli.md):
+keep its JavaScript alive and poll every `tools.exec_command` `session_id` with
+`tools.write_stdin` until the nested process exits. An outer `functions.wait`
+may only resume that still-running JavaScript cell; it never replaces polling
+the nested session. Do not discard the nested `session_id`, replace the wait
+with `status`, start a second runner, create reviewer subagents, read raw model
+output, or invent a verdict. A completed review requires a non-null
+`review_result_path`.
 
 Routing is fixed:
 

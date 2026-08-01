@@ -154,3 +154,8 @@ Git history is never changed.
 digest-checked archive, invalidates a pack built from a conflicting base, and
 requires one fresh `candidate-ready` before review. It also makes failed review
 status and stream termination explicit.
+
+`v0.11.3` fixes the Codex App orchestration boundary for long reviews. The
+workflow keeps the wrapper cell alive and polls the nested `exec_command`
+session with `write_stdin`; an outer cell completion can no longer be mistaken
+for review completion while DLS continues in the background.
