@@ -38,6 +38,8 @@ when asking for a human decision.
   state internals or reconstruct history.
 - Implement the accepted scope, run focused tests while coding, commit the
   candidate, then invoke only `candidate-ready`.
+- If DLS already has a candidate lineage, do not supply or replace its review
+  base. Invoke `candidate-ready` without `--base`; DLS reuses the preserved base.
 - On remediation, read current findings via `status --details findings`.
   Declare each as `--address` or `--note`; never set `verified`.
 - `candidate-ready` runs repository-owned required commands, records exact-HEAD
@@ -57,9 +59,12 @@ python3 <plugin-root>/scripts/dls.py --root <current-project> --json \
   review-run CHANGE_ID --kind code --stream
 ```
 
-Wait for that process. Do not start a second runner, create reviewer subagents,
-read raw model output, or invent a verdict. A completed review requires a
-non-null `review_result_path`.
+Wait for that exact process. `started` and `lane-transition` are non-terminal.
+If the shell tool returns `Script running with cell ID ...` or another session
+handle, resume it with the provided wait mechanism until `completed` has
+`terminal=true` or the process exits. Do not replace that wait with `status`,
+start a second runner, create reviewer subagents, read raw model output, or
+invent a verdict. A completed review requires a non-null `review_result_path`.
 
 Routing is fixed:
 

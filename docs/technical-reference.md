@@ -66,6 +66,11 @@ bound to HEAD, product tree and command contract. Failure stores one bounded
 latest diagnostic under ignored cache. A successful candidate creates one
 ReviewPack v3.
 
+The initial candidate base is immutable across exact-HEAD retries and descendant
+candidate corrections. `candidate-ready` reuses the preserved base and rejects
+a conflicting replacement. Migration restores that base from its digest-checked
+pre-0.11 backup before rebuilding a ReviewPack.
+
 ## Review runner
 
 Every analysis uses `codex exec` with:
@@ -104,7 +109,10 @@ retry once. Content-derived run IDs and a crash-safe flock provide single-flight
 Completed valid lanes are reused during deterministic finalization.
 
 Public runner states are `not-prepared`, `running`, `completed`, `blocked` and
-`failed`. A canonical completion always returns `review_result_path`.
+`failed`. `started` and `lane-transition` stream events are non-terminal; only a
+`completed` event with `terminal=true` ends the owning process. A failed review
+returns a typed inspection action and is never projected as `open-review-task`.
+A canonical completion always returns `review_result_path`.
 
 ## Findings and lifecycle
 
@@ -129,6 +137,7 @@ dependent HEAD. Cycles and cross-repository targets are rejected.
 Git `worktree list --porcelain` is authoritative. The common-dir registry stores
 only `change_id → gitdir identity`; path, branch-name inference, sibling scanning,
 transfer journals and manual register/unregister lifecycle do not exist.
+Prunable Git entries are ignored and cannot break routing to a live owner.
 
 ## Migration
 
@@ -140,3 +149,8 @@ state v2 atomically and creates the compact worktree identity registry.
 Mixed v1/v2 repositories return `upgrade-incomplete`. Re-running upgrade is
 idempotent. Rollback restores the archived state and reinstalls v0.10.2; product
 Git history is never changed.
+
+`v0.11.2` restores a migrated candidate's original review base from the
+digest-checked archive, invalidates a pack built from a conflicting base, and
+requires one fresh `candidate-ready` before review. It also makes failed review
+status and stream termination explicit.

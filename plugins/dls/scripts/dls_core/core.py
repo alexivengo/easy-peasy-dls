@@ -54,6 +54,7 @@ DECISIONS = {"definition", "architecture", "design", "accept"}
 ARCHITECTURE_DIGEST_CONTRACT = "dls-architecture-digest/v1"
 DESIGN_DIGEST_CONTRACT = "dls-design-digest/v1"
 DEFINITION_DIGEST_REBASE_CONTRACT = "dls-definition-digest-rebase/v1"
+CANDIDATE_BASE_RECOVERY_CONTRACT = "dls-candidate-base-recovery/v1"
 ARCH_START = "<!-- dls:architecture:start -->"
 ARCH_END = "<!-- dls:architecture:end -->"
 DESIGN_START = "<!-- dls:design:start -->"
@@ -524,6 +525,25 @@ def next_action(root: Path, state: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": "rebase-after-dependency" if reason == "accepted-head-not-in-base" else "wait-dependency",
             "detail": dependency["blocked"],
+        }
+    active = state.get("active_run")
+    if isinstance(active, dict) and active.get("status") == "running":
+        return {
+            "id": (
+                "wait-review"
+                if str(active.get("kind", "")).startswith("review:")
+                else "wait-candidate"
+            )
+        }
+    if (
+        isinstance(active, dict)
+        and active.get("status") == "failed"
+        and str(active.get("kind", "")).startswith("review:")
+    ):
+        error = str(active.get("error") or "")
+        return {
+            "id": "inspect-review-budget" if "budget" in error.lower() else "inspect-review-failure",
+            "detail": error[:500] or None,
         }
     head = git_head(root)
     candidate = current_candidate(root, state)
@@ -1079,6 +1099,15 @@ def project_legacy_state(root: Path, legacy: dict[str, Any]) -> dict[str, Any]:
             "discarded_operations": len(legacy.get("operations", [])),
             "discarded_candidate_runs": max(0, len(legacy.get("candidate_runs", [])) - (1 if candidate else 0)),
             "legacy_review_count": len(legacy.get("reviews", [])),
+            **(
+                {
+                    "candidate_base_recovery_contract": CANDIDATE_BASE_RECOVERY_CONTRACT,
+                    "candidate_base_recovery_status": "preserved",
+                    "candidate_base_sha": candidate["base_sha"],
+                }
+                if candidate and isinstance(candidate.get("base_sha"), str)
+                else {}
+            ),
         },
     }
     current_definition = next(
@@ -1193,6 +1222,63 @@ def _rebase_legacy_dependency_digests(projected: dict[str, dict[str, Any]]) -> s
     return changed
 
 
+def _repair_legacy_candidate_base(root: Path, state: dict[str, Any]) -> bool:
+    migration = state.get("migration")
+    candidate = state.get("candidate")
+    if (
+        not isinstance(migration, dict)
+        or migration.get("from_schema") != 1
+        or migration.get("candidate_base_recovery_contract") == CANDIDATE_BASE_RECOVERY_CONTRACT
+        or not isinstance(candidate, dict)
+        or state.get("review") is not None
+    ):
+        return False
+    archive = root / ".dls" / "archive" / "pre-0.11" / "state" / f"{state['change']['id']}.json"
+    if not archive.is_file():
+        return False
+    legacy = read_json(archive)
+    if stable_digest(legacy) != migration.get("source_digest"):
+        raise IntegrityError("Legacy migration backup digest changed")
+    legacy_candidate = next(
+        (
+            item
+            for item in reversed(legacy.get("candidate_runs", []))
+            if isinstance(item, dict)
+            and item.get("status") == "completed"
+            and item.get("head_sha") == candidate.get("head_sha")
+        ),
+        None,
+    )
+    if not isinstance(legacy_candidate, dict):
+        return False
+    base_sha = legacy_candidate.get("review_base_sha")
+    head_sha = candidate.get("head_sha")
+    if not isinstance(base_sha, str) or not SHA_RE.fullmatch(base_sha):
+        raise IntegrityError("Legacy candidate review base is invalid")
+    if not isinstance(head_sha, str) or not SHA_RE.fullmatch(head_sha):
+        raise IntegrityError("Migrated candidate HEAD is invalid")
+    if run_git(root, "merge-base", "--is-ancestor", base_sha, head_sha, check=False).returncode:
+        raise IntegrityError("Legacy candidate review base is not an ancestor of HEAD")
+    migration.update(
+        {
+            "candidate_base_recovery_contract": CANDIDATE_BASE_RECOVERY_CONTRACT,
+            "candidate_base_recovery_status": "preserved",
+            "candidate_base_sha": base_sha,
+        }
+    )
+    if candidate.get("base_sha") == base_sha:
+        return True
+    migration["replaced_candidate_base_sha"] = candidate.get("base_sha")
+    candidate["base_sha"] = base_sha
+    candidate["status"] = "stale"
+    for key in ("pack_path", "pack_digest", "review_id"):
+        candidate.pop(key, None)
+    state["active_run"] = None
+    state["phase"] = "implementation"
+    state["lifecycle"] = "approved"
+    return True
+
+
 def upgrade(root: Path, *, apply: bool) -> dict[str, Any]:
     from .worktrees import migrate_registry, resolve_change_root
 
@@ -1224,6 +1310,7 @@ def upgrade(root: Path, *, apply: bool) -> dict[str, Any]:
         else:
             raise IntegrityError(f"Unsupported state schema: {source_path}")
         repaired = _rebase_legacy_definition_digest(owner, value)
+        repaired = _repair_legacy_candidate_base(owner, value) or repaired
         targets = list(dict.fromkeys([path, owner_path]))
         projected[change_id] = {
             "value": value,

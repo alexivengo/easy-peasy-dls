@@ -45,6 +45,8 @@ def _worktrees(root: Path) -> dict[str, Path]:
         if not token.startswith("worktree "):
             continue
         path = Path(token.removeprefix("worktree ")).resolve()
+        if not path.is_dir():
+            continue
         gitdir = _git_path(path, "--absolute-git-dir")
         common = git_common_dir(root)
         try:

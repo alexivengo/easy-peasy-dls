@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tempfile
 import threading
@@ -15,6 +16,7 @@ from dls_core.core import (
     definition_digest,
     load_state,
     mutate_state,
+    stable_digest,
     status,
     ticket_set,
     upgrade,
@@ -194,6 +196,34 @@ class CoreResetTests(unittest.TestCase):
             (self.root / "src.py").write_text("value = 2\n", encoding="utf-8")
             commit(self.root, "new head")
             self.assertEqual("run-candidate-ready", status(self.root, "C001")["next_action"]["id"])
+        finally:
+            restore_environment(previous)
+
+    def test_descendant_candidate_reuses_preserved_base_and_rejects_conflict(self) -> None:
+        _, previous = self._prepare_code(control="routine")
+        try:
+            first_head = git(self.root, "rev-parse", "HEAD")
+            (self.root / "src.py").write_text("value = 2\n", encoding="utf-8")
+            commit(self.root, "candidate correction")
+            refreshed = candidate_ready(
+                self.root,
+                change_id="C001",
+                base=None,
+                addressed=[],
+                noted=[],
+                dry_run=False,
+            )
+            pack = json.loads((self.root / refreshed["review_pack_path"]).read_text())
+            self.assertEqual(self.base, pack["base_sha"])
+            with self.assertRaisesRegex(IntegrityError, "conflicts with the preserved"):
+                candidate_ready(
+                    self.root,
+                    change_id="C001",
+                    base=first_head,
+                    addressed=[],
+                    noted=[],
+                    dry_run=False,
+                )
         finally:
             restore_environment(previous)
 
@@ -416,9 +446,23 @@ class CoreResetTests(unittest.TestCase):
             with self.assertRaisesRegex(IntegrityError, "budget"):
                 review_run(self.root, change_id="C001", kind="code")
             self.assertIsNone(load_state(self.root, "C001")["review"])
+            self.assertEqual(
+                "inspect-review-budget",
+                status(self.root, "C001")["next_action"]["id"],
+            )
             with self.assertRaisesRegex(IntegrityError, "previously failed"):
                 review_run(self.root, change_id="C001", kind="code")
             self.assertEqual(1, len(self._calls(str(log))) - before)
+        finally:
+            restore_environment(previous)
+
+    def test_stream_events_distinguish_running_from_terminal(self) -> None:
+        _, previous = self._prepare_code(control="routine")
+        events: list[dict] = []
+        try:
+            review_run(self.root, change_id="C001", kind="code", stream=events.append)
+            self.assertEqual(("started", False), (events[0]["event"], events[0]["terminal"]))
+            self.assertEqual(("completed", True), (events[-1]["event"], events[-1]["terminal"]))
         finally:
             restore_environment(previous)
 
@@ -449,6 +493,27 @@ class CoreResetTests(unittest.TestCase):
             self.assertEqual(moved.resolve(), resolve_change_root(self.root, "C001"))
         finally:
             git(self.root, "worktree", "remove", "--force", str(moved))
+
+    def test_prunable_unrelated_worktree_does_not_break_owner_routing(self) -> None:
+        change(self.root, control="standard")
+        commit(self.root, "definition")
+        owner = self.root.parent / f"{self.root.name}-owner"
+        stale = self.root.parent / f"{self.root.name}-stale"
+        try:
+            prepare(
+                self.root,
+                change_id="C001",
+                base="HEAD",
+                path=owner,
+                branch="codex/C001-implementation",
+                dry_run=False,
+            )
+            git(self.root, "worktree", "add", "--detach", str(stale), "HEAD")
+            shutil.rmtree(stale)
+            self.assertEqual(owner.resolve(), resolve_change_root(self.root, "C001"))
+        finally:
+            git(self.root, "worktree", "remove", "--force", str(owner))
+            git(self.root, "worktree", "prune")
 
     def test_single_flight_reports_running(self) -> None:
         change(self.root, control="routine")
@@ -741,6 +806,99 @@ class UpgradeTests(unittest.TestCase):
             self.assertEqual(definition_digest(root, target), dependency["target_definition_digest"])
             self.assertEqual(legacy_digest, dependency["legacy_target_definition_digest"])
             self.assertEqual("continue-implementation", status(root, "B")["next_action"]["id"])
+
+    def test_upgrade_restores_legacy_candidate_base_and_invalidates_wrong_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            initial_base = repository(root)
+            configure(root)
+            change(root, change_id="A", control="routine")
+            definition_head = commit(root, "definition")
+            projection = decision_projection(root, load_state(root, "A"))
+            approve(
+                root,
+                change_id="A",
+                decision="definition",
+                include_design=False,
+                include_architecture=False,
+                actor="user",
+                response=f"definition {projection['definition']['digest'][:12]}",
+                git_sha=definition_head,
+                dry_run=False,
+            )
+            ticket_set(
+                root,
+                change_id="A",
+                ticket_id="A-T01",
+                value="implemented",
+                note=None,
+            )
+            (root / "src.py").write_text("value = 1\n", encoding="utf-8")
+            head = commit(root, "implementation")
+            legacy = {
+                "schema_version": 1,
+                "candidate_runs": [
+                    {
+                        "status": "completed",
+                        "head_sha": head,
+                        "review_base_sha": definition_head,
+                    }
+                ],
+            }
+            archive = root / ".dls" / "archive" / "pre-0.11" / "state"
+            archive.mkdir(parents=True)
+            (archive / "A.json").write_text(json.dumps(legacy), encoding="utf-8")
+            state = load_state(root, "A")
+            state["migration"] = {
+                "from_schema": 1,
+                "source_digest": stable_digest(legacy),
+                "migrated_at": "2026-07-01T00:00:00Z",
+            }
+            state["candidate"] = {
+                "status": "ready",
+                "head_sha": head,
+                "base_sha": initial_base,
+                "definition_digest": projection["definition"]["digest"],
+                "pack_path": ".dls/reviews/A/packs/wrong.json",
+                "pack_digest": "f" * 64,
+                "review_id": "wrong",
+            }
+            state["active_run"] = {
+                "run_id": "failed-review",
+                "kind": "review:code",
+                "head_sha": head,
+                "contract_digest": "e" * 64,
+                "status": "failed",
+                "pid": None,
+                "error": "Review lane exceeded its token budget",
+                "lanes": {},
+            }
+            state["phase"] = "review"
+            state["lifecycle"] = "candidate-ready"
+            (root / ".dls" / "state" / "A.json").write_text(
+                json.dumps(state), encoding="utf-8"
+            )
+
+            self.assertEqual(1, upgrade(root, apply=False)["to_repair"])
+            upgrade(root, apply=True)
+            repaired = load_state(root, "A")
+            self.assertEqual(definition_head, repaired["candidate"]["base_sha"])
+            self.assertEqual("stale", repaired["candidate"]["status"])
+            self.assertNotIn("pack_path", repaired["candidate"])
+            self.assertIsNone(repaired["active_run"])
+            self.assertEqual("run-candidate-ready", status(root, "A")["next_action"]["id"])
+
+            ready = candidate_ready(
+                root,
+                change_id="A",
+                base=None,
+                addressed=[],
+                noted=[],
+                dry_run=False,
+            )
+            pack = json.loads((root / ready["review_pack_path"]).read_text())
+            self.assertEqual(definition_head, pack["base_sha"])
+            self.assertEqual("open-review-task", ready["next_action"]["id"])
 
     def test_v1_to_v2_converter_is_idempotent_and_preserves_19_59(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -29,3 +29,7 @@ or arbitrary argv.
 
 Expected boundary results use exit code 0 and a typed `next_action`. Non-zero
 means usage, integrity, configuration, or infrastructure failure.
+
+For a repeated initial candidate, omit `--base`: DLS reuses its preserved Git
+base and rejects a conflicting replacement. Stream events are terminal only
+when `event=completed` and `terminal=true`.

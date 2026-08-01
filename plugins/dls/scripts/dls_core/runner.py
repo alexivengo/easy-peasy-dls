@@ -445,6 +445,36 @@ def _write_pack(
     return pack, relative
 
 
+def _candidate_base(
+    root: Path,
+    state: dict[str, Any],
+    *,
+    head: str,
+    requested: str | None,
+) -> str | None:
+    preserved: str | None = None
+    candidate = state.get("candidate")
+    if isinstance(candidate, dict):
+        base_sha = candidate.get("base_sha")
+        candidate_head = candidate.get("head_sha")
+        if (
+            isinstance(base_sha, str)
+            and isinstance(candidate_head, str)
+            and run_git(root, "merge-base", "--is-ancestor", base_sha, candidate_head, check=False).returncode == 0
+            and run_git(root, "merge-base", "--is-ancestor", candidate_head, head, check=False).returncode == 0
+        ):
+            preserved = base_sha
+    if requested is None:
+        return preserved
+    resolved = run_git(root, "rev-parse", "--verify", f"{requested}^{{commit}}", check=False)
+    requested_sha = resolved.stdout.strip()
+    if resolved.returncode != 0:
+        raise UsageError(f"Unknown review base: {requested}")
+    if preserved is not None and requested_sha != preserved:
+        raise IntegrityError("Requested review base conflicts with the preserved candidate base")
+    return requested_sha
+
+
 def candidate_ready(
     root: Path,
     *,
@@ -486,12 +516,9 @@ def candidate_ready(
     if prior:
         base_sha = prior.get("head_sha")
     else:
-        if not base:
+        base_sha = _candidate_base(root, state, head=head, requested=base)
+        if not base_sha:
             return {"ok": True, "status": "blocked", "next_action": {"id": "provide-review-base"}}
-        resolved = run_git(root, "rev-parse", "--verify", f"{base}^{{commit}}", check=False)
-        base_sha = resolved.stdout.strip()
-        if resolved.returncode != 0:
-            raise UsageError(f"Unknown review base: {base}")
     active_ids = sorted(
         finding_id
         for finding_id, finding in state["findings"].items()
@@ -1529,7 +1556,16 @@ def review_run(
             "next_action": {"id": "wait-review"},
         }
     if stream:
-        stream({"event": "started", "review_id": pack["review_id"], "kind": kind})
+        stream(
+            {
+                "event": "started",
+                "terminal": False,
+                "status": "running",
+                "review_id": pack["review_id"],
+                "kind": kind,
+                "next_action": {"id": "wait-process"},
+            }
+        )
     holder, workspace = _workspace(root, head)
     try:
         control = pack["control_level"]
@@ -1545,7 +1581,14 @@ def review_run(
             budget=BUDGETS[control]["primary"],
         )
         if stream:
-            stream({"event": "lane-transition", "lane": "primary", "status": "completed"})
+            stream(
+                {
+                    "event": "lane-transition",
+                    "terminal": False,
+                    "lane": "primary",
+                    "status": "completed",
+                }
+            )
         secondary = None
         secondary_meta = None
         selected = _secondary_lens(pack)
@@ -1563,7 +1606,14 @@ def review_run(
                 budget=BUDGETS["critical"]["secondary"],
             )
             if stream:
-                stream({"event": "lane-transition", "lane": "secondary", "status": "completed"})
+                stream(
+                    {
+                        "event": "lane-transition",
+                        "terminal": False,
+                        "lane": "secondary",
+                        "status": "completed",
+                    }
+                )
         reconciliation_meta = None
         if secondary is not None and _conflicts(primary, secondary):
             decision, reconciliation_meta = _reconcile(root, run_id, pack, primary, secondary)
@@ -1658,7 +1708,7 @@ def review_run(
             "next_action": next_action(root, updated),
         }
         if stream:
-            stream({"event": "completed", **output})
+            stream({"event": "completed", "terminal": True, **output})
         return output
     except Exception as exc:
         _record_failure(
@@ -1668,7 +1718,25 @@ def review_run(
         )
         _finish_run(root, change_id, run_id, status="failed", error=str(exc))
         if stream:
-            stream({"event": "completed", "status": "failed", "error": str(exc)})
+            error = str(exc)
+            stream(
+                {
+                    "event": "completed",
+                    "terminal": True,
+                    "status": "failed",
+                    "review_id": pack["review_id"],
+                    "verdict": None,
+                    "review_result_path": None,
+                    "error": error,
+                    "next_action": {
+                        "id": (
+                            "inspect-review-budget"
+                            if "budget" in error.lower()
+                            else "inspect-review-failure"
+                        )
+                    },
+                }
+            )
         raise
     finally:
         _remove_workspace(root, holder, workspace)
