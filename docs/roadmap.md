@@ -1,6 +1,6 @@
 # Roadmap
 
-Текущая линия: `v0.11.0 Core Reset`
+Текущая линия: `v0.11.1 Core Reset migration fix`
 
 Полный прежний KANO-каталог заморожен как
 [planning snapshot](archive/kano-snapshot-2026-07-30.md). Он больше не участвует

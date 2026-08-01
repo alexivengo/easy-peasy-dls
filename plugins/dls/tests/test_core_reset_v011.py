@@ -12,6 +12,7 @@ from dls_core.core import (
     approve,
     decision_projection,
     dependency_set,
+    definition_digest,
     load_state,
     mutate_state,
     status,
@@ -585,6 +586,162 @@ class CoreResetTests(unittest.TestCase):
 
 
 class UpgradeTests(unittest.TestCase):
+    @staticmethod
+    def _legacy_migrated_state(
+        root: Path,
+        change_id: str,
+        *,
+        accepted: bool = False,
+    ) -> tuple[dict, str, str]:
+        state = load_state(root, change_id)
+        head = git(root, "rev-parse", "HEAD")
+        legacy_digest = "a" * 64
+        state["approvals"] = [
+            {
+                "id": f"{change_id}-definition",
+                "bundle_id": None,
+                "decision": "definition",
+                "digest": legacy_digest,
+                "git_sha": head,
+                "actor": "user",
+                "response_digest": None,
+                "status": "current",
+                "recorded_at": "2026-07-01T00:00:00Z",
+            }
+        ]
+        state["definition_review"] = {
+            "review_id": "legacy-approved-definition",
+            "verdict": "review-clear",
+            "head_sha": head,
+            "definition_digest": legacy_digest,
+            "decision_digests": {},
+            "provenance": "legacy-approved-definition",
+        }
+        state["migration"] = {
+            "from_schema": 1,
+            "source_digest": "b" * 64,
+            "migrated_at": "2026-07-01T00:00:00Z",
+        }
+        if accepted:
+            state["approvals"].append(
+                {
+                    "id": f"{change_id}-accept",
+                    "bundle_id": None,
+                    "decision": "accept",
+                    "digest": legacy_digest,
+                    "git_sha": head,
+                    "actor": "user",
+                    "response_digest": None,
+                    "status": "current",
+                    "recorded_at": "2026-07-01T00:01:00Z",
+                }
+            )
+            state["review"] = {
+                "review_id": f"{change_id}-review",
+                "kind": "code",
+                "head_sha": head,
+                "base_sha": head,
+                "definition_digest": legacy_digest,
+                "verdict": "review-clear",
+                "result_path": f".dls/reviews/{change_id}/legacy.json",
+                "result_digest": "c" * 64,
+                "usage": {},
+                "migrated": True,
+            }
+            state["acceptance"] = f"{change_id}-accept"
+            state["phase"] = "accepted"
+            state["lifecycle"] = "accepted"
+        path = root / ".dls" / "state" / f"{change_id}.json"
+        path.write_text(json.dumps(state), encoding="utf-8")
+        return state, head, legacy_digest
+
+    def test_v0110_state_rebases_unchanged_legacy_definition_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository(root)
+            configure(root)
+            change(
+                root,
+                change_id="A",
+                control="standard",
+                impacts=["architecture"],
+                adr=True,
+            )
+            commit(root, "definition")
+            _, _, legacy_digest = self._legacy_migrated_state(root, "A", accepted=True)
+            commit(root, "record legacy acceptance metadata")
+
+            preview = upgrade(root, apply=False)
+            self.assertEqual((0, 1), (preview["to_upgrade"], preview["to_repair"]))
+            applied = upgrade(root, apply=True)
+            self.assertEqual(1, applied["repaired"])
+
+            state = load_state(root, "A")
+            current_digest = definition_digest(root, state)
+            self.assertNotEqual(legacy_digest, current_digest)
+            self.assertEqual(current_digest, state["definition_review"]["definition_digest"])
+            self.assertEqual(current_digest, state["review"]["definition_digest"])
+            self.assertEqual(
+                {current_digest},
+                {
+                    item["digest"]
+                    for item in state["approvals"]
+                    if item["decision"] in {"definition", "accept"}
+                },
+            )
+            self.assertEqual("accepted", status(root, "A")["next_action"]["id"])
+            self.assertEqual("A-review", status(root, "A")["review_id"])
+            again = upgrade(root, apply=False)
+            self.assertEqual((1, 0), (again["already_current"], again["to_repair"]))
+
+    def test_legacy_digest_rebase_refuses_real_definition_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository(root)
+            configure(root)
+            change(root, change_id="A", control="standard")
+            commit(root, "approved definition")
+            _, _, legacy_digest = self._legacy_migrated_state(root, "A")
+            document = root / load_state(root, "A")["change"]["artifacts"]["spec"]["path"]
+            document.write_text(document.read_text() + "\nChanged scope.\n", encoding="utf-8")
+            commit(root, "changed definition")
+
+            upgrade(root, apply=True)
+            state = load_state(root, "A")
+            approval = next(item for item in state["approvals"] if item["decision"] == "definition")
+            self.assertEqual(legacy_digest, approval["digest"])
+            self.assertEqual("source-changed", state["migration"]["definition_digest_rebase_status"])
+            self.assertEqual("run-definition-review", status(root, "A")["next_action"]["id"])
+
+    def test_legacy_dependency_digest_follows_safely_rebased_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository(root)
+            configure(root)
+            change(root, change_id="A", control="standard")
+            change(root, change_id="B", control="standard")
+            commit(root, "definitions")
+            _, _, legacy_digest = self._legacy_migrated_state(root, "A", accepted=True)
+            state_b, _, _ = self._legacy_migrated_state(root, "B")
+            state_b["dependencies"] = [
+                {
+                    "change_id": "A",
+                    "requires": "accepted-in-base",
+                    "target_definition_digest": legacy_digest,
+                }
+            ]
+            (root / ".dls" / "state" / "B.json").write_text(
+                json.dumps(state_b), encoding="utf-8"
+            )
+
+            upgrade(root, apply=True)
+            target = load_state(root, "A")
+            dependent = load_state(root, "B")
+            dependency = dependent["dependencies"][0]
+            self.assertEqual(definition_digest(root, target), dependency["target_definition_digest"])
+            self.assertEqual(legacy_digest, dependency["legacy_target_definition_digest"])
+            self.assertEqual("continue-implementation", status(root, "B")["next_action"]["id"])
+
     def test_v1_to_v2_converter_is_idempotent_and_preserves_19_59(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

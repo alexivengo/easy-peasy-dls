@@ -53,6 +53,7 @@ TICKET_STATES = {"planned", "blocked", "in-progress", "implemented", "validated"
 DECISIONS = {"definition", "architecture", "design", "accept"}
 ARCHITECTURE_DIGEST_CONTRACT = "dls-architecture-digest/v1"
 DESIGN_DIGEST_CONTRACT = "dls-design-digest/v1"
+DEFINITION_DIGEST_REBASE_CONTRACT = "dls-definition-digest-rebase/v1"
 ARCH_START = "<!-- dls:architecture:start -->"
 ARCH_END = "<!-- dls:architecture:end -->"
 DESIGN_START = "<!-- dls:design:start -->"
@@ -448,12 +449,20 @@ def accepted_record(state: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _product_revision_current(root: Path, revision: object) -> bool:
+    if not isinstance(revision, str):
+        return False
+    current = git_product_tree_digest(root)
+    reviewed = git_product_tree_digest(root, revision)
+    return current is not None and reviewed == current
+
+
 def current_review(root: Path, state: dict[str, Any]) -> dict[str, Any] | None:
     review = state.get("review")
     if not isinstance(review, dict):
         return None
     if (
-        review.get("head_sha") != git_head(root)
+        not _product_revision_current(root, review.get("head_sha"))
         or review.get("definition_digest") != definition_digest(root, state)
         or git_source_dirty_paths(root)
     ):
@@ -495,6 +504,15 @@ def dependency_status(root: Path, state: dict[str, Any]) -> dict[str, Any]:
 
 
 def next_action(root: Path, state: dict[str, Any]) -> dict[str, Any]:
+    review = current_review(root, state)
+    accepted = accepted_record(state)
+    if (
+        accepted
+        and isinstance(review, dict)
+        and accepted.get("git_sha") == review.get("head_sha")
+        and review.get("verdict") == "review-clear"
+    ):
+        return {"id": "accepted"}
     if not definition_review_current(root, state):
         return {"id": "run-definition-review"}
     pending = pending_decisions(root, state)
@@ -509,10 +527,6 @@ def next_action(root: Path, state: dict[str, Any]) -> dict[str, Any]:
         }
     head = git_head(root)
     candidate = current_candidate(root, state)
-    review = current_review(root, state)
-    accepted = accepted_record(state)
-    if accepted and accepted.get("git_sha") == (review or {}).get("head_sha"):
-        return {"id": "accepted"}
     if isinstance(review, dict) and review.get("head_sha") == head:
         if review.get("verdict") == "review-clear":
             return {"id": "accept"}
@@ -615,7 +629,6 @@ def receipt(root: Path, state: dict[str, Any]) -> dict[str, Any]:
     accepted_current = bool(
         accepted
         and accepted.get("git_sha") == review.get("head_sha")
-        and review.get("head_sha") == git_head(root)
         and review.get("verdict") == "review-clear"
     )
     lifecycle = (
@@ -1095,6 +1108,91 @@ def project_legacy_state(root: Path, legacy: dict[str, Any]) -> dict[str, Any]:
     return validate_state(state)
 
 
+def _rebase_legacy_definition_digest(root: Path, state: dict[str, Any]) -> bool:
+    migration = state.get("migration")
+    if not isinstance(migration, dict) or migration.get("from_schema") != 1:
+        return False
+    if migration.get("definition_digest_rebase_contract") == DEFINITION_DIGEST_REBASE_CONTRACT:
+        return False
+    current_digest = definition_digest(root, state)
+    current_definition = next(
+        (
+            item
+            for item in reversed(state["approvals"])
+            if item.get("decision") == "definition" and item.get("status") == "current"
+        ),
+        None,
+    )
+    migration["definition_digest_rebase_contract"] = DEFINITION_DIGEST_REBASE_CONTRACT
+    migration["definition_digest"] = current_digest
+    if current_definition is None:
+        migration["definition_digest_rebase_status"] = "not-applicable"
+        return True
+    approved_sha = current_definition.get("git_sha")
+    if not isinstance(approved_sha, str) or not SHA_RE.fullmatch(approved_sha):
+        raise IntegrityError(
+            f"{state['change']['id']} current legacy definition approval has no exact Git revision"
+        )
+    approved_digest = definition_digest(root, state, revision=approved_sha)
+    legacy_digest = current_definition.get("digest")
+    if not isinstance(legacy_digest, str):
+        raise IntegrityError("Legacy definition approval digest is missing")
+    migration["legacy_definition_digest"] = legacy_digest
+    if approved_digest != current_digest:
+        migration["definition_digest_rebase_status"] = "source-changed"
+        return True
+
+    for approval in state["approvals"]:
+        if (
+            approval.get("status") == "current"
+            and approval.get("decision") in {"definition", "accept"}
+            and approval.get("digest") == legacy_digest
+        ):
+            approval["legacy_digest"] = legacy_digest
+            approval["digest"] = current_digest
+    definition_review = state.get("definition_review")
+    if (
+        isinstance(definition_review, dict)
+        and definition_review.get("provenance") == "legacy-approved-definition"
+        and definition_review.get("definition_digest") == legacy_digest
+    ):
+        definition_review["legacy_definition_digest"] = legacy_digest
+        definition_review["definition_digest"] = current_digest
+    for key in ("candidate", "review"):
+        record = state.get(key)
+        if isinstance(record, dict) and record.get("definition_digest") == legacy_digest:
+            record["legacy_definition_digest"] = legacy_digest
+            record["definition_digest"] = current_digest
+    migration["definition_digest_rebase_status"] = "rebased"
+    return True
+
+
+def _rebase_legacy_dependency_digests(projected: dict[str, dict[str, Any]]) -> set[str]:
+    changed: set[str] = set()
+    mappings: dict[str, tuple[str, str]] = {}
+    for change_id, entry in projected.items():
+        migration = entry["value"].get("migration")
+        if (
+            isinstance(migration, dict)
+            and migration.get("definition_digest_rebase_status") == "rebased"
+            and isinstance(migration.get("legacy_definition_digest"), str)
+            and isinstance(migration.get("definition_digest"), str)
+        ):
+            mappings[change_id] = (
+                migration["legacy_definition_digest"],
+                migration["definition_digest"],
+            )
+    for change_id, entry in projected.items():
+        for dependency in entry["value"]["dependencies"]:
+            mapping = mappings.get(dependency["change_id"])
+            if mapping is None or dependency.get("target_definition_digest") != mapping[0]:
+                continue
+            dependency["legacy_target_definition_digest"] = mapping[0]
+            dependency["target_definition_digest"] = mapping[1]
+            changed.add(change_id)
+    return changed
+
+
 def upgrade(root: Path, *, apply: bool) -> dict[str, Any]:
     from .worktrees import migrate_registry, resolve_change_root
 
@@ -1102,8 +1200,7 @@ def upgrade(root: Path, *, apply: bool) -> dict[str, Any]:
     paths = sorted(state_dir.glob("*.json"))
     if not paths:
         raise IntegrityError("No DLS state found")
-    projected: dict[str, tuple[dict[str, Any], list[Path]]] = {}
-    current = 0
+    projected: dict[str, dict[str, Any]] = {}
     for path in paths:
         root_value = read_json(path)
         change_id = str(
@@ -1119,22 +1216,42 @@ def upgrade(root: Path, *, apply: bool) -> dict[str, Any]:
         source_path = owner_path if owner_path.is_file() else path
         source = read_json(source_path)
         if source.get("schema_version") == STATE_SCHEMA:
-            value = validate_state(source)
-            current += 1
+            source_schema = STATE_SCHEMA
+            value = copy.deepcopy(validate_state(source))
         elif source.get("schema_version") == 1:
+            source_schema = 1
             value = project_legacy_state(owner, source)
         else:
             raise IntegrityError(f"Unsupported state schema: {source_path}")
+        repaired = _rebase_legacy_definition_digest(owner, value)
         targets = list(dict.fromkeys([path, owner_path]))
-        projected[change_id] = (value, targets)
+        projected[change_id] = {
+            "value": value,
+            "targets": targets,
+            "source_schema": source_schema,
+            "changed": source_schema == 1 or repaired,
+        }
+    dependency_repairs = _rebase_legacy_dependency_digests(projected)
+    for change_id in dependency_repairs:
+        projected[change_id]["changed"] = True
+    for entry in projected.values():
+        if entry["source_schema"] == STATE_SCHEMA and entry["changed"]:
+            entry["value"]["revision"] += 1
+    upgraded = sum(entry["source_schema"] == 1 for entry in projected.values())
+    repaired = sum(
+        entry["source_schema"] == STATE_SCHEMA and entry["changed"]
+        for entry in projected.values()
+    )
+    current = len(projected) - upgraded - repaired
     registry = migrate_registry(root, apply=False)
     summary = {
         "ok": True,
         "dry_run": not apply,
         "total_changes": len(paths),
         "already_current": current,
-        "to_upgrade": len(paths) - current,
-        "dependencies": sum(len(value["dependencies"]) for value, _ in projected.values()),
+        "to_upgrade": upgraded,
+        "to_repair": repaired,
+        "dependencies": sum(len(entry["value"]["dependencies"]) for entry in projected.values()),
         "worktree_owners": registry["owners"],
     }
     if not apply:
@@ -1143,21 +1260,21 @@ def upgrade(root: Path, *, apply: bool) -> dict[str, Any]:
     with FileLock(lock):
         dls_roots = {
             target.parents[1]
-            for _, targets in projected.values()
-            for target in targets
+            for entry in projected.values()
+            for target in entry["targets"]
         }
         markers = [dls_root / "upgrade-incomplete" for dls_root in dls_roots]
         for marker in markers:
             atomic_write_text(marker, "v0.11 state conversion in progress\n", backup=False)
         try:
-            for _, (value, targets) in projected.items():
-                for target in targets:
+            for entry in projected.values():
+                for target in entry["targets"]:
                     archive = target.parents[1] / "archive" / "pre-0.11" / "state"
                     archive.mkdir(parents=True, exist_ok=True)
                     backup = archive / target.name
                     if target.is_file() and not backup.exists():
                         shutil.copy2(target, backup)
-                    atomic_write_json(target, value, backup=False)
+                    atomic_write_json(target, entry["value"], backup=False)
             migrate_registry(root, apply=True)
         except Exception:
             raise
@@ -1167,7 +1284,8 @@ def upgrade(root: Path, *, apply: bool) -> dict[str, Any]:
     return {
         **summary,
         "dry_run": False,
-        "upgraded": len(projected),
+        "upgraded": upgraded,
+        "repaired": repaired,
         "archive": ".dls/archive/pre-0.11",
     }
 
