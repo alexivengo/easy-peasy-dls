@@ -1,6 +1,6 @@
 # Roadmap
 
-Текущая линия: `v0.13.1 Remediation Continuity`
+Текущая линия: `v0.13.2 Non-terminal Implementation Loop`
 
 Полный прежний KANO-каталог заморожен как
 [planning snapshot](archive/kano-snapshot-2026-07-30.md). Он больше не участвует
@@ -15,6 +15,8 @@
 - `P28`: workspace conflicts получают одно безопасное typed действие;
 - повторно подтвердить `M53/M65` реальным EPIC-03a recovery без model call.
 - промежуточный remediation-коммит не создаёт partial candidate/review loop.
+- implementation/remediation продолжается без повторного пользовательского
+  prompt до `open-review-task` или доказанного внешнего blocker.
 
 ## Next
 

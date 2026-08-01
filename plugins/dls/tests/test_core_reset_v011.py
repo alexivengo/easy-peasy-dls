@@ -481,20 +481,16 @@ class CoreResetTests(unittest.TestCase):
             packs = self.root / ".dls" / "reviews" / "C001" / "packs"
             packs_before = len(list(packs.glob("*.json")))
 
-            (self.root / "src.py").write_text("value = 2\n", encoding="utf-8")
-            commit(self.root, "fix first two findings")
-            self.assertEqual(
-                "continue-implementation",
-                status(self.root, "C001")["next_action"]["id"],
-            )
-            self.assertEqual(
-                packs_before,
-                len(list(packs.glob("*.json"))),
-            )
-            self.assertEqual(calls_before, len(self._calls(log)))
+            for index in range(1, 4):
+                (self.root / "src.py").write_text(f"value = {index + 1}\n", encoding="utf-8")
+                commit(self.root, f"remediation checkpoint {index}")
+                self.assertEqual(
+                    "continue-implementation",
+                    status(self.root, "C001")["next_action"]["id"],
+                )
+                self.assertEqual(packs_before, len(list(packs.glob("*.json"))))
+                self.assertEqual(calls_before, len(self._calls(log)))
 
-            (self.root / "src.py").write_text("value = 3\n", encoding="utf-8")
-            commit(self.root, "fix remaining findings")
             finding_ids = sorted(load_state(self.root, "C001")["findings"])
             ready = candidate_ready(
                 self.root,
@@ -765,6 +761,15 @@ class CoreResetTests(unittest.TestCase):
         self.assertIn("immediately imports canonical `not-clear`", skill)
         self.assertIn("intermediate remediation commit is a checkpoint", skill)
         self.assertIn("Never use `--note` for unfinished work", skill)
+        self.assertIn("as non-terminal", skill)
+        self.assertIn("never send a progress-only final response", skill)
+        self.assertIn("After each checkpoint commit, read `status` again", skill)
+        self.assertIn("End an implementation task only at `open-review-task`", skill)
+        self.assertIn("an already-open task keeps its old skill", skill)
+        implementation = skill.split("## Implementation and remediation", 1)[1].split(
+            "## Independent review", 1
+        )[0]
+        self.assertNotIn("review-run", implementation)
         self.assertNotIn("Existing worktree branch does not match requested branch", skill)
         self.assertNotIn("ask the user to accept the exact reviewed HEAD", skill)
 

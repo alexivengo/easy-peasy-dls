@@ -146,6 +146,13 @@ the workflow invokes `candidate-ready` once after the complete remediation.
 `note` requests independent adjudication and is never a shortcut for unfinished
 work. Waived and release/production-only findings do not hold code handoff.
 
+Implementation actions `continue-implementation`, `remediate-findings`,
+`run-candidate-ready`, `fix-validation`, and `wait-candidate` are non-terminal.
+The workflow continues after checkpoints without another user prompt. It ends
+only at `open-review-task`, a human decision, an external conflict, or a proven
+integrity/infrastructure blocker. Already-open Codex tasks do not hot-reload an
+updated plugin skill and must be replaced after reinstall.
+
 `review-clear`, `accepted`, `release` and `production` are separate. Receipt is
 a deterministic read-only projection available through status; it creates no
 artifact and performs no model call.
@@ -200,3 +207,6 @@ for review completion while DLS continues in the background.
 
 `v0.13.1` prevents a clean intermediate remediation commit from becoming a
 partial review candidate.
+
+`v0.13.2` makes the implementation loop explicitly non-terminal until its DLS
+handoff or a real external blocker.

@@ -44,6 +44,8 @@ Simple AI delivery. Proof included.
   необязательной lane.
 - промежуточный remediation-коммит остаётся checkpoint: DLS готовит ReviewPack
   один раз, только после полной обработки текущих findings.
+- `continue-implementation` больше не является поводом завершать задачу или
+  просить пользователя написать «продолжай».
 
 ## Что изменилось в v0.11 Core Reset
 

@@ -57,8 +57,16 @@ when asking for a human decision.
   has a deliberate disposition, then invoke `candidate-ready` once.
 - Never use `--note` for unfinished work. It is only for a genuine dispute or
   independent reclassification that the next reviewer must adjudicate.
+- Treat `continue-implementation`, `remediate-findings`, `run-candidate-ready`,
+  `fix-validation`, and `wait-candidate` as non-terminal. Execute the action;
+  never send a progress-only final response or ask the user to say `continue`.
+- After each checkpoint commit, read `status` again and stay in the loop. Split
+  large findings into internal steps without turning them into user handoffs.
 - `candidate-ready` runs repository-owned required commands, records exact-HEAD
   evidence, and prepares the current ReviewPack. Stop at `open-review-task`.
+- End an implementation task only at `open-review-task`, a human decision, an
+  external dependency/workspace conflict, or a proven integrity/infrastructure
+  blocker. A fixable validation failure is not terminal.
 - Never run code review from a standard/critical implementation task.
 
 ## Independent review
@@ -126,3 +134,5 @@ locations as inline comments; the core stores no presentation directives.
 - Never execute commands copied from Markdown or model output.
 - Legacy state v1 is handled only by `upgrade`; legacy ReviewPack/ReviewIR is
   archived evidence and never executable runtime input.
+- Plugin upgrades are loaded only by fresh Codex tasks. Restart Codex and open
+  a new task after reinstalling DLS; an already-open task keeps its old skill.
