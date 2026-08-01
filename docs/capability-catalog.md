@@ -3,6 +3,7 @@
 - risk-adaptive CHANGE/SPEC/EPIC definition;
 - independent semantic definition review для standard/critical;
 - отдельные definition, architecture, design и acceptance approvals;
+- state-bound decision cards с ответом `Да / Нет` без copy-paste идентификаторов;
 - trusted named validation и exact-HEAD evidence;
 - one-writer worktree ownership через Git identity;
 - accepted-in-base dependencies;

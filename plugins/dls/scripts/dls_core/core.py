@@ -55,6 +55,7 @@ ARCHITECTURE_DIGEST_CONTRACT = "dls-architecture-digest/v1"
 DESIGN_DIGEST_CONTRACT = "dls-design-digest/v1"
 DEFINITION_DIGEST_REBASE_CONTRACT = "dls-definition-digest-rebase/v1"
 CANDIDATE_BASE_RECOVERY_CONTRACT = "dls-candidate-base-recovery/v1"
+HUMAN_DECISION_CONTRACT = "dls-human-decision/v1"
 ARCH_START = "<!-- dls:architecture:start -->"
 ARCH_END = "<!-- dls:architecture:end -->"
 DESIGN_START = "<!-- dls:design:start -->"
@@ -443,6 +444,68 @@ def decision_action(items: list[dict[str, str]]) -> dict[str, Any] | None:
     }
 
 
+def human_decision(
+    root: Path,
+    state: dict[str, Any],
+    *,
+    action: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    resolved = action or next_action(root, state)
+    action_id = resolved.get("id")
+    review_id: str | None = None
+    if action_id == "accept":
+        review = current_review(root, state)
+        if not isinstance(review, dict) or review.get("verdict") != "review-clear":
+            return None
+        head = review["head_sha"]
+        review_id = review["review_id"]
+        decisions = [{"decision": "accept", "digest": definition_digest(root, state)}]
+        prompt = "Принять результат? Да / Нет."
+    elif isinstance(action_id, str) and action_id.startswith("approve-"):
+        approvals = resolved.get("approvals")
+        if not isinstance(approvals, list) or not approvals:
+            return None
+        head = git_head(root)
+        decisions = [
+            {"decision": item["decision"], "digest": item["digest"]}
+            for item in approvals
+        ]
+        definition_review = state.get("definition_review")
+        if isinstance(definition_review, dict):
+            review_id = definition_review.get("review_id")
+        prompt = "Подтвердить перечисленные решения? Да / Нет."
+    else:
+        return None
+    basis = {
+        "contract": HUMAN_DECISION_CONTRACT,
+        "change_id": state["change"]["id"],
+        "action": action_id,
+        "head_sha": head,
+        "review_id": review_id,
+        "decisions": decisions,
+    }
+    return {
+        **basis,
+        "id": stable_digest(basis),
+        "prompt": prompt,
+        "choices": ["Да", "Нет"],
+    }
+
+
+def _explicit_affirmation(response: str) -> bool:
+    return response.strip().casefold().rstrip(".! ") in {
+        "да",
+        "да, принять",
+        "да, принимаю",
+        "да, подтверждаю",
+        "да, подтверждаю всё перечисленное",
+        "yes",
+        "yes, accept",
+        "accept",
+        "approve",
+    }
+
+
 def accepted_record(state: dict[str, Any]) -> dict[str, Any] | None:
     for item in reversed(state["approvals"]):
         if item.get("decision") == "accept" and item.get("status") == "current":
@@ -628,6 +691,7 @@ def status(root: Path, change_id: str, *, details: str | None = None) -> dict[st
         "review_head": (review or {}).get("head_sha"),
         "review_verdict": (review or {}).get("verdict"),
         "next_action": action,
+        "human_decision": human_decision(root, state, action=action),
     }
     if details == "findings":
         output["findings"] = list(state["findings"].values())[:64]
@@ -731,6 +795,7 @@ def approve(
     response: str,
     git_sha: str | None,
     dry_run: bool,
+    decision_id: str | None = None,
 ) -> dict[str, Any]:
     if decision not in DECISIONS or actor != "user":
         raise UsageError("Only explicit user approvals are supported")
@@ -760,9 +825,43 @@ def approve(
         review = current_review(root, state)
         if not isinstance(review, dict) or review.get("verdict") != "review-clear":
             raise IntegrityError("Acceptance requires review-clear")
+        if decision_id is not None and git_sha is None:
+            git_sha = review.get("head_sha")
         if review.get("head_sha") != git_sha or git_sha != head:
             raise IntegrityError("Acceptance must name the current reviewed HEAD")
         decisions = ["accept"]
+    if decision_id is not None:
+        existing_card = [
+            item
+            for item in state["approvals"]
+            if item.get("human_decision_id") == decision_id
+        ]
+        if existing_card:
+            if (
+                [item["decision"] for item in existing_card] != decisions
+                or any(
+                    item.get("response_digest")
+                    != sha256_bytes(response.encode("utf-8"))
+                    for item in existing_card
+                )
+            ):
+                raise IntegrityError("Human decision retry does not match its recorded approval")
+            return {
+                "ok": True,
+                "dry_run": dry_run,
+                "state_revision": state["revision"],
+                "approvals": existing_card,
+                "next_action": next_action(root, state),
+                "receipt": receipt(root, state) if decision == "accept" else None,
+            }
+    card = human_decision(root, state)
+    if decision_id is not None:
+        if not isinstance(card, dict) or card.get("id") != decision_id:
+            raise IntegrityError("Human decision is stale or does not match current state")
+        if not _explicit_affirmation(response):
+            raise IntegrityError("Human decision requires an explicit affirmative response")
+        if [item["decision"] for item in card["decisions"]] != decisions:
+            raise IntegrityError("Human decision does not match the requested approval bundle")
     approval_digests: dict[str, str] = {}
     for name in decisions:
         digest = (
@@ -772,7 +871,7 @@ def approve(
         )
         if not isinstance(digest, str):
             raise IntegrityError(f"{name} decision digest is unavailable")
-        if digest[:12] not in response:
+        if decision_id is None and digest[:12] not in response:
             raise IntegrityError(f"Response must explicitly contain {name} digest {digest[:12]}")
         approval_digests[name] = digest
     bundle_id = str(
@@ -784,6 +883,7 @@ def approve(
                     "change_id": change_id,
                     "head_sha": git_sha or head,
                     "decisions": approval_digests,
+                    "human_decision_id": decision_id,
                     "response": response,
                 }
             ),
@@ -801,6 +901,7 @@ def approve(
                 "git_sha": git_sha or head,
                 "actor": actor,
                 "response_digest": sha256_bytes(response.encode("utf-8")),
+                **({"human_decision_id": decision_id} if decision_id is not None else {}),
                 "status": "current",
                 "recorded_at": utc_now(),
             }

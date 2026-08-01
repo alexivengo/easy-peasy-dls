@@ -1,6 +1,6 @@
 # Roadmap
 
-Текущая линия: `v0.11.3 Core Reset review-session fix`
+Текущая линия: `v0.12.0 One-Reply Decisions`
 
 Полный прежний KANO-каталог заморожен как
 [planning snapshot](archive/kano-snapshot-2026-07-30.md). Он больше не участвует

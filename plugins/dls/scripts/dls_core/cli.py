@@ -83,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     approve_parser.add_argument("--actor", default="user", choices=("user",))
     approve_parser.add_argument("--response", required=True)
     approve_parser.add_argument("--git-sha")
+    approve_parser.add_argument("--decision-id")
     _dry_run(approve_parser)
 
     ticket = commands.add_parser("ticket")
@@ -208,6 +209,7 @@ def dispatch(args: argparse.Namespace) -> dict[str, Any]:
             response=args.response,
             git_sha=args.git_sha,
             dry_run=args.dry_run,
+            decision_id=args.decision_id,
         )
     if args.command == "ticket":
         return ticket_set(

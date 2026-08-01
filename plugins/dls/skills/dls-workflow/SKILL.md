@@ -25,8 +25,10 @@ when asking for a human decision.
   SPEC/ADR or an exact design source/bypass.
 - Standard/critical definition approval requires a current independent
   `review-run CHANGE_ID --kind definition --stream`.
-- Ask one approval question containing every pending decision and short digest.
-  Record the atomic bundle only after the user explicitly confirms each item.
+- Show the DLS-provided `human_decision` card once. List every pending decision
+  and short digest, then ask its exact `Да / Нет` prompt. The user never copies
+  identifiers; on `Да`, pass the hidden decision ID and verbatim response to one
+  atomic approval command. On `Нет`, stop without mutation.
 - A dependency only blocks implementation and always means
   `OTHER_CHANGE accepted-in-base`. It never blocks earlier definition work.
 
@@ -85,9 +87,10 @@ locations as inline comments; the core stores no presentation directives.
 
 - After `not-clear`, recommend a fresh implementation task:
   `Исправь findings последнего review CHANGE_ID.`
-- After `review-clear`, ask the user to accept the exact reviewed HEAD and
-  definition digest. Record `approve --decision accept` only after a direct
-  affirmative answer.
+- After `review-clear`, show the card's change, short reviewed HEAD and short
+  definition digest, then ask exactly: `Принять результат? Да / Нет.` On `Да`,
+  invoke `approve --decision accept --decision-id <card-id> --response <answer>`;
+  do not pass `--git-sha` or ask the user to repeat identifiers. On `Нет`, stop.
 - Show `status --details receipt` after review or acceptance.
 - Report implemented, validated, review-clear, accepted, release, and production
   separately. DLS stops at accepted; release/production remain explicit external

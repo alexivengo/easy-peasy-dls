@@ -6,7 +6,9 @@
 
 Codex формулирует outcome, scope, requirements и подход. Standard/critical
 definition получает независимый semantic review. Пользователь явно подтверждает
-definition и, когда нужно, отдельные architecture/design digests.
+definition и, когда нужно, отдельные architecture/design decisions. DLS
+показывает одну связанную с текущим state карточку; пользователь отвечает только
+`Да` или `Нет`, не копируя digests.
 
 ### 2. Implementation
 
@@ -30,8 +32,9 @@ Sol reviewer только для trust, data, reliability или contract risk.
 получает compact reconciliation без product checkout. Некорректный JSON
 получает один repair без source.
 
-После `review-clear` человек отдельно принимает reviewed HEAD. Release и
-production не выводятся автоматически.
+После `review-clear` DLS показывает reviewed HEAD и definition и спрашивает:
+`Принять результат? Да / Нет.` Ответ `Да` атомарно связывается с этой карточкой;
+при drift запись отклоняется. Release и production не выводятся автоматически.
 
 ## Remediation
 

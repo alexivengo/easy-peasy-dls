@@ -45,6 +45,13 @@ records. They may share one atomic bundle. Architecture is derived from a
 committed ADR or bounded SPEC architecture section. UI design uses one exact
 precedent/artifact, immutable external version, or explicit bypass rationale.
 
+Human prompts use `dls-human-decision/v1`. Its deterministic ID binds the
+change, action, current HEAD, review and decision digests. The user answers
+`Да` or `Нет`; `approve --decision-id` recomputes the card before the atomic
+write. A stale card, negative answer or mismatched bundle changes no state.
+Legacy direct CLI calls may still repeat explicit digests/SHA, but the workflow
+never asks a person to copy them.
+
 Standard/critical definition approval requires a current clear
 `review-run --kind definition`. Changing authored definition or a scoped
 decision makes the corresponding approval stale. Generated DLS state and
@@ -159,3 +166,5 @@ status and stream termination explicit.
 workflow keeps the wrapper cell alive and polls the nested `exec_command`
 session with `write_stdin`; an outer cell completion can no longer be mistaken
 for review completion while DLS continues in the background.
+
+`v0.12.0` introduces one-reply decision cards for approval and acceptance.

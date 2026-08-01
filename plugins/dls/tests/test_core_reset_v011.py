@@ -116,8 +116,24 @@ class CoreResetTests(unittest.TestCase):
         commit(self.root, "definition")
         executable, previous = self._fake()
         try:
-            review_run(self.root, change_id="C001", kind="definition")
-            self._approve("C001", architecture=True)
+            reviewed = review_run(self.root, change_id="C001", kind="definition")
+            card = reviewed["human_decision"]
+            self.assertEqual(
+                ["definition", "architecture"],
+                [item["decision"] for item in card["decisions"]],
+            )
+            approve(
+                self.root,
+                change_id="C001",
+                decision="definition",
+                include_design=False,
+                include_architecture=True,
+                actor="user",
+                response="Да",
+                git_sha=None,
+                dry_run=False,
+                decision_id=card["id"],
+            )
             state = load_state(self.root, "C001")
             self.assertEqual(
                 {"definition", "architecture"},
@@ -368,10 +384,23 @@ class CoreResetTests(unittest.TestCase):
     def test_acceptance_is_separate_and_exact_head(self) -> None:
         _, previous = self._prepare_code(control="routine")
         try:
-            review_run(self.root, change_id="C001", kind="code")
-            state = load_state(self.root, "C001")
-            digest = decision_projection(self.root, state)["definition"]["digest"]
-            head = git(self.root, "rev-parse", "HEAD")
+            reviewed = review_run(self.root, change_id="C001", kind="code")
+            card = reviewed["human_decision"]
+            self.assertEqual("Принять результат? Да / Нет.", card["prompt"])
+            self.assertEqual(card, status(self.root, "C001")["human_decision"])
+            with self.assertRaisesRegex(IntegrityError, "affirmative"):
+                approve(
+                    self.root,
+                    change_id="C001",
+                    decision="accept",
+                    include_design=False,
+                    include_architecture=False,
+                    actor="user",
+                    response="Нет",
+                    git_sha=None,
+                    dry_run=False,
+                    decision_id=card["id"],
+                )
             accepted = approve(
                 self.root,
                 change_id="C001",
@@ -379,13 +408,52 @@ class CoreResetTests(unittest.TestCase):
                 include_design=False,
                 include_architecture=False,
                 actor="user",
-                response=f"accept definition {digest[:12]}",
-                git_sha=head,
+                response="Да",
+                git_sha=None,
                 dry_run=False,
+                decision_id=card["id"],
+            )
+            retried = approve(
+                self.root,
+                change_id="C001",
+                decision="accept",
+                include_design=False,
+                include_architecture=False,
+                actor="user",
+                response="Да",
+                git_sha=None,
+                dry_run=False,
+                decision_id=card["id"],
             )
             self.assertTrue(accepted["receipt"]["accepted"])
+            self.assertEqual(accepted["state_revision"], retried["state_revision"])
+            self.assertEqual(card["id"], accepted["approvals"][0]["human_decision_id"])
+            self.assertEqual(1, len([item for item in load_state(self.root, "C001")["approvals"] if item["decision"] == "accept"]))
             self.assertEqual("not-evaluated", accepted["receipt"]["release"])
             self.assertEqual("not-evaluated", accepted["receipt"]["production"])
+        finally:
+            restore_environment(previous)
+
+    def test_stale_human_decision_cannot_accept_new_head(self) -> None:
+        _, previous = self._prepare_code(control="routine")
+        try:
+            card = review_run(self.root, change_id="C001", kind="code")["human_decision"]
+            (self.root / "src.py").write_text("value = 2\n", encoding="utf-8")
+            commit(self.root, "new candidate")
+            with self.assertRaises(IntegrityError):
+                approve(
+                    self.root,
+                    change_id="C001",
+                    decision="accept",
+                    include_design=False,
+                    include_architecture=False,
+                    actor="user",
+                    response="Да",
+                    git_sha=None,
+                    dry_run=False,
+                    decision_id=card["id"],
+                )
+            self.assertIsNone(load_state(self.root, "C001")["acceptance"])
         finally:
             restore_environment(previous)
 
@@ -474,6 +542,8 @@ class CoreResetTests(unittest.TestCase):
         self.assertIn("while (result.session_id)", cli)
         self.assertIn("tools.write_stdin", cli)
         self.assertIn("Never print only `result.output`", cli)
+        self.assertIn("Принять результат? Да / Нет.", skill)
+        self.assertNotIn("ask the user to accept the exact reviewed HEAD", skill)
 
     def test_dependency_requires_accepted_head_in_base(self) -> None:
         change(self.root, change_id="A", control="routine")

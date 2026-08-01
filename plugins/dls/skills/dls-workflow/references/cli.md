@@ -15,7 +15,7 @@ new
 adopt
 upgrade --dry-run|--apply
 status CHANGE_ID [--details findings|receipt|metrics|history]
-approve CHANGE_ID --decision definition|architecture|design|accept
+approve CHANGE_ID --decision definition|architecture|design|accept [--decision-id ID]
 ticket CHANGE_ID TICKET_ID --status STATUS
 dependency set|list|remove
 candidate-ready CHANGE_ID [--base REF] [--address ID] [--note ID]
@@ -29,6 +29,12 @@ or arbitrary argv.
 
 Expected boundary results use exit code 0 and a typed `next_action`. Non-zero
 means usage, integrity, configuration, or infrastructure failure.
+
+For normal human decisions, read `human_decision` from `status` or `review-run`,
+show its summary and prompt, then pass its hidden `id` as `--decision-id` with
+the user's verbatim `--response`. A current card accepts `Да`; DLS derives and
+records the exact HEAD/digests. Do not ask the user to copy them. Legacy direct
+CLI use without a decision ID keeps the explicit digest/SHA contract.
 
 For a repeated initial candidate, omit `--base`: DLS reuses its preserved Git
 base and rejects a conflicting replacement. Stream events are terminal only

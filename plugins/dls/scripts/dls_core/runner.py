@@ -27,6 +27,7 @@ from .core import (
     definition_digest,
     definition_review_current,
     dependency_status,
+    human_decision,
     load_state,
     mutate_state,
     next_action,
@@ -1476,6 +1477,7 @@ def review_run(
         and existing.get("profile_digest", profile_digest) == profile_digest
         and existing.get("result_path")
     ):
+        action = next_action(root, state)
         return {
             "ok": True,
             "status": "completed",
@@ -1483,7 +1485,8 @@ def review_run(
             "verdict": existing["verdict"],
             "review_result_path": existing["result_path"],
             "delivery_receipt": receipt(root, state),
-            "next_action": next_action(root, state),
+            "next_action": action,
+            "human_decision": human_decision(root, state, action=action),
         }
     if kind == "code":
         action = _require_decisions(root, state)
@@ -1495,16 +1498,19 @@ def review_run(
                 "verdict": None,
                 "review_result_path": None,
                 "next_action": action,
+                "human_decision": human_decision(root, state, action=action),
             }
         pack, pack_path = _load_code_pack(root, state)
     else:
         if state["change"]["control"] in {"micro", "routine"}:
+            action = next_action(root, state)
             return {
                 "ok": True,
                 "status": "completed",
                 "verdict": "review-clear",
                 "review_result_path": None,
-                "next_action": {"id": "approve-definition"},
+                "next_action": action,
+                "human_decision": human_decision(root, state, action=action),
             }
         pack, pack_path = _definition_pack(root, state, write=not dry_run)
     if pack["head_sha"] != head or pack["definition_digest"] != definition_digest(root, state):
@@ -1540,6 +1546,7 @@ def review_run(
             completed_review = current.get(
                 "definition_review" if kind == "definition" else "review"
             ) or {}
+            action = next_action(root, current)
             return {
                 "ok": True,
                 "status": "completed",
@@ -1547,7 +1554,8 @@ def review_run(
                 "verdict": completed_review.get("verdict"),
                 "review_result_path": completed_review.get("result_path"),
                 "delivery_receipt": receipt(root, current),
-                "next_action": next_action(root, current),
+                "next_action": action,
+                "human_decision": human_decision(root, current, action=action),
             }
         return {
             "ok": True,
@@ -1698,6 +1706,7 @@ def review_run(
 
         updated = mutate_state(root, change_id, apply)
         _clear_failure(root, change_id)
+        action = next_action(root, updated)
         output = {
             "ok": True,
             "status": "completed",
@@ -1705,7 +1714,8 @@ def review_run(
             "verdict": result["verdict"],
             "review_result_path": relative,
             "delivery_receipt": receipt(root, updated),
-            "next_action": next_action(root, updated),
+            "next_action": action,
+            "human_decision": human_decision(root, updated, action=action),
         }
         if stream:
             stream({"event": "completed", "terminal": True, **output})
