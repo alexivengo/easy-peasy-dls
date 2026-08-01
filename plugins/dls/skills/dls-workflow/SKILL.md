@@ -34,10 +34,18 @@ when asking for a human decision.
 
 ## Implementation and remediation
 
-- Use one writer per change. For isolated standard/critical work, invoke
-  `worktree prepare`; Git worktree identity is authoritative.
-- Read `status CHANGE_ID` once. Follow its single `next_action`; do not inspect
-  state internals or reconstruct history.
+- Before reading or changing product files, invoke `status CHANGE_ID` from the
+  project the user opened. Read its `execution_context`; do not start repository
+  discovery first.
+- Use `owner_root` as the working directory for every subsequent read, edit,
+  test, commit, and DLS call. A dirty caller outside the owner is left untouched.
+- On `prepare-owner-worktree` or `bind-owner-worktree`, invoke `worktree prepare
+  CHANGE_ID` without inventing a base, then read status once more. Git identity,
+  not branch naming, owns the change.
+- Stop on dirty, missing, or ambiguous owner conflicts. Never stash, reset,
+  transfer, delete, or merge an uncommitted draft automatically.
+- Follow the single lifecycle `next_action`; do not inspect state internals or
+  reconstruct history.
 - Implement the accepted scope, run focused tests while coding, commit the
   candidate, then invoke only `candidate-ready`.
 - If DLS already has a candidate lineage, do not supply or replace its review
@@ -74,10 +82,19 @@ output, or invent a verdict. A completed review requires a non-null
 Routing is fixed:
 
 - routine/standard: one Terra/high structured analysis;
-- critical: Terra/high plus one Sol risk reviewer only for trust, data,
-  reliability, or contract triggers;
+- critical: Terra/high plus one Sol risk reviewer only when the primary is
+  clean and trust, data, reliability, or contract risk requires independent
+  clearance;
+- any primary blocker or should-fix immediately imports canonical `not-clear`;
+  do not launch the optional reviewer or reconciliation afterward;
 - reconciliation only for a direct structured contradiction;
 - invalid JSON/reference structure receives one compact repair without source.
+
+Lane budget targets are telemetry allocations, not reasons to discard a valid
+decision. A valid actionable result remains `not-clear`; aggregate overrun can
+never produce `review-clear`. Reinvoke the same short review request only when
+DLS returns `resume-review`; DLS must reuse stored lanes rather than start a new
+analysis.
 
 Show findings from the canonical result. The skill may format their stored
 locations as inline comments; the core stores no presentation directives.

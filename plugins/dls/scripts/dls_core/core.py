@@ -604,8 +604,22 @@ def next_action(root: Path, state: dict[str, Any]) -> dict[str, Any]:
         and str(active.get("kind", "")).startswith("review:")
     ):
         error = str(active.get("error") or "")
+        primary = (active.get("lanes") or {}).get("primary")
+        primary_decision = primary.get("decision") if isinstance(primary, dict) else None
+        recoverable_actionable = isinstance(primary_decision, dict) and any(
+            isinstance(item, dict)
+            and item.get("severity") in {"blocker", "should-fix"}
+            and "review" in item.get("blocks", [])
+            for item in primary_decision.get("findings", [])
+        )
         return {
-            "id": "inspect-review-budget" if "budget" in error.lower() else "inspect-review-failure",
+            "id": (
+                "resume-review"
+                if "budget" in error.lower() and recoverable_actionable
+                else "review-budget-exhausted"
+                if "budget" in error.lower()
+                else "inspect-review-failure"
+            ),
             "detail": error[:500] or None,
         }
     head = git_head(root)

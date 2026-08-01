@@ -25,7 +25,7 @@ from .core import (
 from .errors import ConfigError, DLSError, IntegrityError, UsageError
 from .repo import find_repo_root
 from .runner import candidate_ready, review_run
-from .worktrees import prepare, resolve_change_root
+from .worktrees import execution_context, prepare, resolve_change_root
 
 
 def _dry_run(parser: argparse.ArgumentParser) -> None:
@@ -122,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     worktree_commands = worktree.add_subparsers(dest="worktree_command", required=True)
     worktree_prepare = worktree_commands.add_parser("prepare")
     worktree_prepare.add_argument("change_id")
-    worktree_prepare.add_argument("--base", required=True)
+    worktree_prepare.add_argument("--base")
     worktree_prepare.add_argument("--path", type=Path)
     worktree_prepare.add_argument("--branch")
     _dry_run(worktree_prepare)
@@ -141,6 +141,25 @@ def _pairs(values: list[str], *, label: str) -> dict[str, str]:
 
 def _owner(root: Path, change_id: str) -> Path:
     return resolve_change_root(root, change_id)
+
+
+def _with_execution_context(value: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    return {**value, "execution_context": context}
+
+
+def _workspace_boundary(context: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "status": "not-prepared",
+        "review_id": None,
+        "verdict": None,
+        "review_result_path": None,
+        "next_action": {
+            "id": context["action"],
+            "detail": context["detail"],
+        },
+        "execution_context": context,
+    }
 
 
 def dispatch(args: argparse.Namespace) -> dict[str, Any]:
@@ -187,7 +206,7 @@ def dispatch(args: argparse.Namespace) -> dict[str, Any]:
             dry_run=args.dry_run,
         )
     if args.command == "worktree":
-        return prepare(
+        result = prepare(
             root,
             change_id=args.change_id,
             base=args.base,
@@ -195,9 +214,21 @@ def dispatch(args: argparse.Namespace) -> dict[str, Any]:
             branch=args.branch,
             dry_run=args.dry_run,
         )
-    owner = _owner(root, args.change_id)
+        if args.dry_run:
+            return result
+        _, context = execution_context(root, args.change_id)
+        return _with_execution_context(result, context)
+    owner, context = execution_context(root, args.change_id)
+    if owner is None:
+        return _workspace_boundary(context)
     if args.command == "status":
-        return status(owner, args.change_id, details=args.details)
+        result = status(owner, args.change_id, details=args.details)
+        if context["status"] != "ready":
+            result["next_action"] = {
+                "id": context["action"],
+                "detail": context["detail"],
+            }
+        return _with_execution_context(result, context)
     if args.command == "approve":
         return approve(
             owner,
@@ -237,7 +268,9 @@ def dispatch(args: argparse.Namespace) -> dict[str, Any]:
             dry_run=args.dry_run,
         )
     if args.command == "candidate-ready":
-        return candidate_ready(
+        if context["status"] != "ready":
+            return _workspace_boundary(context)
+        result = candidate_ready(
             owner,
             change_id=args.change_id,
             base=args.base,
@@ -245,17 +278,33 @@ def dispatch(args: argparse.Namespace) -> dict[str, Any]:
             noted=args.note,
             dry_run=args.dry_run,
         )
+        return _with_execution_context(result, context)
     if args.command == "review-run":
+        if context["status"] != "ready":
+            boundary = _workspace_boundary(context)
+            if args.stream:
+                print(
+                    json.dumps(
+                        {"event": "completed", "terminal": True, **boundary},
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
+            return boundary
         callback = None
         if args.stream:
-            callback = lambda event: print(json.dumps(event, ensure_ascii=False), flush=True)
-        return review_run(
+            callback = lambda event: print(
+                json.dumps({**event, "execution_context": context}, ensure_ascii=False),
+                flush=True,
+            )
+        result = review_run(
             owner,
             change_id=args.change_id,
             kind=args.kind,
             stream=callback,
             dry_run=args.dry_run,
         )
+        return _with_execution_context(result, context)
     raise UsageError(f"Unsupported command: {args.command}")
 
 
@@ -265,7 +314,12 @@ def _human(value: dict[str, Any]) -> str:
             f"Review {value.get('verdict')}: {value['review_result_path']}\n"
             f"Next: {(value.get('next_action') or {}).get('id')}"
         )
-    return json.dumps(value, ensure_ascii=False, indent=2)
+    visible = json.loads(json.dumps(value))
+    context = visible.get("execution_context")
+    if isinstance(context, dict):
+        context.pop("caller_root", None)
+        context.pop("owner_root", None)
+    return json.dumps(visible, ensure_ascii=False, indent=2)
 
 
 def main(argv: list[str] | None = None) -> int:

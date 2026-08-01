@@ -49,7 +49,8 @@ from .repo import (
     run_git,
 )
 
-RUNNER_CONTRACT = "dls-review-runner/v3"
+RUNNER_CONTRACT = "dls-review-runner/v4"
+ROUTING_CONTRACT = "dls-review-routing/v1"
 PACK_CONTRACT = "dls-review-pack/v3"
 RESULT_CONTRACT = "dls-review-ir/v3"
 MODEL_PRIMARY = "gpt-5.6-terra"
@@ -975,8 +976,7 @@ def _model_call(
             decision = raw_text
             json_error = str(exc)
         usage = _usage(last["output"])
-        if usage["processed_tokens"] is not None and usage["processed_tokens"] > lane_budget:
-            raise IntegrityError("Review lane exceeded its token budget")
+        processed = usage["processed_tokens"]
         metadata = {
             "model": model,
             "effort": effort,
@@ -985,6 +985,11 @@ def _model_call(
             "transcript_digest": last["output_digest"],
             "output_digest": stable_digest(decision),
             "usage": usage,
+            "budget": {
+                "target_tokens": lane_budget,
+                "processed_tokens": processed,
+                "over_target": isinstance(processed, int) and processed > lane_budget,
+            },
         }
         if json_error:
             metadata["json_error"] = json_error
@@ -1160,17 +1165,18 @@ def _secondary_lens(pack: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
-def _maps(rows: list[dict[str, Any]], key: str) -> dict[str, str]:
-    return {item[key]: item["verdict"] for item in rows}
+def _actionable(value: dict[str, Any]) -> bool:
+    return any(
+        item["severity"] in {"blocker", "should-fix"} and "review" in item["blocks"]
+        for item in value["findings"]
+    )
 
 
 def _conflicts(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    for field, key in (
-        ("ticket_verdicts", "ticket_id"),
-        ("requirement_verdicts", "requirement_id"),
-    ):
-        if _maps(left[field], key) != _maps(right[field], key):
-            return True
+    # Independent reviewers may discover different additive findings. A clear
+    # row on one side and a supported non-clear row on the other is merged
+    # conservatively; it is not a semantic contradiction requiring another
+    # model call.
     left_prior = {item["finding_id"]: item["verdict"] for item in left["prior_finding_verdicts"]}
     right_prior = {item["finding_id"]: item["verdict"] for item in right["prior_finding_verdicts"]}
     if left_prior != right_prior:
@@ -1217,18 +1223,40 @@ def _merge(left: dict[str, Any], right: dict[str, Any] | None, change_id: str) -
         return left
     right = _canonicalize(right, change_id)
     findings = {item["id"]: item for item in [*left["findings"], *right["findings"]]}
-    actionable = any(
-        item["severity"] in {"blocker", "should-fix"} and "review" in item["blocks"]
-        for item in findings.values()
-    )
+    actionable = _actionable({"findings": list(findings.values())})
+
+    verdict_rank = {"clear": 0, "not-clear": 1, "blocked": 2}
+
+    def merge_rows(field: str, key: str) -> list[dict[str, Any]]:
+        left_rows = {item[key]: item for item in left[field]}
+        right_rows = {item[key]: item for item in right[field]}
+        output: list[dict[str, Any]] = []
+        for identifier in sorted(set(left_rows) | set(right_rows)):
+            first = left_rows.get(identifier)
+            second = right_rows.get(identifier)
+            rows = [item for item in (first, second) if item is not None]
+            verdict = max(
+                (item["verdict"] for item in rows),
+                key=lambda item: verdict_rank[item],
+            )
+            finding_ids = sorted(
+                {
+                    finding_id
+                    for item in rows
+                    for finding_id in item["finding_ids"]
+                }
+            )
+            output.append({key: identifier, "verdict": verdict, "finding_ids": finding_ids})
+        return output
+
     return {
         "verdict": "not-clear" if actionable else (
             "blocked" if "blocked" in {left["verdict"], right["verdict"]} else "review-clear"
         ),
         "summary": " ".join(dict.fromkeys([left["summary"], right["summary"]])),
         "findings": list(findings.values()),
-        "ticket_verdicts": left["ticket_verdicts"],
-        "requirement_verdicts": left["requirement_verdicts"],
+        "ticket_verdicts": merge_rows("ticket_verdicts", "ticket_id"),
+        "requirement_verdicts": merge_rows("requirement_verdicts", "requirement_id"),
         "prior_finding_verdicts": left["prior_finding_verdicts"],
     }
 
@@ -1415,6 +1443,7 @@ def _review_result(
     decision: dict[str, Any],
     reviewers: list[dict[str, Any]],
     reconciliation: dict[str, Any] | None,
+    routing: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "schema_version": RESULT_SCHEMA,
@@ -1434,6 +1463,7 @@ def _review_result(
         "prior_finding_verdicts": decision["prior_finding_verdicts"],
         "reviewers": reviewers,
         "reconciliation": reconciliation,
+        "routing": routing,
     }
 
 
@@ -1446,6 +1476,50 @@ def _processed_tokens(metadata: dict[str, Any]) -> list[int]:
     if isinstance(repair, dict):
         output.extend(_processed_tokens(repair))
     return output
+
+
+def _recoverable_budget_primary(
+    state: dict[str, Any],
+    pack: dict[str, Any],
+    *,
+    kind: str,
+) -> dict[str, Any] | None:
+    """Recover a validated actionable primary from the pre-v4 budget dead end."""
+
+    active = state.get("active_run")
+    if not isinstance(active, dict) or active.get("status") != "failed":
+        return None
+    if active.get("kind") != f"review:{kind}" or active.get("head_sha") != pack["head_sha"]:
+        return None
+    error = str(active.get("error") or "")
+    if "budget" not in error.lower():
+        return None
+    lane = (active.get("lanes") or {}).get("primary")
+    if not isinstance(lane, dict) or lane.get("status") != "completed":
+        return None
+    decision = lane.get("decision")
+    metadata = lane.get("metadata")
+    if not isinstance(decision, dict) or not isinstance(metadata, dict):
+        return None
+    validated = _validate_decision(copy.deepcopy(decision), pack=pack)
+    if not _actionable(validated):
+        return None
+    if metadata.get("output_digest") != stable_digest(decision):
+        raise IntegrityError("Recovered primary decision digest changed")
+    recovered = copy.deepcopy(lane)
+    recovered_metadata = recovered.setdefault("metadata", {})
+    recovered_metadata["recovery"] = {
+        "contract": "dls-budget-recovery/v1",
+        "reason": "actionable-primary-before-optional-budget-failure",
+        "source_run_digest": stable_digest(
+            {
+                "run_id": active.get("run_id"),
+                "contract_digest": active.get("contract_digest"),
+                "head_sha": active.get("head_sha"),
+            }
+        ),
+    }
+    return recovered
 
 
 def review_run(
@@ -1513,7 +1587,11 @@ def review_run(
                 "human_decision": human_decision(root, state, action=action),
             }
         pack, pack_path = _definition_pack(root, state, write=not dry_run)
-    if pack["head_sha"] != head or pack["definition_digest"] != definition_digest(root, state):
+    if (
+        pack["head_sha"] != head
+        or pack["definition_digest"] != definition_digest(root, state)
+        or pack["source_digest"] != git_product_tree_digest(root)
+    ):
         raise IntegrityError("ReviewPack is not current for HEAD and definition")
     contract_digest = stable_digest(
         {
@@ -1532,6 +1610,7 @@ def review_run(
             "review_pack_path": pack_path,
             "next_action": {"id": "run-review"},
         }
+    recovered_primary = _recoverable_budget_primary(state, pack, kind=kind)
     active, owner = _claim_run(
         root,
         state,
@@ -1563,6 +1642,8 @@ def review_run(
             "review_id": pack["review_id"],
             "next_action": {"id": "wait-review"},
         }
+    if recovered_primary is not None and "primary" not in active.get("lanes", {}):
+        _set_lane(root, change_id, run_id, "primary", recovered_primary)
     if stream:
         stream(
             {
@@ -1577,6 +1658,18 @@ def review_run(
     holder, workspace = _workspace(root, head)
     try:
         control = pack["control_level"]
+        selected = _secondary_lens(pack)
+        routing: dict[str, Any] = {
+            "contract": ROUTING_CONTRACT,
+            "planned": ["primary"] + (["secondary"] if selected else []),
+            "completed": [],
+            "skipped": [],
+            "recovered": [],
+        }
+        if recovered_primary is not None:
+            routing["recovered"].append(
+                {"lane": "primary", "reason": "prior-budget-failure"}
+            )
         primary, primary_meta = _lane(
             root,
             run_id=run_id,
@@ -1588,6 +1681,7 @@ def review_run(
             lens=None,
             budget=BUDGETS[control]["primary"],
         )
+        routing["completed"].append("primary")
         if stream:
             stream(
                 {
@@ -1599,8 +1693,20 @@ def review_run(
             )
         secondary = None
         secondary_meta = None
-        selected = _secondary_lens(pack)
-        if selected:
+        if selected and _actionable(primary):
+            routing["skipped"].append(
+                {"lane": "secondary", "reason": "actionable-primary"}
+            )
+            if stream:
+                stream(
+                    {
+                        "event": "review-short-circuited",
+                        "terminal": False,
+                        "reason": "actionable-primary",
+                        "skipped_lane": "secondary",
+                    }
+                )
+        elif selected:
             lens, effort = selected
             secondary, secondary_meta = _lane(
                 root,
@@ -1613,6 +1719,7 @@ def review_run(
                 lens=lens,
                 budget=BUDGETS["critical"]["secondary"],
             )
+            routing["completed"].append("secondary")
             if stream:
                 stream(
                     {
@@ -1624,7 +1731,9 @@ def review_run(
                 )
         reconciliation_meta = None
         if secondary is not None and _conflicts(primary, secondary):
+            routing["planned"].append("reconciliation")
             decision, reconciliation_meta = _reconcile(root, run_id, pack, primary, secondary)
+            routing["completed"].append("reconciliation")
         else:
             decision = _merge(primary, secondary, change_id)
         reviewers = [{"lane": "primary", **primary_meta}]
@@ -1637,9 +1746,25 @@ def review_run(
         ]
         if reconciliation_meta:
             all_usage.extend(_processed_tokens(reconciliation_meta))
-        if sum(all_usage) > BUDGETS[control]["aggregate"]:
-            raise IntegrityError("Review exceeded its aggregate token budget")
-        result = _review_result(pack, decision, reviewers, reconciliation_meta)
+        processed_tokens = sum(all_usage) if all_usage else None
+        aggregate_target = BUDGETS[control]["aggregate"]
+        aggregate_over_target = (
+            isinstance(processed_tokens, int) and processed_tokens > aggregate_target
+        )
+        routing["budget"] = {
+            "aggregate_target_tokens": aggregate_target,
+            "processed_tokens": processed_tokens,
+            "over_target": aggregate_over_target,
+        }
+        if aggregate_over_target and not _actionable(decision):
+            raise IntegrityError("Review aggregate budget exhausted before clearance")
+        result = _review_result(
+            pack,
+            decision,
+            reviewers,
+            reconciliation_meta,
+            routing,
+        )
         relative = f".dls/reviews/{change_id}/results/{pack['review_id']}.json"
         path = safe_resolve(root, relative)
         if path.is_file() and read_json(path) != result:
@@ -1667,8 +1792,9 @@ def review_run(
                 "pack_path": pack_path,
                 "pack_digest": pack["pack_digest"],
                 "usage": {
-                    "processed_tokens": sum(all_usage) if all_usage else None,
+                    "processed_tokens": processed_tokens,
                     "reviewers": reviewers,
+                    "routing": routing,
                 },
             }
             if kind == "definition":
@@ -1726,7 +1852,7 @@ def review_run(
             change_id,
             {"kind": f"review:{kind}", "error": str(exc), "recorded_at": utc_now()},
         )
-        _finish_run(root, change_id, run_id, status="failed", error=str(exc))
+        failed_state = _finish_run(root, change_id, run_id, status="failed", error=str(exc))
         if stream:
             error = str(exc)
             stream(
@@ -1738,13 +1864,7 @@ def review_run(
                     "verdict": None,
                     "review_result_path": None,
                     "error": error,
-                    "next_action": {
-                        "id": (
-                            "inspect-review-budget"
-                            if "budget" in error.lower()
-                            else "inspect-review-failure"
-                        )
-                    },
+                    "next_action": next_action(root, failed_state),
                 }
             )
         raise

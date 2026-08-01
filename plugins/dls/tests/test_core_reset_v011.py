@@ -8,7 +8,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from dls_core.cli import build_parser
+from dls_core.cli import build_parser, dispatch
 from dls_core.core import (
     approve,
     decision_projection,
@@ -22,8 +22,16 @@ from dls_core.core import (
     upgrade,
 )
 from dls_core.errors import IntegrityError
-from dls_core.runner import _model_call, _run_bounded, candidate_ready, review_run
-from dls_core.worktrees import prepare, resolve_change_root
+from dls_core.runner import (
+    BUDGETS,
+    _conflicts,
+    _model_call,
+    _prompt,
+    _run_bounded,
+    candidate_ready,
+    review_run,
+)
+from dls_core.worktrees import execution_context, prepare, registry_path, resolve_change_root
 from support import (
     FAKE_CODEX,
     FAKE_REPAIR,
@@ -312,7 +320,77 @@ class CoreResetTests(unittest.TestCase):
         finally:
             restore_environment(previous)
 
-    def test_reconciliation_runs_only_for_direct_conflict_without_checkout(self) -> None:
+    def test_critical_actionable_primary_short_circuits_secondary(self) -> None:
+        log, previous = self._prepare_code(control="critical", impacts=["public-api"])
+        try:
+            fake = self.root / ".dls" / "cache" / "fake-bin"
+            (fake / "mode").write_text("finding", encoding="utf-8")
+            before = len(self._calls(log))
+            result = review_run(self.root, change_id="C001", kind="code")
+            self.assertEqual("not-clear", result["verdict"])
+            self.assertEqual(1, len(self._calls(log)) - before)
+            routing = load_state(self.root, "C001")["review"]["usage"]["routing"]
+            self.assertEqual(["primary"], routing["completed"])
+            self.assertEqual(
+                [{"lane": "secondary", "reason": "actionable-primary"}],
+                routing["skipped"],
+            )
+        finally:
+            restore_environment(previous)
+
+    def test_failed_secondary_recovers_actionable_primary_without_model_call(self) -> None:
+        log, previous = self._prepare_code(control="critical", impacts=["public-api"])
+        try:
+            fake = self.root / ".dls" / "cache" / "fake-bin"
+            (fake / "mode").write_text("finding", encoding="utf-8")
+            state = load_state(self.root, "C001")
+            pack_path = self.root / state["candidate"]["pack_path"]
+            pack = json.loads(pack_path.read_text(encoding="utf-8"))
+            decision, metadata = _model_call(
+                workspace=self.root,
+                model="gpt-5.6-terra",
+                effort="high",
+                prompt=_prompt(pack, lane="primary", lens=None),
+                lane_budget=BUDGETS["critical"]["primary"],
+            )
+
+            def fail_old_run(value: dict) -> None:
+                value["active_run"] = {
+                    "run_id": "legacy-budget-run",
+                    "kind": "review:code",
+                    "head_sha": pack["head_sha"],
+                    "contract_digest": "a" * 64,
+                    "status": "failed",
+                    "pid": None,
+                    "error": "Review lane exceeded its token budget",
+                    "lanes": {
+                        "primary": {
+                            "status": "completed",
+                            "decision": decision,
+                            "metadata": metadata,
+                            "completed_at": "2026-08-01T00:00:00Z",
+                        },
+                        "secondary": {
+                            "status": "failed",
+                            "error": "Review lane exceeded its token budget",
+                        },
+                    },
+                }
+
+            mutate_state(self.root, "C001", fail_old_run)
+            before = len(self._calls(log))
+            result = review_run(self.root, change_id="C001", kind="code")
+            self.assertEqual("not-clear", result["verdict"])
+            self.assertEqual(0, len(self._calls(log)) - before)
+            routing = load_state(self.root, "C001")["review"]["usage"]["routing"]
+            self.assertEqual(
+                [{"lane": "primary", "reason": "prior-budget-failure"}],
+                routing["recovered"],
+            )
+        finally:
+            restore_environment(previous)
+
+    def test_additive_secondary_finding_does_not_run_reconciliation(self) -> None:
         _, previous = self._prepare_code(control="critical", impacts=["auth"])
         try:
             fake_codex(self.root, FAKE_CONFLICT)
@@ -321,11 +399,35 @@ class CoreResetTests(unittest.TestCase):
             result = review_run(self.root, change_id="C001", kind="code")
             calls = [json.loads(line) for line in self._calls(str(log))[before:]]
             self.assertEqual("not-clear", result["verdict"])
-            self.assertEqual(3, len(calls))
-            self.assertFalse(calls[-1]["source_visible"])
-            self.assertTrue(calls[-1]["reconcile"])
+            self.assertEqual(2, len(calls))
+            self.assertFalse(any(item["reconcile"] for item in calls))
+            self.assertEqual(
+                ["primary", "secondary"],
+                load_state(self.root, "C001")["review"]["usage"]["routing"]["completed"],
+            )
+            payload = json.loads((self.root / result["review_result_path"]).read_text())
+            finding_id = payload["findings"][0]["id"]
+            self.assertIn(finding_id, payload["ticket_verdicts"][0]["finding_ids"])
         finally:
             restore_environment(previous)
+
+    def test_prior_finding_disagreement_is_a_direct_conflict(self) -> None:
+        base = {
+            "findings": [],
+            "ticket_verdicts": [],
+            "requirement_verdicts": [],
+            "prior_finding_verdicts": [
+                {
+                    "finding_id": "OLD-1",
+                    "verdict": "verified",
+                    "replacement_finding_id": None,
+                    "evidence": ["diff"],
+                }
+            ],
+        }
+        other = json.loads(json.dumps(base))
+        other["prior_finding_verdicts"][0]["verdict"] = "waived"
+        self.assertTrue(_conflicts(base, other))
 
     def test_reviewer_owns_finding_verification(self) -> None:
         _, previous = self._prepare_code(control="routine")
@@ -505,22 +607,49 @@ class CoreResetTests(unittest.TestCase):
         finally:
             restore_environment(previous)
 
-    def test_budget_failure_creates_no_review_and_is_not_retried(self) -> None:
+    def test_lane_budget_is_an_allocation_and_preserves_valid_result(self) -> None:
         _, previous = self._prepare_code(control="routine")
         try:
             fake_codex(self.root, FAKE_BUDGET)
             log = self.root / ".dls" / "cache" / "fake-bin" / "calls.jsonl"
             before = len(self._calls(str(log)))
-            with self.assertRaisesRegex(IntegrityError, "budget"):
+            result = review_run(self.root, change_id="C001", kind="code")
+            self.assertEqual("review-clear", result["verdict"])
+            review = load_state(self.root, "C001")["review"]
+            self.assertTrue(review["usage"]["reviewers"][0]["budget"]["over_target"])
+            self.assertFalse(review["usage"]["routing"]["budget"]["over_target"])
+            self.assertEqual(1, len(self._calls(str(log))) - before)
+        finally:
+            restore_environment(previous)
+
+    def test_clean_aggregate_overrun_cannot_create_review_clear(self) -> None:
+        _, previous = self._prepare_code(control="routine")
+        try:
+            fake_codex(self.root, FAKE_BUDGET.replace("700000", "800000"))
+            log = self.root / ".dls" / "cache" / "fake-bin" / "calls.jsonl"
+            before = len(self._calls(str(log)))
+            with self.assertRaisesRegex(IntegrityError, "aggregate budget"):
                 review_run(self.root, change_id="C001", kind="code")
-            self.assertIsNone(load_state(self.root, "C001")["review"])
-            self.assertEqual(
-                "inspect-review-budget",
-                status(self.root, "C001")["next_action"]["id"],
-            )
-            with self.assertRaisesRegex(IntegrityError, "previously failed"):
+            state = load_state(self.root, "C001")
+            self.assertIsNone(state["review"])
+            self.assertEqual("review-budget-exhausted", status(self.root, "C001")["next_action"]["id"])
+            primary = state["active_run"]["lanes"]["primary"]
+            self.assertEqual(800001, primary["metadata"]["usage"]["processed_tokens"])
+            with self.assertRaisesRegex(IntegrityError, "aggregate budget"):
                 review_run(self.root, change_id="C001", kind="code")
             self.assertEqual(1, len(self._calls(str(log))) - before)
+        finally:
+            restore_environment(previous)
+
+    def test_actionable_aggregate_overrun_imports_safe_not_clear(self) -> None:
+        _, previous = self._prepare_code(control="routine")
+        try:
+            executable, _ = fake_codex(self.root, FAKE_BUDGET.replace("700000", "800000"))
+            executable.with_name("mode").write_text("finding", encoding="utf-8")
+            result = review_run(self.root, change_id="C001", kind="code")
+            self.assertEqual("not-clear", result["verdict"])
+            routing = load_state(self.root, "C001")["review"]["usage"]["routing"]
+            self.assertTrue(routing["budget"]["over_target"])
         finally:
             restore_environment(previous)
 
@@ -543,6 +672,11 @@ class CoreResetTests(unittest.TestCase):
         self.assertIn("tools.write_stdin", cli)
         self.assertIn("Never print only `result.output`", cli)
         self.assertIn("Принять результат? Да / Нет.", skill)
+        self.assertIn("Before reading or changing product files", skill)
+        self.assertIn("Use `owner_root` as the working directory", skill)
+        self.assertIn("worktree prepare\n  CHANGE_ID", skill)
+        self.assertIn("immediately imports canonical `not-clear`", skill)
+        self.assertNotIn("Existing worktree branch does not match requested branch", skill)
         self.assertNotIn("ask the user to accept the exact reviewed HEAD", skill)
 
     def test_dependency_requires_accepted_head_in_base(self) -> None:
@@ -572,6 +706,251 @@ class CoreResetTests(unittest.TestCase):
             self.assertEqual(moved.resolve(), resolve_change_root(self.root, "C001"))
         finally:
             git(self.root, "worktree", "remove", "--force", str(moved))
+
+    def test_execution_context_prepares_owner_and_leaves_dirty_caller_untouched(self) -> None:
+        change(self.root, control="standard")
+        commit(self.root, "definition")
+        _, previous = self._fake()
+        owner = self.root.parent / f"{self.root.name}-owner"
+        try:
+            review_run(self.root, change_id="C001", kind="definition")
+            self._approve("C001")
+            resolved, before = execution_context(self.root, "C001")
+            self.assertEqual(self.root.resolve(), resolved)
+            self.assertEqual("prepare-owner-worktree", before["action"])
+            arguments = build_parser().parse_args(
+                ["--root", str(self.root), "status", "C001"]
+            )
+            status_payload = dispatch(arguments)
+            self.assertEqual(
+                "prepare-owner-worktree", status_payload["next_action"]["id"]
+            )
+            self.assertEqual(
+                "dls-execution-context/v1",
+                status_payload["execution_context"]["contract"],
+            )
+
+            prepared = prepare(
+                self.root,
+                change_id="C001",
+                base=None,
+                path=owner,
+                branch="codex/custom-owner-name",
+                dry_run=False,
+            )
+            self.assertEqual(git(self.root, "rev-parse", "HEAD"), prepared["base_sha"])
+            original = (self.root / "README.md").read_text(encoding="utf-8")
+            (self.root / "README.md").write_text(original + "dirty caller\n", encoding="utf-8")
+            resolved, context = execution_context(self.root, "C001")
+            self.assertEqual(owner.resolve(), resolved)
+            self.assertEqual("ready", context["status"])
+            self.assertTrue(context["caller_dirty"])
+            self.assertFalse(context["owner_dirty"])
+            self.assertEqual("# Fixture\n", (owner / "README.md").read_text(encoding="utf-8"))
+        finally:
+            restore_environment(previous)
+            git(self.root, "worktree", "remove", "--force", str(owner))
+
+    def test_existing_git_worktree_is_bound_without_branch_name_match(self) -> None:
+        change(self.root, control="standard")
+        commit(self.root, "definition")
+        target = self.root.parent / f"{self.root.name}-owner"
+        try:
+            git(self.root, "worktree", "add", "-b", "codex/unrelated-name", str(target), "HEAD")
+            result = prepare(
+                self.root,
+                change_id="C001",
+                base=None,
+                path=target,
+                branch="codex/C001-implementation",
+                dry_run=False,
+            )
+            self.assertFalse(result["created"])
+            self.assertEqual(target.resolve(), resolve_change_root(self.root, "C001"))
+        finally:
+            git(self.root, "worktree", "remove", "--force", str(target))
+
+    def test_dirty_main_routes_candidate_and_review_to_clean_owner(self) -> None:
+        change(self.root, control="standard")
+        commit(self.root, "definition")
+        executable, previous = self._fake()
+        owner = self.root.parent / f"{self.root.name}-owner"
+        try:
+            self.assertEqual(
+                "review-clear",
+                review_run(self.root, change_id="C001", kind="definition")["verdict"],
+            )
+            self._approve("C001")
+            prepare(
+                self.root,
+                change_id="C001",
+                base=None,
+                path=owner,
+                branch="codex/custom-owner-name",
+                dry_run=False,
+            )
+            ticket_set(
+                owner,
+                change_id="C001",
+                ticket_id="C001-T01",
+                value="implemented",
+                note=None,
+            )
+            (owner / "src.py").write_text("value = 1\n", encoding="utf-8")
+            commit(owner, "implementation")
+            (self.root / "README.md").write_text("dirty caller\n", encoding="utf-8")
+
+            ready = dispatch(
+                build_parser().parse_args(
+                    [
+                        "--root",
+                        str(self.root),
+                        "candidate-ready",
+                        "C001",
+                        "--base",
+                        self.base,
+                    ]
+                )
+            )
+            self.assertEqual("open-review-task", ready["next_action"]["id"])
+            self.assertEqual(
+                git(owner, "rev-parse", "HEAD"),
+                load_state(owner, "C001")["candidate"]["head_sha"],
+            )
+
+            before = len(self._calls(str(executable.with_name("calls.jsonl"))))
+            reviewed = dispatch(
+                build_parser().parse_args(
+                    ["--root", str(self.root), "review-run", "C001", "--kind", "code"]
+                )
+            )
+            self.assertEqual("review-clear", reviewed["verdict"])
+            self.assertEqual(1, len(self._calls(str(executable.with_name("calls.jsonl")))) - before)
+            self.assertEqual("dirty caller\n", (self.root / "README.md").read_text())
+        finally:
+            restore_environment(previous)
+            git(self.root, "worktree", "remove", "--force", str(owner))
+
+    def test_prepared_candidate_pack_follows_new_owner(self) -> None:
+        change(self.root, control="routine")
+        commit(self.root, "definition")
+        self._approve("C001")
+        ticket_set(
+            self.root,
+            change_id="C001",
+            ticket_id="C001-T01",
+            value="implemented",
+            note=None,
+        )
+        (self.root / "src.py").write_text("value = 1\n", encoding="utf-8")
+        commit(self.root, "implementation")
+        ready = candidate_ready(
+            self.root,
+            change_id="C001",
+            base=self.base,
+            addressed=[],
+            noted=[],
+            dry_run=False,
+        )
+        pack_path = ready["review_pack_path"]
+        owner = self.root.parent / f"{self.root.name}-owner"
+        try:
+            prepare(
+                self.root,
+                change_id="C001",
+                base=None,
+                path=owner,
+                branch="codex/C001-implementation",
+                dry_run=False,
+            )
+            self.assertEqual(
+                (self.root / pack_path).read_bytes(),
+                (owner / pack_path).read_bytes(),
+            )
+        finally:
+            git(self.root, "worktree", "remove", "--force", str(owner))
+
+    def test_unique_git_worktree_recovers_missing_registry_binding(self) -> None:
+        change(self.root, control="standard")
+        commit(self.root, "definition")
+        owner = self.root.parent / f"{self.root.name}-owner"
+        try:
+            prepare(
+                self.root,
+                change_id="C001",
+                base=None,
+                path=owner,
+                branch="codex/C001-implementation",
+                dry_run=False,
+            )
+            registry_path(self.root).unlink()
+            resolved, context = execution_context(self.root, "C001")
+            self.assertEqual(owner.resolve(), resolved)
+            self.assertEqual("bind-owner-worktree", context["action"])
+            recovered = prepare(
+                self.root,
+                change_id="C001",
+                base=None,
+                path=None,
+                branch=None,
+                dry_run=False,
+            )
+            self.assertTrue(recovered["binding_recovered"])
+            _, bound = execution_context(self.root, "C001")
+            self.assertTrue(bound["registry_bound"])
+        finally:
+            git(self.root, "worktree", "remove", "--force", str(owner))
+
+    def test_dirty_owner_stops_before_product_work(self) -> None:
+        change(self.root, control="standard")
+        commit(self.root, "definition")
+        owner = self.root.parent / f"{self.root.name}-owner"
+        try:
+            prepare(
+                self.root,
+                change_id="C001",
+                base=None,
+                path=owner,
+                branch="codex/C001-implementation",
+                dry_run=False,
+            )
+            (owner / "README.md").write_text("dirty owner\n", encoding="utf-8")
+            resolved, context = execution_context(self.root, "C001")
+            self.assertEqual(owner.resolve(), resolved)
+            self.assertEqual("conflict", context["status"])
+            self.assertEqual("commit-owner-source", context["action"])
+        finally:
+            git(self.root, "worktree", "remove", "--force", str(owner))
+
+    def test_second_state_bearing_owner_is_an_explicit_conflict(self) -> None:
+        change(self.root, control="standard")
+        commit(self.root, "definition")
+        owner = self.root.parent / f"{self.root.name}-owner"
+        duplicate = self.root.parent / f"{self.root.name}-duplicate"
+        try:
+            prepare(
+                self.root,
+                change_id="C001",
+                base=None,
+                path=owner,
+                branch="codex/C001-implementation",
+                dry_run=False,
+            )
+            git(self.root, "worktree", "add", "--detach", str(duplicate), "HEAD")
+            duplicate_state = duplicate / ".dls" / "state"
+            duplicate_state.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(
+                owner / ".dls" / "state" / "C001.json",
+                duplicate_state / "C001.json",
+            )
+            registry_path(self.root).unlink()
+            resolved, context = execution_context(self.root, "C001")
+            self.assertIsNone(resolved)
+            self.assertEqual("ambiguous-owner", context["reason"])
+            self.assertEqual("resolve-owner-conflict", context["action"])
+        finally:
+            git(self.root, "worktree", "remove", "--force", str(duplicate))
+            git(self.root, "worktree", "remove", "--force", str(owner))
 
     def test_prunable_unrelated_worktree_does_not_break_owner_routing(self) -> None:
         change(self.root, control="standard")

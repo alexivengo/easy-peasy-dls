@@ -1,4 +1,4 @@
-# DLS v0.11 CLI
+# DLS v0.13 CLI
 
 Invoke the installed plugin-local launcher:
 
@@ -20,7 +20,7 @@ ticket CHANGE_ID TICKET_ID --status STATUS
 dependency set|list|remove
 candidate-ready CHANGE_ID [--base REF] [--address ID] [--note ID]
 review-run CHANGE_ID --kind definition|code --stream
-worktree prepare CHANGE_ID --base REF
+worktree prepare CHANGE_ID [--base REF]
 ```
 
 Use `--help` for exact flags. Normal users do not type these commands. The skill
@@ -39,6 +39,19 @@ CLI use without a decision ID keeps the explicit digest/SHA contract.
 For a repeated initial candidate, omit `--base`: DLS reuses its preserved Git
 base and rejects a conflicting replacement. Stream events are terminal only
 when `event=completed` and `terminal=true`.
+
+`status`, `candidate-ready`, and `review-run` return
+`execution_context.contract=dls-execution-context/v1`. Resolve it before product
+work:
+
+- `ready`: run all repository operations from `owner_root`;
+- `prepare-owner-worktree` or `bind-owner-worktree`: invoke `worktree prepare
+  CHANGE_ID` without `--base`, then repeat status once;
+- `commit-owner-source` or `resolve-owner-conflict`: stop without editing,
+  stashing, resetting, or moving files.
+
+`caller_root` and `owner_root` are local machine routing values. Do not repeat
+them in user-facing summaries or persist them in canonical artifacts.
 
 ## Long-running review in Codex App
 

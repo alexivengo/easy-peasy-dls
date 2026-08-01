@@ -1,6 +1,6 @@
 # Roadmap
 
-Текущая линия: `v0.12.0 One-Reply Decisions`
+Текущая линия: `v0.13.0 Owner Workspace & Reliable Review UX`
 
 Полный прежний KANO-каталог заморожен как
 [planning snapshot](archive/kano-snapshot-2026-07-30.md). Он больше не участвует
@@ -8,14 +8,15 @@
 
 ## Now
 
-- выпустить и проверить Core Reset;
-- провести несколько реальных routine/standard/critical pilots;
-- измерять model calls, tokens, blocked runs, recovery frequency и ручные шаги;
-- подтвердить migration `swift-of-mcp` до применения к реальному state.
+- `M71`: owner-worktree определяется до первой product-операции;
+- `M72`: actionable primary сохраняется при optional lane/budget failure;
+- `P47`: основной проект автоматически маршрутизируется в owner;
+- `P48`: critical review завершается ранним `not-clear` без лишней lane;
+- `P28`: workspace conflicts получают одно безопасное typed действие;
+- повторно подтвердить `M53/M65` реальным EPIC-03a recovery без model call.
 
 ## Next
 
-- Platform & Conflict UX только на доказанных проблемах pilots;
 - UI/design pilot на настоящем change;
 - backend review pilot после current definition approval;
 - точечная настройка budgets по сопоставимым данным.

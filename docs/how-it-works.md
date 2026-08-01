@@ -12,6 +12,11 @@ definition и, когда нужно, отдельные architecture/design dec
 
 ### 2. Implementation
 
+Задача может быть открыта в основном checkout. До чтения product source DLS
+разрешает единственный owner-worktree по Git identity; если его ещё нет —
+готовит автоматически от committed HEAD. Dirty caller остаётся нетронутым.
+Codex выполняет чтение, правки, тесты и commit только в owner.
+
 Codex реализует подтверждённый contract и запускает focused tests. После commit
 один `candidate-ready`:
 
@@ -26,9 +31,11 @@ Implementation-задача останавливается. Пользовате
 
 `review-run --kind code` работает в disposable exact-HEAD read-only worktree.
 Routine/standard получают один Terra/high analysis. Critical получает второго
-Sol reviewer только для trust, data, reliability или contract risk.
+Sol reviewer только для trust, data, reliability или contract risk и только
+когда primary не нашёл actionable problem.
 
-Один actionable finding означает `not-clear`. Прямое противоречие reviewers
+Один primary blocker или should-fix немедленно означает canonical `not-clear`:
+secondary и reconciliation больше не запускаются. Прямое противоречие reviewers
 получает compact reconciliation без product checkout. Некорректный JSON
 получает один repair без source.
 
@@ -46,7 +53,8 @@ Sol reviewer только для trust, data, reliability или contract risk.
 ## Параллельная работа
 
 Один change имеет одного writer. Разные changes могут жить в разных Git
-worktree. DLS хранит лишь stable Git worktree identity. Единственная dependency
+worktree, но пользователь продолжает открывать основной проект. DLS хранит лишь
+stable Git worktree identity. Единственная dependency
 означает: implementation текущего change требует accepted reviewed HEAD другого
 change в Git ancestry.
 
@@ -56,4 +64,5 @@ change в Git ancestry.
 - не исполняет команды из Markdown или model output;
 - не требует ADR, worktree, TDD или epic package для каждой задачи;
 - не хранит transcript/recovery history как новый source of truth;
+- не переносит, не удаляет и не stash'ит dirty draft автоматически;
 - не считает validation равной review, а acceptance равной release.

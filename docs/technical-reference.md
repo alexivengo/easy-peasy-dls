@@ -1,4 +1,4 @@
-# Technical reference — v0.11
+# Technical reference — v0.13
 
 ## Public CLI
 
@@ -106,14 +106,27 @@ Critical secondary triggers:
 - public-api/compatibility → contract/high.
 
 Architecture, release and external-dependency alone do not add a reviewer.
-Reconciliation runs only when reviewers directly contradict a prior-finding,
-ticket or requirement verdict. It sees structured outputs and compact pack, not
-the product checkout.
+Any primary blocker or should-fix is sufficient to import `not-clear`; optional
+secondary and reconciliation are skipped. A second reviewer is required only
+before potential critical `review-clear`. Additive secondary findings merge
+conservatively and do not trigger reconciliation. Reconciliation runs only for
+a direct prior-finding or shared-finding classification contradiction. It sees
+structured outputs and compact pack, not the product checkout.
+
+Lane token values are allocations. A completed structured result records actual
+usage and an `over_target` warning instead of being discarded. Aggregate
+overrun can never create `review-clear`; an already valid actionable decision
+may still be imported as safe `not-clear`, because the spend has already
+occurred and no clearance is granted. Timeout, transcript and process-group
+limits remain terminal.
 
 Logical invalid output is never re-analysed. One compact Sol repair sees only
 the raw decision, validation error and permitted identifiers. Transport may
 retry once. Content-derived run IDs and a crash-safe flock provide single-flight.
 Completed valid lanes are reused during deterministic finalization.
+ReviewIR routing provenance records planned, completed, skipped and recovered
+lanes. A pre-v0.13 failed run with an exact, digest-valid actionable primary can
+be finalized without another model call.
 
 Public runner states are `not-prepared`, `running`, `completed`, `blocked` and
 `failed`. `started` and `lane-transition` stream events are non-terminal; only a
@@ -146,6 +159,13 @@ only `change_id → gitdir identity`; path, branch-name inference, sibling scann
 transfer journals and manual register/unregister lifecycle do not exist.
 Prunable Git entries are ignored and cannot break routing to a live owner.
 
+Lifecycle JSON includes local-only `dls-execution-context/v1` with caller,
+resolved owner, exact owner HEAD, dirty flags and one workspace action. It is
+never written to state, ReviewPack or ReviewIR. `worktree prepare` may derive
+its base from committed caller HEAD. A uniquely matching Git-known worktree can
+restore a missing registry binding; branch name is not identity. Ambiguous,
+dirty-owner and divergent cases stop without stash/reset/transfer.
+
 ## Migration
 
 `upgrade --dry-run` validates every legacy reference before writing.
@@ -168,3 +188,5 @@ session with `write_stdin`; an outer cell completion can no longer be mistaken
 for review completion while DLS continues in the background.
 
 `v0.12.0` introduces one-reply decision cards for approval and acceptance.
+
+`v0.13.0` adds owner-first execution routing and budget-safe early `not-clear`.

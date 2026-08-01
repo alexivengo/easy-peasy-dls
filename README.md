@@ -31,6 +31,18 @@ Simple AI delivery. Proof included.
 
 Обычный пользователь не вводит CLI, SHA, пути к evidence или ReviewPack.
 
+## Что изменилось в v0.13
+
+- основной проект остаётся единственной точкой входа в Codex;
+- DLS до первой правки находит или готовит owner-worktree и направляет туда
+  все чтение, изменения, тесты и commit;
+- dirty основной checkout остаётся нетронутым, если change принадлежит другому
+  чистому owner;
+- critical review сразу возвращает `not-clear` после первого blocker или
+  should-fix и не тратит второй model call;
+- валидный actionable result больше не теряется из-за budget failure
+  необязательной lane.
+
 ## Что изменилось в v0.11 Core Reset
 
 - 12 публичных команд вместо 30;
@@ -59,6 +71,8 @@ codex plugin add dls@easy-peasy-dls
 Проведи code review EPIC-02a.
 Исправь findings последнего review EPIC-02a.
 ```
+
+Добавлять epic-worktree как отдельный проект Codex не требуется.
 
 ## Proof included
 
