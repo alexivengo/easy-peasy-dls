@@ -24,6 +24,7 @@ from dls_core.core import (
 from dls_core.errors import IntegrityError
 from dls_core.runner import (
     BUDGETS,
+    _codex_argv,
     _conflicts,
     _model_call,
     _prompt,
@@ -62,6 +63,19 @@ class CoreResetTests(unittest.TestCase):
         executable, previous = fake_codex(self.root, FAKE_CODEX)
         executable.with_name("mode").write_text(mode, encoding="utf-8")
         return executable, previous
+
+    def test_model_argv_allows_dls_owned_detached_workspace(self) -> None:
+        _, previous = self._fake()
+        try:
+            argv = _codex_argv(
+                workspace=self.root,
+                model="gpt-5.6-terra",
+                effort="high",
+                output=self.root / "decision.json",
+            )
+            self.assertIn("--skip-git-repo-check", argv)
+        finally:
+            restore_environment(previous)
 
     @staticmethod
     def _calls(path: str) -> list[str]:

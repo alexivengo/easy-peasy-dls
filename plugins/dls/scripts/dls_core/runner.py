@@ -930,6 +930,7 @@ def _codex_argv(
         "--sandbox",
         "read-only",
         "--ephemeral",
+        "--skip-git-repo-check",
         "--ignore-user-config",
         "--ignore-rules",
         "--json",
