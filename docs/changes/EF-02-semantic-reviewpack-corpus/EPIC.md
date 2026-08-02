@@ -21,9 +21,10 @@ JSONL ledger, service, dashboard, or DLS runtime input.
   records and one M2 decision. Before live work, records are explicitly
   `planned` or `locked-not-run`; only completed records carry a terminal arm
   outcome. Its decision is `pending-live-sample` until all four records are
-  complete. It becomes actionable only for a clear M2 outcome; a completed
-  non-conformant sample is explicitly `not-clear` with no keep/improve/delete
-  decision. It is distinct from the closed M1 format seed.
+  complete or a stop produces terminal `aborted`/`not-clear` with the remaining
+  records unrun. It becomes actionable only for a clear M2 outcome; a completed
+  non-conformant or aborted sample has no keep/improve/delete decision. It is
+  distinct from the closed M1 format seed.
 - Existing stdlib tests and the public validator reject missing, reordered, or
   malformed case/runbook/decision data before a release-only live run. They do
   not invoke a model.
@@ -58,11 +59,12 @@ JSONL ledger, service, dashboard, or DLS runtime input.
   failed current-arm safety hard oracle; it is recorded as a nonzero arm count.
   The declared SR-03 component-off miss is expected contrast evidence, not a
   current-arm clearance.
-- The release sample has exactly seven nominal live analysis/repair attempts
-  across four cases and at most eight after its one transport retry. Any
-  incomplete, unintended invalid,
-  infrastructure-failed, or budget-exhausted case is `not-clear`, never a
-  PASS; the declared SR-04 fail-closed reference is expected contrast evidence.
+- A completed release sample has exactly seven nominal live analysis/repair
+  attempts across four cases and at most eight after its one transport retry.
+  An aborted sample records only its bounded partial attempts. Any incomplete,
+  unintended invalid, infrastructure-failed, or budget-exhausted case is
+  `not-clear`, never a PASS; the declared SR-04 fail-closed reference is
+  expected contrast evidence.
 - One documented keep, improve, or delete decision follows the recorded M2
   evidence without asserting release or production readiness.
 
@@ -85,8 +87,10 @@ JSONL ledger, service, dashboard, or DLS runtime input.
 - `REQ-003`: The release-only runbook enforces the accepted M1 dependency,
   fresh-task/plugin boundary, current/reference pairing only where a reference
   exists, at most four cases and eight counted attempts, zero live calls in
-  normal validation, and a fail-closed incomplete outcome. A transport retry
-  counts toward every case/sample ceiling and cannot create a ninth attempt.
+  normal validation, and a fail-closed incomplete outcome. A stop creates a
+  terminal `aborted`/`not-clear` record with only its executed prefix; a
+  transport retry counts toward every case/sample ceiling and cannot create a
+  ninth attempt.
 - `REQ-004`: Four live M2 cases execute against the locked fixtures: clean
   control, seeded blocker, critical secondary routing, and malformed-output
   repair. Their hidden oracles are evaluated outside the reviewer prompt.

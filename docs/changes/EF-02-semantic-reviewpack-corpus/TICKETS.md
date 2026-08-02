@@ -27,8 +27,9 @@ Acceptance:
   or executable runner/ledger behavior.
 - All four release-only cases have immutable locks, stay within their routing
   and call bounds, and meet their hidden-oracle expectations.
-- Any incomplete or unsafe case keeps M2 `not-clear`; no M2 result claims
-  release or production.
+- Any incomplete or unsafe case creates the explicit terminal
+  `aborted`/`not-clear` record with only its executed prefix; no M2 result
+  claims release or production.
 
 Validation:
 
