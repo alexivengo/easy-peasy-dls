@@ -80,6 +80,7 @@ BUDGETS = {
 }
 MODEL_TIMEOUT_SECONDS = 20 * 60
 MODEL_TRANSCRIPT_BYTES = 1024 * 1024
+SOURCE_BLIND_REPAIR_CONTRACT = "source-blind-v1"
 
 
 def _alive(pid: object) -> bool:
@@ -1000,16 +1001,12 @@ def _repair(
     *,
     raw: Any,
     error: str,
-    pack: dict[str, Any],
     effort: str,
     budget: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     bundle = {
         "raw_decision": raw,
         "validation_error": error[:4000],
-        "ticket_ids": sorted(pack["tickets"]),
-        "requirement_ids": pack["requirement_ids"],
-        "prior_findings": pack["prior_findings"],
     }
     prompt = (
         "Repair only the JSON structure/reference error below. Do not change semantic verdicts "
@@ -1017,13 +1014,25 @@ def _repair(
         + json.dumps(bundle, ensure_ascii=False, sort_keys=True)
     )
     with tempfile.TemporaryDirectory(prefix="dls-repair-workspace-") as temp:
-        return _model_call(
-            workspace=Path(temp),
+        workspace = Path(temp)
+        if any(workspace.iterdir()):
+            raise IntegrityError("Repair workspace must be empty")
+        decision, metadata = _model_call(
+            workspace=workspace,
             model=MODEL_SECONDARY,
             effort=effort,
             prompt=prompt,
             lane_budget=budget,
         )
+    metadata["source_blind"] = {
+        "contract": SOURCE_BLIND_REPAIR_CONTRACT,
+        "allowed_inputs": tuple(bundle),
+        "input_digest": stable_digest(bundle),
+        "workspace": "empty-temporary",
+        "environment": "allowlist-empty",
+        "sandbox": "read-only",
+    }
+    return decision, metadata
 
 
 def _lane(
@@ -1112,7 +1121,6 @@ def _lane(
                 repaired, repair_metadata = _repair(
                     raw=raw,
                     error=validation_error,
-                    pack=pack,
                     effort="xhigh" if pack["control_level"] == "critical" else "high",
                     budget=BUDGETS[pack["control_level"]]["repair"],
                 )
@@ -1324,7 +1332,6 @@ def _reconcile(
                     repaired, repair_metadata = _repair(
                         raw=raw,
                         error=str(exc),
-                        pack=pack,
                         effort="xhigh",
                         budget=BUDGETS["critical"]["repair"],
                     )

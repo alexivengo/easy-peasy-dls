@@ -24,7 +24,7 @@
 | oracle_digest | not-locked |
 | oracle_owner | dls-maintainer |
 | custody_digest | not-locked |
-| repair_access_digest | not-applicable |
+| repair_boundary_digest | not-applicable |
 | current_manifest_digest | not-locked |
 | reference_manifest_digest | not-applicable |
 | time_ceiling_seconds | 900 |
@@ -53,7 +53,7 @@
 | oracle_digest | not-locked |
 | oracle_owner | dls-maintainer |
 | custody_digest | not-locked |
-| repair_access_digest | not-applicable |
+| repair_boundary_digest | not-applicable |
 | current_manifest_digest | not-locked |
 | reference_manifest_digest | not-applicable |
 | time_ceiling_seconds | 900 |
@@ -82,7 +82,7 @@
 | oracle_digest | not-locked |
 | oracle_owner | dls-maintainer |
 | custody_digest | not-locked |
-| repair_access_digest | not-applicable |
+| repair_boundary_digest | not-applicable |
 | current_manifest_digest | not-locked |
 | reference_manifest_digest | not-locked |
 | time_ceiling_seconds | 900 |
@@ -112,7 +112,7 @@
 | oracle_digest | not-locked |
 | oracle_owner | dls-maintainer |
 | custody_digest | not-locked |
-| repair_access_digest | not-locked |
+| repair_boundary_digest | not-locked |
 | current_manifest_digest | not-locked |
 | reference_manifest_digest | not-locked |
 | time_ceiling_seconds | 900 |

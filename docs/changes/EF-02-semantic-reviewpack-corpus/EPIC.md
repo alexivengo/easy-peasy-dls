@@ -85,8 +85,9 @@ JSONL ledger, service, dashboard, or DLS runtime input.
   hidden-oracle owner, expected verdict, arm manifest, arm-scoped permitted
   manifest difference, hard-oracle result, routing, per-arm maximum-call
   contract, and the allowed outcome taxonomy before its live arm is evaluated.
-  SR-04 additionally records a locked source-blind repair-access proof. SR-01
-  and SR-02 are current-only; SR-03 and SR-04 alone have reference arms.
+  SR-04 additionally records a locked source-blind boundary and an
+  independently replayed execution proof. SR-01 and SR-02 are current-only;
+  SR-03 and SR-04 alone have reference arms.
 - `REQ-003`: The release-only runbook enforces the accepted M1 dependency,
   pinned execution profile, fresh-task/plugin boundary, current/reference
   pairing only where a reference exists, at most four cases and eight counted

@@ -19,6 +19,8 @@
 | oracle_version | not-locked |
 | oracle_digest | not-locked |
 | custody_digest | not-locked |
+| repair_boundary_digest | not-applicable |
+| repair_execution_proof_digest | not-applicable |
 | current_manifest_digest | not-locked |
 | reference_manifest_digest | not-applicable |
 | processed_tokens | not-run |
@@ -51,6 +53,8 @@
 | oracle_version | not-locked |
 | oracle_digest | not-locked |
 | custody_digest | not-locked |
+| repair_boundary_digest | not-applicable |
+| repair_execution_proof_digest | not-applicable |
 | current_manifest_digest | not-locked |
 | reference_manifest_digest | not-applicable |
 | processed_tokens | not-run |
@@ -83,6 +87,8 @@
 | oracle_version | not-locked |
 | oracle_digest | not-locked |
 | custody_digest | not-locked |
+| repair_boundary_digest | not-applicable |
+| repair_execution_proof_digest | not-applicable |
 | current_manifest_digest | not-locked |
 | reference_manifest_digest | not-locked |
 | processed_tokens | not-run |
@@ -116,6 +122,8 @@
 | oracle_version | not-locked |
 | oracle_digest | not-locked |
 | custody_digest | not-locked |
+| repair_boundary_digest | not-locked |
+| repair_execution_proof_digest | not-run |
 | current_manifest_digest | not-locked |
 | reference_manifest_digest | not-locked |
 | processed_tokens | not-run |

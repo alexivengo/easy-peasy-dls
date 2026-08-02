@@ -427,7 +427,7 @@ M2_CASE_FIELDS = (
     "oracle_digest",
     "oracle_owner",
     "custody_digest",
-    "repair_access_digest",
+    "repair_boundary_digest",
     "current_manifest_digest",
     "reference_manifest_digest",
     "time_ceiling_seconds",
@@ -449,6 +449,8 @@ M2_RECORD_FIELDS = (
     "oracle_version",
     "oracle_digest",
     "custody_digest",
+    "repair_boundary_digest",
+    "repair_execution_proof_digest",
     "current_manifest_digest",
     "reference_manifest_digest",
     "processed_tokens",
@@ -498,9 +500,11 @@ M2_RUNBOOK = (
         ("manual-m2-arm", "a release-authorized human invokes unchanged review-run --kind code in the declared disposable fixture; this M2 procedure does not restrict ordinary definition/code review"),
     )),
     ("Custody and locks", (
-        ("custody-bundle", "one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, and SR-04 access proof"),
-        ("lock-check", "fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-access locks match before a live arm"),
-        ("private-replay", "an authorized evaluator receives read-only bundle access and reproduces every recorded lock before an arm"),
+        ("custody-bundle", "one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, SR-04 boundary receipt, and SR-04 execution proof"),
+        ("source-blind-boundary", "SR-04 repair accepts only prior review output and format error in a fresh empty temporary workspace with allowlist-empty environment and read-only sandbox; fixture, task source, hidden oracle, custody, network, and tool access are denied"),
+        ("lock-check", "fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-boundary locks match before a live arm"),
+        ("repair-proof", "a completed SR-04.repair records a source-blind-v1 proof digest bound to that arm; the proof carries only digests, empty-temporary workspace, allowlist-empty environment, read-only sandbox, and zero denied reads"),
+        ("private-replay", "an authorized evaluator receives read-only bundle and DLS receipt access, reproduces every lock, recomputes the SR-04 proof digest, and rejects any proof or boundary mismatch before a clear M2 outcome"),
     )),
     ("Arm order", (
         ("SR-01", "SR-01.current"),
@@ -523,7 +527,7 @@ M2_RUNBOOK = (
     ("Record transition", (
         ("planned", "the planned profile uses not-locked lock placeholders except required not-applicable values; actual arm values and meters not-run; custody retained-for:365d-after-decision"),
         ("locked-not-run", "all locks match the case record; actual arm values not-run; custody retained-for:365d-after-decision"),
-        ("completed", "terminal arm values and cumulative meters recorded; missing meter is infrastructure-failed"),
+        ("completed", "terminal arm values and cumulative meters recorded; SR-04.repair requires its verified proof digest before clear; missing meter is infrastructure-failed"),
         ("aborted", "a stop writes decision_state=aborted and m2_outcome=not-clear; the executed case prefix is retained and all later case records stay unrun"),
         ("decision", "keep/improve/delete only for a clear M2 outcome with useful evidence; otherwise not-applicable"),
     )),
@@ -640,12 +644,12 @@ def _m2_validate_case_fields(case_id: str, fields: dict[str, str]) -> None:
             _m2_fail("m2-state-transition", f"{case_id} reference manifest")
     elif not _m2_is_digest_or_unlocked(reference):
         _m2_fail("m2-enums", f"{case_id} reference_manifest_digest")
-    repair = fields["repair_access_digest"]
+    repair = fields["repair_boundary_digest"]
     if case_id == "SR-04":
         if not _m2_is_digest_or_unlocked(repair):
-            _m2_fail("m2-enums", "SR-04 repair_access_digest")
+            _m2_fail("m2-enums", "SR-04 repair_boundary_digest")
     elif repair != "not-applicable":
-        _m2_fail("m2-state-transition", f"{case_id} repair_access_digest")
+        _m2_fail("m2-state-transition", f"{case_id} repair_boundary_digest")
     if not _m2_is_integer(fields["time_ceiling_seconds"], positive=True) or not _m2_is_integer(fields["token_ceiling"], positive=True):
         _m2_fail("m2-enums", f"{case_id} ceiling")
     if fields["custody_retention"] != "retained-for:365d-after-decision":
@@ -798,7 +802,7 @@ def _m2_validate_record(case_id: str, fields: dict[str, str], case_fields: dict[
         or not _m2_is_date(fields["run_date"])
     ):
         _m2_fail("m2-enums", f"{case_id} execution profile")
-    lock_names = ("fixture_sha", "tree_digest", "task_input_digest", "oracle_version", "oracle_digest", "custody_digest", "current_manifest_digest", "reference_manifest_digest")
+    lock_names = ("fixture_sha", "tree_digest", "task_input_digest", "oracle_version", "oracle_digest", "custody_digest", "repair_boundary_digest", "current_manifest_digest", "reference_manifest_digest")
     if state == "planned":
         expected = {
             "fixture_sha": "not-locked",
@@ -807,6 +811,7 @@ def _m2_validate_record(case_id: str, fields: dict[str, str], case_fields: dict[
             "oracle_version": "not-locked",
             "oracle_digest": "not-locked",
             "custody_digest": "not-locked",
+            "repair_boundary_digest": "not-applicable" if case_id != "SR-04" else "not-locked",
             "current_manifest_digest": "not-locked",
             "reference_manifest_digest": "not-applicable" if case_id in {"SR-01", "SR-02"} else "not-locked",
         }
@@ -816,6 +821,13 @@ def _m2_validate_record(case_id: str, fields: dict[str, str], case_fields: dict[
         expected = {name: case_fields[name] for name in lock_names}
         if {name: fields[name] for name in lock_names} != expected or "not-locked" in expected.values():
             _m2_fail("m2-state-transition", f"{case_id} locked record")
+    proof = fields["repair_execution_proof_digest"]
+    if case_id != "SR-04" and proof != "not-applicable":
+        _m2_fail("m2-state-transition", f"{case_id} repair execution proof")
+    if case_id == "SR-04" and state in {"planned", "locked-not-run"} and proof != "not-run":
+        _m2_fail("m2-state-transition", "SR-04 pre-live repair proof")
+    if case_id == "SR-04" and state == "completed" and proof != "not-run" and not M2_SHA256.fullmatch(proof):
+        _m2_fail("m2-enums", "SR-04 repair_execution_proof_digest")
     if state in {"planned", "locked-not-run"}:
         if fields["processed_tokens"] != "not-run" or fields["wall_time_seconds"] != "not-run" or fields["privacy_retention"] != "not-applicable":
             _m2_fail("m2-state-transition", f"{case_id} pre-live record values")
@@ -912,6 +924,8 @@ def _m2_validate_clear(records: dict[str, tuple[dict[str, str], dict[str, list[s
             _m2_fail("m2-overall-outcome", f"{case_id} clear current arm")
     sr03_reference = records["SR-03"][1]["SR-03.primary-only"]
     sr04_reference = records["SR-04"][1]["SR-04.fail-closed"]
+    if not M2_SHA256.fullmatch(records["SR-04"][0]["repair_execution_proof_digest"]):
+        _m2_fail("m2-overall-outcome", "SR-04 clear repair proof")
     if sr03_reference[6] != "review-clear" or sr03_reference[7] != "passed" or sr03_reference[13] != "dangerous-miss":
         _m2_fail("m2-overall-outcome", "SR-03 contrast reference")
     if sr04_reference[6] != "not-applicable" or sr04_reference[7] != "invalid-case":

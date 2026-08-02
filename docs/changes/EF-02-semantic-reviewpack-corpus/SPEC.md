@@ -43,7 +43,7 @@ Each case must lock, before its first live arm:
 5. expected verdict, expected lanes, a literal per-arm maximum-call contract,
    and time/token ceilings;
 6. privacy class `public-synthetic`, the hidden-oracle owner, and (for SR-04)
-   the digest of its source-blind repair-access proof.
+   the digest of its source-blind repair boundary.
 
 Case text tells the reviewer only the task and ordinary ReviewPack context. The
 hidden oracle, expected finding wording, fixture source, and result matcher
@@ -75,15 +75,15 @@ Value` and this field order:
 
 `case_id`, `claim`, `fixture_sha`, `tree_digest`, `task_input_digest`,
 `oracle_version`, `oracle_digest`, `oracle_owner`, `custody_digest`,
-`repair_access_digest`, `current_manifest_digest`, `reference_manifest_digest`,
+`repair_boundary_digest`, `current_manifest_digest`, `reference_manifest_digest`,
 `time_ceiling_seconds`, `token_ceiling`, `privacy`, `custody_retention`.
 
 Every digest is lowercase `sha256:<64 hex>` when locked and `not-locked` only
 in `planned`; `fixture_sha` is lowercase `git:<40 hex>` when locked.
 `reference_manifest_digest` is `not-applicable` only for SR-01/SR-02.
-`oracle_owner` is exactly `dls-maintainer`; `repair_access_digest` is
+`oracle_owner` is exactly `dls-maintainer`; `repair_boundary_digest` is
 `not-applicable` except for SR-04, where it is a locked digest of the private
-source-blind access proof. `privacy` is exactly `public-synthetic`;
+source-blind boundary receipt. `privacy` is exactly `public-synthetic`;
 `time_ceiling_seconds` and `token_ceiling` are positive base-10 integers.
 `custody_retention` is exactly `retained-for:365d-after-decision` before the
 final M2 decision; the decision-record transition later replaces it with the
@@ -97,7 +97,7 @@ their normative values above. `fixture_sha`, `tree_digest`, `task_input_digest`,
 `oracle_version`, `oracle_digest`, `custody_digest`, and
 `current_manifest_digest` are `not-locked`. `reference_manifest_digest` is
 `not-applicable` for SR-01/SR-02 and `not-locked` for SR-03/SR-04.
-`repair_access_digest` is `not-applicable` for SR-01/SR-02/SR-03 and
+`repair_boundary_digest` is `not-applicable` for SR-01/SR-02/SR-03 and
 `not-locked` for SR-04. Thus `not-applicable` is a required structural
 exception, not a lock placeholder.
 
@@ -107,7 +107,8 @@ through `## SR-04`, then `## M2 decision`, in that order. Each case has a
 
 `case_id`, `run_state`, `plugin_version`, `agent_version`, `model`, `effort`,
 `run_date`, `fixture_sha`, `tree_digest`, `task_input_digest`,
-`oracle_version`, `oracle_digest`, `custody_digest`, `current_manifest_digest`,
+`oracle_version`, `oracle_digest`, `custody_digest`, `repair_boundary_digest`,
+`repair_execution_proof_digest`, `current_manifest_digest`,
 `reference_manifest_digest`, `processed_tokens`, `wall_time_seconds`,
 `custody_retention`, `privacy_retention`.
 
@@ -125,10 +126,12 @@ and `run_date` are `not-locked`; `fixture_sha`, `tree_digest`,
 `task_input_digest`, `oracle_version`, `oracle_digest`, `custody_digest`, and
 `current_manifest_digest` are `not-locked`.
 `reference_manifest_digest` is `not-applicable` for SR-01/SR-02 and
-`not-locked` for SR-03/SR-04. `processed_tokens` and `wall_time_seconds` are
-`not-run`; `custody_retention` is `retained-for:365d-after-decision`; and
-`privacy_retention` is `not-applicable`. Its actual arm columns are all
-`not-run`.
+`not-locked` for SR-03/SR-04. `repair_boundary_digest` is `not-applicable`
+for SR-01/SR-02/SR-03 and `not-locked` for SR-04. `repair_execution_proof_digest`
+is `not-applicable` for SR-01/SR-02/SR-03 and `not-run` for SR-04.
+`processed_tokens` and `wall_time_seconds` are `not-run`; `custody_retention`
+is `retained-for:365d-after-decision`; and `privacy_retention` is
+`not-applicable`. Its actual arm columns are all `not-run`.
 
 Before the first `manual-m2-arm`, every record is updated with the same locked
 execution profile: `plugin_version` is exactly the runbook's pinned plugin
@@ -162,15 +165,30 @@ non-negative base-10 integer. Its six fixed values are:
 
 `Permitted manifest difference` is checked literally against the declared arm's
 current or reference manifest; every other difference is invalid. `Repair
-access` is checked literally. For SR-04.repair it means the compact
-repair receives only the prior review output and its format error: no fixture
-source, task source, hidden oracle, or private custody content. Its private
-access proof must have zero such reads and hash to the case's
-`repair_access_digest`. Before execution `Safety violations` is `not-run`; once
-completed it is a non-negative base-10 integer for every current arm and
-`not-applicable` for every reference arm. It counts a hidden-oracle confirmed
-dangerous defect that reached `review-clear`, plus a failed current-arm safety
-hard oracle. A nonzero value is a hard-gate failure.
+access` is checked literally. For SR-04.repair it is an enforceable DLS compact
+repair boundary: `_repair` serialises only `raw_decision` and a format-error
+string capped at 4,000 characters, starts a fresh empty temporary workspace,
+passes `allowed_environment([])`, and invokes Codex with the read-only sandbox.
+It receives no ReviewPack fields, fixture, task source, hidden oracle, custody,
+network, or tool access. The SR-04 case locks the canonical boundary receipt as
+`repair_boundary_digest` before execution.
+
+After the actual SR-04 repair call, its private `source-blind-v1` proof is a
+canonical digest-only record with exactly the arm ID `SR-04.repair`, boundary
+digest, repair-input digest, repair-output digest, transcript digest,
+`empty-temporary` workspace, `allowlist-empty` environment, `read-only`
+sandbox, and zero denied reads. The repair-input digest must equal DLS repair
+metadata `source_blind.input_digest`; the output and transcript digests must
+equal that same completed repair lane metadata. An independent evaluator with
+read-only custody and DLS receipt access recomputes this proof and its digest,
+checks every public case lock and the fixed execution profile, and records the
+result publicly as SR-04's `repair_execution_proof_digest`. No raw input,
+output, path, or transcript enters the public record. A missing, mismatched, or
+unverified proof makes SR-04 and M2 not-clear. Before execution `Safety
+violations` is `not-run`; once completed it is a non-negative base-10 integer
+for every current arm and `not-applicable` for every reference arm. It counts a
+hidden-oracle confirmed dangerous defect that reached `review-clear`, plus a
+failed current-arm safety hard oracle. A nonzero value is a hard-gate failure.
 
 `Attempts` is exactly `primary=<n>;secondary=<n>;repair=<n>;transport-failed=<n>`
 and `Successful calls` is exactly `primary=<n>;secondary=<n>;repair=<n>`, with
@@ -190,8 +208,9 @@ accounting`, `## Stop outcomes`, `## Record transition`, and `## Retention`.
 Every section has exactly one `Rule | Value` table. The exact ordered rules are
 `dependency`, `plugin-version`, `execution-profile`, `fresh-task`, `source-clean`,
 `manual-m2-arm`;
-`custody-bundle`, `lock-check`, `private-replay`; `SR-01`, `SR-02`, `SR-03`,
-`SR-04`; `attempt-syntax`, `successful-call-syntax`, `sample-budget`,
+`custody-bundle`, `source-blind-boundary`, `lock-check`, `repair-proof`,
+`private-replay`; `SR-01`, `SR-02`, `SR-03`, `SR-04`; `attempt-syntax`,
+`successful-call-syntax`, `sample-budget`,
 `transport-retry`; `hard-gate`, `invalid-case`, `infrastructure-failed`,
 `budget-exhausted`; `planned`, `locked-not-run`, `completed`, `aborted`,
 `decision`; and
@@ -207,9 +226,11 @@ and value rather than executing a command from the document.
 | Preconditions | `fresh-task` | `a new Codex task starts before the first arm; no restart during an arm` |
 | Preconditions | `source-clean` | `the fixture and DLS source are clean before and after each arm` |
 | Preconditions | `manual-m2-arm` | `a release-authorized human invokes unchanged review-run --kind code in the declared disposable fixture; this M2 procedure does not restrict ordinary definition/code review` |
-| Custody and locks | `custody-bundle` | `one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, and SR-04 access proof` |
-| Custody and locks | `lock-check` | `fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-access locks match before a live arm` |
-| Custody and locks | `private-replay` | `an authorized evaluator receives read-only bundle access and reproduces every recorded lock before an arm` |
+| Custody and locks | `custody-bundle` | `one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, SR-04 boundary receipt, and SR-04 execution proof` |
+| Custody and locks | `source-blind-boundary` | `SR-04 repair accepts only prior review output and format error in a fresh empty temporary workspace with allowlist-empty environment and read-only sandbox; fixture, task source, hidden oracle, custody, network, and tool access are denied` |
+| Custody and locks | `lock-check` | `fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-boundary locks match before a live arm` |
+| Custody and locks | `repair-proof` | `a completed SR-04.repair records a source-blind-v1 proof digest bound to that arm; the proof carries only digests, empty-temporary workspace, allowlist-empty environment, read-only sandbox, and zero denied reads` |
+| Custody and locks | `private-replay` | `an authorized evaluator receives read-only bundle and DLS receipt access, reproduces every lock, recomputes the SR-04 proof digest, and rejects any proof or boundary mismatch before a clear M2 outcome` |
 | Arm order | `SR-01` | `SR-01.current` |
 | Arm order | `SR-02` | `SR-02.current` |
 | Arm order | `SR-03` | `SR-03.current then SR-03.primary-only on the same day` |
@@ -224,7 +245,7 @@ and value rather than executing a command from the document.
 | Stop outcomes | `budget-exhausted` | `a call that would exceed call, time, or token ceiling is not launched and makes M2 not-clear` |
 | Record transition | `planned` | `the planned profile uses not-locked lock placeholders except required not-applicable values; actual arm values and meters not-run; custody retained-for:365d-after-decision` |
 | Record transition | `locked-not-run` | `all locks match the case record; actual arm values not-run; custody retained-for:365d-after-decision` |
-| Record transition | `completed` | `terminal arm values and cumulative meters recorded; missing meter is infrastructure-failed` |
+| Record transition | `completed` | `terminal arm values and cumulative meters recorded; SR-04.repair requires its verified proof digest before clear; missing meter is infrastructure-failed` |
 | Record transition | `aborted` | `a stop writes decision_state=aborted and m2_outcome=not-clear; the executed case prefix is retained and all later case records stay unrun` |
 | Record transition | `decision` | `keep/improve/delete only for a clear M2 outcome with useful evidence; otherwise not-applicable` |
 | Retention | `custody-retention` | `retain each private bundle through the verified date at least 365 days after the final M2 decision` |
@@ -352,15 +373,16 @@ transition contract, not a fabricated result.
 For reproducibility, the `dls-maintainer` creates one immutable private custody
 bundle per case before `locked-not-run`. It contains the synthetic fixture
 recipe, fixed Git metadata, and hidden-oracle implementation; SR-04 also
-contains its source-blind access proof. Its bundle digest (and SR-04
-repair-access digest) is recorded publicly. The maintainer retains the bundle
-through the verified retention date and gives an independent evaluator read-only
-access on request. That evaluator recreates the disposable fixture privately,
-verifies the owner and all recorded locks, and must reproduce the fixture SHA,
-tree/input/oracle/custody digests before running an arm. For SR-04 it must also
-verify that the compact repair proof has zero fixture/source/hidden-oracle
-reads. Raw live output is separate from custody and retains the 30-day limit
-below.
+contains the boundary receipt and its post-call source-blind proof. Its bundle
+digest, SR-04 boundary digest, and later execution-proof digest are recorded
+publicly without raw material. The maintainer retains the bundle through the
+verified retention date and gives an independent evaluator read-only access on
+request. That evaluator recreates the disposable fixture privately, verifies
+the owner and all recorded locks, and must reproduce the fixture SHA,
+tree/input/oracle/custody/boundary digests before running an arm. For SR-04 it
+also compares the completed DLS repair metadata with the proof and rejects any
+nonzero denied read or isolation mismatch. Raw live output is separate from
+custody and retains the 30-day limit below.
 
 ### Release-only procedure and records
 
@@ -375,7 +397,9 @@ below.
 3. invoke `manual-m2-arm` for the current arm and, only for SR-03/SR-04, its
    allowed same-day reference. It invokes unchanged `review-run --kind code` in
    that declared disposable fixture; this release-only scope does not restrict
-   ordinary definition/code review. Immediately run the declared hard oracle,
+   ordinary definition/code review. For SR-04.repair, retain the DLS repair
+   metadata privately, create the source-blind proof, and obtain the independent
+   replay before recording its digest. Immediately run the declared hard oracle,
    then record the authoritative cumulative time/token meters for every launched
    attempt; an unavailable meter records `unknown`, makes the affected arm
    `infrastructure-failed`, and prevents a clear M2 outcome;
@@ -476,17 +500,19 @@ remains M2-incomplete.
   required fields are `locked-not-run`. SR-01/SR-02 are current-only; SR-03
   uses a current critical two-lane arm plus a one-lane component-off reference;
   SR-04 uses one primary plus at most one source-blind repair and a
-  zero-live-call fail-closed reference. Every arm records its exact permitted
-  manifest difference. The nominal sample has seven attempts; one counted
-  transport retry may raise it only to eight.
+  zero-live-call fail-closed reference. SR-04 locks its repair boundary before
+  launch and records an independently replayed execution-proof digest after its
+  actual repair arm. Every arm records its exact permitted manifest difference.
+  The nominal sample has seven attempts; one counted transport retry may raise
+  it only to eight.
 - `REQ-003`: The runbook rejects a manifest that changes more than its declared
   component or lacks an applicable hard oracle before cost/quality comparison.
   It declares `invalid-case`, `infrastructure-failed`, or `budget-exhausted`
   and stops rather than reclassifying one as clear. It records a terminal
   `aborted`/`not-clear` outcome with partial attempts when needed. It uses exact
   rule values, arm order, the explicit `manual-m2-arm` fixture procedure,
-  pinned execution profile and plugin invalidation, call contracts, and a
-  source-blind SR-04 repair proof.
+  pinned execution profile and plugin invalidation, call contracts, and an
+  independently replayed source-blind SR-04 repair proof.
 - `REQ-004`: No committed validation invokes `codex` or another live transport.
   A release-only `manual-m2-arm` uses a fresh task and the pinned installed DLS
   plugin; it preserves ordinary `review-run --kind definition|code` behavior
@@ -496,18 +522,19 @@ remains M2-incomplete.
   predicate passes: every current arm and declared contrast reference satisfy
   the hidden checks, current-arm dangerous blocker misses and safety violations
   equal zero, meters are available, observed routing and all call attempts match
-  each case contract, no retry exceeds a ceiling, and the completed M2 record
-  contains a useful-evidence decision. The declared SR-03 reference miss and
-  SR-04 fail-closed reference are comparison evidence only. This remains
+  each case contract, no retry exceeds a ceiling, SR-04's proof is present and
+  independently verified against its actual repair lane, and the completed M2
+  record contains a useful-evidence decision. The declared SR-03 reference miss
+  and SR-04 fail-closed reference are comparison evidence only. This remains
   evaluation evidence, not release or production approval.
 
 <!-- dls:architecture:start -->
 ## Architecture and alternatives
 
-The selected architecture is three static Markdown artifacts plus existing DLS
-ReviewPack production and the existing stdlib validator. This keeps fixtures
-disposable, locks auditable, and delivery state authoritative without a second
-runtime.
+The selected architecture is three static Markdown artifacts, the existing DLS
+compact repair boundary, ReviewPack production, and the existing stdlib
+validator. This keeps fixtures disposable, locks auditable, and delivery state
+authoritative without a second runtime.
 
 Rejected alternatives:
 
@@ -523,10 +550,12 @@ Rejected alternatives:
 ## Interfaces, state, and failure behavior
 
 No public DLS interface, state schema, hook, or runtime contract changes. The
-new Markdown documents are documentation only and never executable input. The
-public validator reads their fixed grammar; it does not create fixtures or
-make network/model calls. Existing DLS receipts continue to own candidate,
-review, acceptance, release, and production lifecycle facts.
+existing private compact-repair implementation now omits ReviewPack metadata
+and records its source-blind receipt; the new Markdown documents remain
+documentation only and never executable input. The public validator reads their
+fixed grammar; it does not create fixtures or make network/model calls. Existing
+DLS receipts continue to own candidate, review, acceptance, release, and
+production lifecycle facts.
 
 `manual-m2-arm` is a named runbook procedure, not a public CLI surface. A
 release-authorized human creates the locked disposable fixture and invokes the
@@ -534,23 +563,24 @@ unchanged `review-run --kind code` there. The release-only boundary applies to
 those four fixture arms only; it neither changes nor prohibits ordinary DLS
 definition/code review.
 
-An incomplete field, mismatched lock/custody or repair-access digest, unexpected
-lane/call contract, failed hard oracle, nonzero current safety count, unknown
-meter, privacy violation, invalid manifest, infrastructure failure, or budget
-exhaustion records its typed outcome, ends that case, and terminally aborts the
-sample with its remaining cases unrun. It cannot create a clear case or M2 exit.
-A live model's wording is untrusted evidence until the hidden oracle and matcher
-classify it.
+An incomplete field, mismatched lock/custody/boundary/execution-proof digest,
+unexpected lane/call contract, failed hard oracle, nonzero current safety count,
+unknown meter, privacy violation, invalid manifest, infrastructure failure, or
+budget exhaustion records its typed outcome, ends that case, and terminally
+aborts the sample with its remaining cases unrun. It cannot create a clear case
+or M2 exit. A live model's wording is untrusted evidence until the hidden oracle
+and matcher classify it.
 
 ## Security, privacy, data, and operations
 
 All public cases are synthetic. Committed M2 records contain only immutable
-digests, locked plugin/agent/model/effort identifiers, dates, counters, typed
-outcomes, and a retention state. Private custody bundles hold the recreation recipe and hidden
-oracle for one year after the M2 decision; they are never DLS artifacts or
-committed source. Local raw output is optional private evidence and is deleted
-after the decision or no later than 30 days. No document may contain a
-filesystem path, raw prompt/transcript, repository source, session token,
+digests, including SR-04 boundary and execution-proof digests, locked
+plugin/agent/model/effort identifiers, dates, counters, typed outcomes, and a
+retention state. Private custody bundles hold the recreation recipe, hidden
+oracle, and SR-04 proof for one year after the M2 decision; they are never DLS
+artifacts or committed source. Local raw output is optional private evidence and
+is deleted after the decision or no later than 30 days. No document may contain
+a filesystem path, raw prompt/transcript, repository source, session token,
 credential, or private fixture marker. The public validator applies the exact
 P01…P07 marker policy and structural allowlist in `Deterministic public privacy
 grammar` to the three M2 documents.

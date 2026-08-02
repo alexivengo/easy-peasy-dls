@@ -15,9 +15,11 @@
 
 | Rule | Value |
 |---|---|
-| custody-bundle | one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, and SR-04 access proof |
-| lock-check | fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-access locks match before a live arm |
-| private-replay | an authorized evaluator receives read-only bundle access and reproduces every recorded lock before an arm |
+| custody-bundle | one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, SR-04 boundary receipt, and SR-04 execution proof |
+| source-blind-boundary | SR-04 repair accepts only prior review output and format error in a fresh empty temporary workspace with allowlist-empty environment and read-only sandbox; fixture, task source, hidden oracle, custody, network, and tool access are denied |
+| lock-check | fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-boundary locks match before a live arm |
+| repair-proof | a completed SR-04.repair records a source-blind-v1 proof digest bound to that arm; the proof carries only digests, empty-temporary workspace, allowlist-empty environment, read-only sandbox, and zero denied reads |
+| private-replay | an authorized evaluator receives read-only bundle and DLS receipt access, reproduces every lock, recomputes the SR-04 proof digest, and rejects any proof or boundary mismatch before a clear M2 outcome |
 
 ## Arm order
 
@@ -52,7 +54,7 @@
 |---|---|
 | planned | the planned profile uses not-locked lock placeholders except required not-applicable values; actual arm values and meters not-run; custody retained-for:365d-after-decision |
 | locked-not-run | all locks match the case record; actual arm values not-run; custody retained-for:365d-after-decision |
-| completed | terminal arm values and cumulative meters recorded; missing meter is infrastructure-failed |
+| completed | terminal arm values and cumulative meters recorded; SR-04.repair requires its verified proof digest before clear; missing meter is infrastructure-failed |
 | aborted | a stop writes decision_state=aborted and m2_outcome=not-clear; the executed case prefix is retained and all later case records stay unrun |
 | decision | keep/improve/delete only for a clear M2 outcome with useful evidence; otherwise not-applicable |
 

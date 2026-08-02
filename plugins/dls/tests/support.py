@@ -143,15 +143,19 @@ args=sys.argv[1:]
 out=pathlib.Path(args[args.index("--output-last-message")+1])
 prompt=sys.stdin.read()
 log=pathlib.Path(__file__).with_name("calls.jsonl")
-with log.open("a") as f: f.write(json.dumps({"repair":prompt.startswith("Repair only"),"prompt":prompt[:120]})+"\n")
 if prompt.startswith("Repair only"):
     bundle=json.loads(prompt.split("\n",1)[1])
-    tickets=bundle["ticket_ids"]; requirements=bundle["requirement_ids"]; prior=bundle["prior_findings"]
-    prior_rows=[{"finding_id":item["id"],"verdict":"verified","replacement_finding_id":None,"evidence":["exact diff"]} for item in prior]
+    call={"repair":True,"prompt":prompt[:120],"bundle_keys":sorted(bundle),"workspace_entries":sorted(item.name for item in pathlib.Path.cwd().iterdir())}
+    payload=bundle["raw_decision"]
+    tickets=[item["ticket_id"] for item in payload["ticket_verdicts"]]
+    requirements=[item["requirement_id"] for item in payload["requirement_verdicts"]]
+    prior_rows=[{"finding_id":item["finding_id"],"verdict":"verified","replacement_finding_id":None,"evidence":["exact diff"]} for item in payload["prior_finding_verdicts"]]
 else:
     payload=json.loads(prompt.split("INPUT:\n",1)[1])
     tickets=list(payload["tickets"]); requirements=payload["requirement_ids"]; prior=payload["prior_findings"]
     prior_rows=[{"finding_id":item["id"],"verdict":"still-open","replacement_finding_id":None,"evidence":[]} for item in prior]
+    call={"repair":False,"prompt":prompt[:120]}
+with log.open("a") as f: f.write(json.dumps(call)+"\n")
 decision={
  "verdict":"review-clear","summary":"clear","findings":[],
  "ticket_verdicts":[{"ticket_id":item,"verdict":"clear","finding_ids":[]} for item in tickets],

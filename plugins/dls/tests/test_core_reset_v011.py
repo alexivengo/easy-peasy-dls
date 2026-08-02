@@ -568,6 +568,8 @@ class CoreResetTests(unittest.TestCase):
             self.assertEqual("review-clear", result["verdict"])
             self.assertEqual([False, True], [item["repair"] for item in calls])
             self.assertNotIn("src.py", calls[1]["prompt"])
+            self.assertEqual(["raw_decision", "validation_error"], calls[1]["bundle_keys"])
+            self.assertEqual([], calls[1]["workspace_entries"])
         finally:
             restore_environment(previous)
 
