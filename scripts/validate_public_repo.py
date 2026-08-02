@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -179,9 +180,9 @@ def validate_plugin_hooks() -> None:
 
 
 def validate_json_files() -> None:
-    for path in sorted(ROOT.rglob("*.json")):
-        if ".git" not in path.parts:
-            load_json(path)
+    for relative in repository_files():
+        if relative.suffix == ".json" and ".dls" not in relative.parts:
+            load_json(ROOT / relative)
 
 
 def validate_strict_output_schema(value: object, *, location: str = "$") -> None:
@@ -238,11 +239,13 @@ def validate_platform_profiles() -> None:
         names = {path.stem for path in (PLUGIN / "assets" / "profiles").glob("*.toml")}
         if names != {"generic", "apple", "server-backend"}:
             fail("Публичный profile set должен содержать generic, apple и server-backend")
-        for name in sorted(names):
-            profile = resolve_profile(ROOT, config={"default_profile": name})
-            if profile.get("contract") != PROFILE_CONTRACT:
-                fail(f"Profile {name} использует неизвестный runtime contract")
-        backend = resolve_profile(ROOT, config={"default_profile": "server-backend"})
+        with tempfile.TemporaryDirectory() as directory:
+            profile_root = Path(directory)
+            for name in sorted(names):
+                profile = resolve_profile(profile_root, config={"default_profile": name})
+                if profile.get("contract") != PROFILE_CONTRACT:
+                    fail(f"Profile {name} использует неизвестный runtime contract")
+            backend = resolve_profile(profile_root, config={"default_profile": "server-backend"})
         projection = json.dumps(backend, ensure_ascii=False).lower()
         if "backend-architecture" not in projection or "rollback-drill" not in projection:
             fail("server-backend profile не содержит обязательную backend vocabulary")
