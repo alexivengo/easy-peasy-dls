@@ -891,7 +891,14 @@ class CoreResetTests(unittest.TestCase):
                     assert_invalid(log_text=validator.DECISION_LOG_CONTENT.replace(header, f"{header} changed", 1))
                 for value in validator.SYNTHETIC_DECISION_VALUES:
                     assert_invalid(log_text=validator.DECISION_LOG_CONTENT.replace(value, f"{value} changed", 1))
-                for marker in ("/Users/", "/private/", "transcript", "def ", "-----BEGIN PRIVATE KEY-----", "private-fixture:"):
+                for marker in (
+                    "/" + "Users/",
+                    "/private/",
+                    "transcript",
+                    "def ",
+                    "-----BEGIN " + "PRIVATE KEY-----",
+                    "private-fixture:",
+                ):
                     assert_invalid(log_text=validator.DECISION_LOG_CONTENT + marker + "\n")
             finally:
                 validator.EVALUATION_CLAIM_MAP = original_map
