@@ -883,6 +883,16 @@ class CoreResetTests(unittest.TestCase):
                         validator.validate_evaluation_documents()
 
                 assert_valid()
+                _claim, (oracle, test_ids) = next(iter(validator.EVALUATION_CLAIMS.items()))
+                oracle_line = f"Hard oracle: {oracle}"
+                assert_invalid(map_text=source_map.replace(oracle_line, f"{oracle_line} changed", 1))
+                assert_invalid(
+                    map_text=source_map.replace(
+                        f"{oracle_line}\n\n- `{test_ids[0]}`",
+                        f"- `{test_ids[0]}`\n\n{oracle_line}",
+                        1,
+                    )
+                )
                 for claim, (_oracle, test_ids) in validator.EVALUATION_CLAIMS.items():
                     assert_invalid(map_text=source_map.replace(f"## {claim}\n", f"## {claim}-missing\n", 1))
                     for test_id in test_ids:

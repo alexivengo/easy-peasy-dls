@@ -389,13 +389,14 @@ def validate_evaluation_documents() -> None:
         )
         if not match:
             fail(f"Evaluation claim map: отсутствует {claim}")
-        body = match.group("body")
-        if f"Hard oracle: {oracle}" not in body:
-            fail(f"Evaluation claim map: неверный hard oracle для {claim}")
-        ids = tuple(re.findall(r"`(test_[A-Za-z0-9_.]+)`", body))
-        if ids != expected_ids:
-            fail(f"Evaluation claim map: неверные test IDs для {claim}")
-        missing = [test_id for test_id in ids if test_id not in discovered]
+        lines = [line for line in match.group("body").splitlines() if line]
+        expected_lines = [
+            f"Hard oracle: {oracle}",
+            *[f"- `{test_id}`" for test_id in expected_ids],
+        ]
+        if lines != expected_lines:
+            fail(f"Evaluation claim map: неверная grammar для {claim}")
+        missing = [test_id for test_id in expected_ids if test_id not in discovered]
         if missing:
             fail(f"Evaluation claim map: test ID не discoverable: {', '.join(missing)}")
     if EVALUATION_DECISIONS.read_text(encoding="utf-8") != DECISION_LOG_CONTENT:
