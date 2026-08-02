@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 import json
 import re
 import subprocess
@@ -438,6 +438,11 @@ M2_CASE_FIELDS = (
 M2_RECORD_FIELDS = (
     "case_id",
     "run_state",
+    "plugin_version",
+    "agent_version",
+    "model",
+    "effort",
+    "run_date",
     "fixture_sha",
     "tree_digest",
     "task_input_digest",
@@ -487,6 +492,7 @@ M2_RUNBOOK = (
     ("Preconditions", (
         ("dependency", "EF-01 accepted-in-base at d4b9e2f57c4061249d6ac346479aedd6149ed24e069f9b9c0552178b86d7b1c5"),
         ("plugin-version", "dls 0.13.6+codex.20260802111333; reinstall or hot reload during an arm invalidates that arm"),
+        ("execution-profile", "lock one plugin, agent, model, effort, and same-day run date in every record before manual-m2-arm"),
         ("fresh-task", "a new Codex task starts before the first arm; no restart during an arm"),
         ("source-clean", "the fixture and DLS source are clean before and after each arm"),
         ("manual-m2-arm", "a release-authorized human invokes unchanged review-run --kind code in the declared disposable fixture; this M2 procedure does not restrict ordinary definition/code review"),
@@ -532,6 +538,7 @@ M2_GIT_SHA = re.compile(r"git:[0-9a-f]{40}$")
 M2_CLAIM = re.compile(r"[a-z][a-z0-9-]{0,63}$")
 M2_INTEGER = re.compile(r"0|[1-9][0-9]*$")
 M2_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+M2_EXECUTION_IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}$")
 M2_PRIVACY_PATTERNS = (
     ("P01 path", ("file://", "/" + "Users/", "/home/", "/var/", "/tmp/", "C:\\Users\\", "C:\\home\\", "C:\\var\\", "C:\\tmp\\")),
     ("P04 session identifier", (re.compile(r"(?i)\bsession[_-]?id\s*[:=]"), re.compile(r"(?i)\bthread[_-]?id\s*[:=]"), re.compile(r"(?i)\bconversation[_-]?id\s*[:=]"))),
@@ -681,6 +688,12 @@ def _m2_validate_actual(case_id: str, arm: tuple[str, str, str, str, str, str], 
     if state != "completed":
         _m2_fail("m2-state-transition", f"{case_id} run_state")
     verdict, outcome, oracle, safety, lanes, attempts, successful, finding = actual
+    if actual == ["not-run"] * 8:
+        return
+    if outcome == "budget-exhausted":
+        if actual != ["not-run", "budget-exhausted", "not-run", "not-run", "not-run", "not-run", "not-run", "not-run"]:
+            _m2_fail("m2-state-transition", f"{case_id} budget-exhausted arm")
+        return
     if verdict not in {"review-clear", "not-clear", "not-applicable"}:
         _m2_fail("m2-enums", f"{case_id} actual verdict")
     if outcome not in {"passed", "product-failed", "component-failed", "infrastructure-failed", "invalid-case", "budget-exhausted"}:
@@ -773,6 +786,18 @@ def _m2_validate_record(case_id: str, fields: dict[str, str], case_fields: dict[
     state = fields["run_state"]
     if fields["case_id"] != case_id or state not in {"planned", "locked-not-run", "completed"}:
         _m2_fail("m2-state-transition", f"{case_id} record state")
+    profile_names = ("plugin_version", "agent_version", "model", "effort", "run_date")
+    if state == "planned":
+        if any(fields[name] != "not-locked" for name in profile_names):
+            _m2_fail("m2-state-transition", f"{case_id} planned execution profile")
+    elif (
+        fields["plugin_version"] != "dls 0.13.6+codex.20260802111333"
+        or not M2_EXECUTION_IDENTIFIER.fullmatch(fields["agent_version"])
+        or not M2_EXECUTION_IDENTIFIER.fullmatch(fields["model"])
+        or fields["effort"] not in {"low", "medium", "high", "xhigh", "max", "ultra"}
+        or not _m2_is_date(fields["run_date"])
+    ):
+        _m2_fail("m2-enums", f"{case_id} execution profile")
     lock_names = ("fixture_sha", "tree_digest", "task_input_digest", "oracle_version", "oracle_digest", "custody_digest", "current_manifest_digest", "reference_manifest_digest")
     if state == "planned":
         expected = {
@@ -804,6 +829,97 @@ def _m2_validate_record(case_id: str, fields: dict[str, str], case_fields: dict[
     if fields["custody_retention"] != "retained-for:365d-after-decision" and not (state == "completed" and fields["custody_retention"].startswith("retained-until:") and _m2_is_date(fields["custody_retention"].removeprefix("retained-until:"))):
         _m2_fail("m2-enums", f"{case_id} custody_retention")
     return state
+
+
+def _m2_attempt_totals(records: dict[str, tuple[dict[str, str], dict[str, list[str]]]]) -> tuple[int, int]:
+    attempts = 0
+    transport = 0
+    for case_id in M2_CASE_IDS:
+        _fields, arms = records[case_id]
+        for arm in M2_ARMS[case_id]:
+            value = arms[arm[0]][11]
+            if value == "not-run":
+                continue
+            counters = _m2_counter(value, ("primary", "secondary", "repair", "transport-failed"), "m2-attempt-budget")
+            attempts += sum(counters.values())
+            transport += counters["transport-failed"]
+    return attempts, transport
+
+
+def _m2_is_terminal_arm(row: list[str]) -> bool:
+    if row[7] in {"product-failed", "component-failed", "infrastructure-failed", "invalid-case", "budget-exhausted"}:
+        return True
+    return row[8] == "failed" or (row[9] != "not-applicable" and row[9] != "not-run" and int(row[9]) > 0)
+
+
+def _m2_validate_terminal_sample(records: dict[str, tuple[dict[str, str], dict[str, list[str]]]], decision_state: str) -> None:
+    attempts, transport = _m2_attempt_totals(records)
+    if attempts > 8 or transport > 1:
+        _m2_fail("m2-attempt-budget", "sample ceiling")
+    if decision_state == "completed" and (attempts not in {7, 8} or (attempts == 7 and transport != 0) or (attempts == 8 and transport != 1)):
+        _m2_fail("m2-attempt-budget", "completed sample total")
+    if decision_state != "aborted":
+        return
+    stopped = False
+    for case_id in M2_CASE_IDS:
+        fields, arms = records[case_id]
+        if fields["run_state"] != "completed":
+            continue
+        for arm in M2_ARMS[case_id]:
+            row = arms[arm[0]]
+            if row[6:] == ["not-run"] * 8:
+                if not stopped:
+                    _m2_fail("m2-state-transition", "unrun arm before terminal stop")
+                continue
+            if stopped:
+                _m2_fail("m2-state-transition", "arm after terminal stop")
+            stopped = _m2_is_terminal_arm(row)
+    if not stopped:
+        _m2_fail("m2-state-transition", "aborted sample has no terminal stop")
+
+
+def _m2_validate_terminal_retention(records: dict[str, tuple[dict[str, str], dict[str, list[str]]]], decision_date: str) -> None:
+    minimum = date.fromisoformat(decision_date) + timedelta(days=365)
+    for case_id in M2_CASE_IDS:
+        fields, _arms = records[case_id]
+        if fields["run_state"] != "completed":
+            continue
+        retention = fields["custody_retention"]
+        if not retention.startswith("retained-until:"):
+            _m2_fail("m2-state-transition", f"{case_id} terminal custody retention")
+        retained_until = date.fromisoformat(retention.removeprefix("retained-until:"))
+        if retained_until < minimum:
+            _m2_fail("m2-state-transition", f"{case_id} custody retention date")
+
+
+def _m2_validate_meters(records: dict[str, tuple[dict[str, str], dict[str, list[str]]]]) -> None:
+    for case_id in M2_CASE_IDS:
+        fields, arms = records[case_id]
+        if fields["run_state"] != "completed":
+            continue
+        if fields["processed_tokens"] == "unknown" or fields["wall_time_seconds"] == "unknown":
+            if not any(row[7] == "infrastructure-failed" for row in arms.values()):
+                _m2_fail("m2-metering", f"{case_id} unknown meter without infrastructure failure")
+
+
+def _m2_validate_clear(records: dict[str, tuple[dict[str, str], dict[str, list[str]]]], evidence: str) -> None:
+    for case_id in M2_CASE_IDS:
+        fields, arms = records[case_id]
+        if fields["processed_tokens"] == "unknown" or fields["wall_time_seconds"] == "unknown":
+            _m2_fail("m2-metering", f"{case_id} clear meters")
+        current = arms[M2_CASE_REGISTRY[case_id][0]]
+        if current[7] != "passed" or current[8] != "passed" or current[9] != "0":
+            _m2_fail("m2-overall-outcome", f"{case_id} clear current arm")
+    sr03_reference = records["SR-03"][1]["SR-03.primary-only"]
+    sr04_reference = records["SR-04"][1]["SR-04.fail-closed"]
+    if sr03_reference[6] != "review-clear" or sr03_reference[7] != "passed" or sr03_reference[13] != "dangerous-miss":
+        _m2_fail("m2-overall-outcome", "SR-03 contrast reference")
+    if sr04_reference[6] != "not-applicable" or sr04_reference[7] != "invalid-case":
+        _m2_fail("m2-overall-outcome", "SR-04 contrast reference")
+    useful = {arm_id for _case, (_fields, arms) in records.items() for arm_id, row in arms.items() if row[13] == "useful"}
+    tokens = evidence.split(";")
+    if not tokens or any(not re.fullmatch(r"SR-0[1-4]\.[a-z-]+:useful", token) or token.removesuffix(":useful") not in useful for token in tokens):
+        _m2_fail("m2-decision-evidence", "clear evidence token")
 
 
 def _m2_decisions(cases: dict[str, dict[str, object]]) -> None:
@@ -839,6 +955,13 @@ def _m2_decisions(cases: dict[str, dict[str, object]]) -> None:
     if index != len(lines):
         _m2_fail("m2-document-order", "extra decision content")
     states = [records[case_id][0]["run_state"] for case_id in M2_CASE_IDS]
+    locked_profiles = {
+        tuple(records[case_id][0][name] for name in ("plugin_version", "agent_version", "model", "effort", "run_date"))
+        for case_id in M2_CASE_IDS
+        if records[case_id][0]["run_state"] != "planned"
+    }
+    if len(locked_profiles) > 1:
+        _m2_fail("m2-state-transition", "execution profile drift")
     if decision["decision_state"] == "pending-live-sample":
         if any(state == "completed" for state in states) or tuple(decision.values()) != ("pending-live-sample", "not-run", "not-run", "not-applicable", "not-applicable"):
             _m2_fail("m2-state-transition", "pending decision")
@@ -851,22 +974,25 @@ def _m2_decisions(cases: dict[str, dict[str, object]]) -> None:
         first_unfinished = next((index for index, state in enumerate(states) if state != "completed"), len(states))
         if first_unfinished == 0 or any(state == "completed" for state in states[first_unfinished:]):
             _m2_fail("m2-state-transition", "aborted record prefix")
+        _m2_validate_terminal_sample(records, "aborted")
+        _m2_validate_meters(records)
+        _m2_validate_terminal_retention(records, decision["decision_date"])
         return
     if states != ["completed"] * len(M2_CASE_IDS) or decision["m2_outcome"] not in {"clear", "not-clear"}:
         _m2_fail("m2-state-transition", "completed decision")
     if decision["m2_outcome"] == "not-clear":
         if decision["decision"] != "not-applicable" or decision["evidence"] != "not-applicable":
             _m2_fail("m2-decision-evidence", "not-clear decision")
+        _m2_validate_terminal_sample(records, "completed")
+        _m2_validate_meters(records)
+        _m2_validate_terminal_retention(records, decision["decision_date"])
         return
     if decision["decision"] not in {"keep", "improve", "delete"} or not decision["evidence"]:
         _m2_fail("m2-decision-evidence", "clear decision")
-    for case_id in M2_CASE_IDS:
-        fields, arms = records[case_id]
-        if fields["processed_tokens"] == "unknown" or fields["wall_time_seconds"] == "unknown":
-            _m2_fail("m2-metering", f"{case_id} clear meters")
-        current = arms[M2_CASE_REGISTRY[case_id][0]]
-        if current[7] != "passed" or current[8] != "passed" or current[9] != "0":
-            _m2_fail("m2-overall-outcome", f"{case_id} clear current arm")
+    _m2_validate_terminal_sample(records, "completed")
+    _m2_validate_meters(records)
+    _m2_validate_terminal_retention(records, decision["decision_date"])
+    _m2_validate_clear(records, decision["evidence"])
 
 
 def validate_m2_evaluation_documents() -> None:

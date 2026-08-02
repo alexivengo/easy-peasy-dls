@@ -6,6 +6,7 @@
 |---|---|
 | dependency | EF-01 accepted-in-base at d4b9e2f57c4061249d6ac346479aedd6149ed24e069f9b9c0552178b86d7b1c5 |
 | plugin-version | dls 0.13.6+codex.20260802111333; reinstall or hot reload during an arm invalidates that arm |
+| execution-profile | lock one plugin, agent, model, effort, and same-day run date in every record before manual-m2-arm |
 | fresh-task | a new Codex task starts before the first arm; no restart during an arm |
 | source-clean | the fixture and DLS source are clean before and after each arm |
 | manual-m2-arm | a release-authorized human invokes unchanged review-run --kind code in the declared disposable fixture; this M2 procedure does not restrict ordinary definition/code review |

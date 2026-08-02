@@ -8,6 +8,11 @@
 |---|---|
 | case_id | SR-01 |
 | run_state | planned |
+| plugin_version | not-locked |
+| agent_version | not-locked |
+| model | not-locked |
+| effort | not-locked |
+| run_date | not-locked |
 | fixture_sha | not-locked |
 | tree_digest | not-locked |
 | task_input_digest | not-locked |
@@ -35,6 +40,11 @@
 |---|---|
 | case_id | SR-02 |
 | run_state | planned |
+| plugin_version | not-locked |
+| agent_version | not-locked |
+| model | not-locked |
+| effort | not-locked |
+| run_date | not-locked |
 | fixture_sha | not-locked |
 | tree_digest | not-locked |
 | task_input_digest | not-locked |
@@ -62,6 +72,11 @@
 |---|---|
 | case_id | SR-03 |
 | run_state | planned |
+| plugin_version | not-locked |
+| agent_version | not-locked |
+| model | not-locked |
+| effort | not-locked |
+| run_date | not-locked |
 | fixture_sha | not-locked |
 | tree_digest | not-locked |
 | task_input_digest | not-locked |
@@ -90,6 +105,11 @@
 |---|---|
 | case_id | SR-04 |
 | run_state | planned |
+| plugin_version | not-locked |
+| agent_version | not-locked |
+| model | not-locked |
+| effort | not-locked |
+| run_date | not-locked |
 | fixture_sha | not-locked |
 | tree_digest | not-locked |
 | task_input_digest | not-locked |

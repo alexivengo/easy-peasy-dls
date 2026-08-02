@@ -105,7 +105,8 @@ exception, not a lock placeholder.
 through `## SR-04`, then `## M2 decision`, in that order. Each case has a
 `Record fields` table with header `Field | Value` and this exact field order:
 
-`case_id`, `run_state`, `fixture_sha`, `tree_digest`, `task_input_digest`,
+`case_id`, `run_state`, `plugin_version`, `agent_version`, `model`, `effort`,
+`run_date`, `fixture_sha`, `tree_digest`, `task_input_digest`,
 `oracle_version`, `oracle_digest`, `custody_digest`, `current_manifest_digest`,
 `reference_manifest_digest`, `processed_tokens`, `wall_time_seconds`,
 `custody_retention`, `privacy_retention`.
@@ -119,14 +120,23 @@ registry: the current arm first, then the reference arm where one exists.
 columns populated and all actual columns set to `not-run`.
 
 In a planned `Record fields` table, `case_id` is its registry ID and
-`run_state` is `planned`; `fixture_sha`, `tree_digest`, `task_input_digest`,
-`oracle_version`, `oracle_digest`, `custody_digest`, and
+`run_state` is `planned`; `plugin_version`, `agent_version`, `model`, `effort`,
+and `run_date` are `not-locked`; `fixture_sha`, `tree_digest`,
+`task_input_digest`, `oracle_version`, `oracle_digest`, `custody_digest`, and
 `current_manifest_digest` are `not-locked`.
 `reference_manifest_digest` is `not-applicable` for SR-01/SR-02 and
 `not-locked` for SR-03/SR-04. `processed_tokens` and `wall_time_seconds` are
 `not-run`; `custody_retention` is `retained-for:365d-after-decision`; and
 `privacy_retention` is `not-applicable`. Its actual arm columns are all
 `not-run`.
+
+Before the first `manual-m2-arm`, every record is updated with the same locked
+execution profile: `plugin_version` is exactly the runbook's pinned plugin
+literal, `agent_version` and `model` are lowercase identifiers matching
+`[a-z0-9][a-z0-9._-]{0,63}`, `effort` is one of `low`, `medium`, `high`,
+`xhigh`, `max`, or `ultra`, and `run_date` is an ISO `YYYY-MM-DD` date. The
+validator requires the locked profile to match across all `locked-not-run` and
+`completed` records; it never treats a planned placeholder as a pin.
 
 `Expected verdict` and `Actual verdict` are one of `review-clear`,
 `not-clear`, `not-applicable`, or `not-run`. `Expected lanes` and `Lanes` are
@@ -178,7 +188,7 @@ its contracted primary/secondary/repair counts.
 `## Preconditions`, `## Custody and locks`, `## Arm order`, `## Attempt
 accounting`, `## Stop outcomes`, `## Record transition`, and `## Retention`.
 Every section has exactly one `Rule | Value` table. The exact ordered rules are
-`dependency`, `plugin-version`, `fresh-task`, `source-clean`,
+`dependency`, `plugin-version`, `execution-profile`, `fresh-task`, `source-clean`,
 `manual-m2-arm`;
 `custody-bundle`, `lock-check`, `private-replay`; `SR-01`, `SR-02`, `SR-03`,
 `SR-04`; `attempt-syntax`, `successful-call-syntax`, `sample-budget`,
@@ -193,6 +203,7 @@ and value rather than executing a command from the document.
 |---|---|---|
 | Preconditions | `dependency` | `EF-01 accepted-in-base at d4b9e2f57c4061249d6ac346479aedd6149ed24e069f9b9c0552178b86d7b1c5` |
 | Preconditions | `plugin-version` | `dls 0.13.6+codex.20260802111333; reinstall or hot reload during an arm invalidates that arm` |
+| Preconditions | `execution-profile` | `lock one plugin, agent, model, effort, and same-day run date in every record before manual-m2-arm` |
 | Preconditions | `fresh-task` | `a new Codex task starts before the first arm; no restart during an arm` |
 | Preconditions | `source-clean` | `the fixture and DLS source are clean before and after each arm` |
 | Preconditions | `manual-m2-arm` | `a release-authorized human invokes unchanged review-run --kind code in the declared disposable fixture; this M2 procedure does not restrict ordinary definition/code review` |
@@ -225,8 +236,8 @@ The focused test and public validator expose one assertion per schema rule:
 | Assertion | Schema coverage |
 |---|---|
 | `m2-document-order` | all three heading sequences, case order, and arm order |
-| `m2-field-shape` | every table header, field order, duplicate/unknown field rejection, oracle owner, repair-access lock, arm-scoped manifest difference, call contract, safety count, and decision date |
-| `m2-enums` | digest/SHA syntax, manifest differences, literals, lanes, outcomes, finding classes, metrics, and retention |
+| `m2-field-shape` | every table header, field order, duplicate/unknown field rejection, execution profile, oracle owner, repair-access lock, arm-scoped manifest difference, call contract, safety count, and decision date |
+| `m2-enums` | digest/SHA syntax, execution profile, manifest differences, literals, lanes, outcomes, finding classes, metrics, and retention |
 | `m2-state-transition` | planned profile, locked-not-run, completed, aborted, retention-date, and pre-live no-result values |
 | `m2-attempt-budget` | arm contracts/counters, seven/eight completed samples, and bounded partial aborted samples |
 | `m2-metering` | authoritative cumulative meters; unknown meter makes the sample non-clear |
@@ -291,8 +302,8 @@ only these transitions and the field values from the normative schema:
 
 | State | Required values | Forbidden values | Transition |
 |---|---|---|---|
-| `planned` | the exact planned profile above, including its required `not-applicable` exceptions; custody is `retained-for:365d-after-decision`; every actual arm column and meter is `not-run`; decision is `pending-live-sample` | a locked digest, terminal result, or metric | lock only |
-| `locked-not-run` | every required lock/custody value matches its case record; custody is `retained-for:365d-after-decision`; every actual arm column remains `not-run` | terminal outcome, counter, or invented metric | execute only |
+| `planned` | the exact planned profile above, including its required `not-applicable` exceptions and `not-locked` execution profile; custody is `retained-for:365d-after-decision`; every actual arm column and meter is `not-run`; decision is `pending-live-sample` | a locked digest, terminal result, or metric | lock only |
+| `locked-not-run` | every required lock/custody value matches its case record and every execution-profile value matches the other locked records; custody is `retained-for:365d-after-decision`; every actual arm column remains `not-run` | terminal outcome, counter, or invented metric | execute only |
 | `completed` | terminal values for every executed arm, with hard oracle, safety count, lanes, attempt counters, successful-call counters, cumulative metrics, and finding class; after a stop arm, later declared arms may remain wholly `not-run` | an unrun arm before a terminal stop arm or an invented metric | none |
 
 The document has exactly four records, one per SR ID, and one decision record.
@@ -355,8 +366,9 @@ below.
 
 `docs/evaluation-m2-runbook.md` must make live execution explicit and manual:
 
-1. confirm EF-01 `accepted-in-base`, current plugin/version agreement, a fresh
-   Codex task, and zero dirty source changes;
+1. confirm EF-01 `accepted-in-base`, current plugin/version agreement, one
+   agent/model/effort/same-day profile, a fresh Codex task, and zero dirty
+   source changes; record that profile before the first arm;
 2. create the case's disposable synthetic Git fixture privately from its
    custody bundle, lock its SHA/digests, and validate its current manifest;
    validate a same-day reference manifest only for SR-03/SR-04;
@@ -473,7 +485,8 @@ remains M2-incomplete.
   and stops rather than reclassifying one as clear. It records a terminal
   `aborted`/`not-clear` outcome with partial attempts when needed. It uses exact
   rule values, arm order, the explicit `manual-m2-arm` fixture procedure,
-  plugin invalidation, call contracts, and a source-blind SR-04 repair proof.
+  pinned execution profile and plugin invalidation, call contracts, and a
+  source-blind SR-04 repair proof.
 - `REQ-004`: No committed validation invokes `codex` or another live transport.
   A release-only `manual-m2-arm` uses a fresh task and the pinned installed DLS
   plugin; it preserves ordinary `review-run --kind definition|code` behavior
@@ -532,8 +545,8 @@ classify it.
 ## Security, privacy, data, and operations
 
 All public cases are synthetic. Committed M2 records contain only immutable
-digests, model/plugin identifiers, dates, counters, typed outcomes, and a
-retention state. Private custody bundles hold the recreation recipe and hidden
+digests, locked plugin/agent/model/effort identifiers, dates, counters, typed
+outcomes, and a retention state. Private custody bundles hold the recreation recipe and hidden
 oracle for one year after the M2 decision; they are never DLS artifacts or
 committed source. Local raw output is optional private evidence and is deleted
 after the decision or no later than 30 days. No document may contain a

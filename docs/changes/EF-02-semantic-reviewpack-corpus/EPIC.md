@@ -16,8 +16,9 @@ JSONL ledger, service, dashboard, or DLS runtime input.
   differences, per-arm maximum call contracts, and the locked source-blind
   repair proof for SR-04.
 - `docs/evaluation-m2-runbook.md` defines the release-only manual procedure:
-  fresh task/plugin boundary, same-day paired arm order, manifest checks,
-  hard-gate stop, transport-only retries, and infrastructure-failed handling.
+  pinned plugin/agent/model/effort/date profile, fresh task/plugin boundary,
+  same-day paired arm order, manifest checks, hard-gate stop, transport-only
+  retries, and infrastructure-failed handling.
 - `docs/evaluation-m2-decisions.md` contains exactly four privacy-minimal case
   records and one M2 decision. Before live work, records are explicitly
   `planned` or `locked-not-run`; only completed records carry a terminal arm
@@ -87,12 +88,12 @@ JSONL ledger, service, dashboard, or DLS runtime input.
   SR-04 additionally records a locked source-blind repair-access proof. SR-01
   and SR-02 are current-only; SR-03 and SR-04 alone have reference arms.
 - `REQ-003`: The release-only runbook enforces the accepted M1 dependency,
-  fresh-task/plugin boundary, current/reference pairing only where a reference
-  exists, at most four cases and eight counted attempts, zero live calls in
-  normal validation, and a fail-closed incomplete outcome. A stop creates a
-  terminal `aborted`/`not-clear` record with only its executed prefix; a
-  transport retry counts toward every case/sample ceiling and cannot create a
-  ninth attempt.
+  pinned execution profile, fresh-task/plugin boundary, current/reference
+  pairing only where a reference exists, at most four cases and eight counted
+  attempts, zero live calls in normal validation, and a fail-closed incomplete
+  outcome. A stop creates a terminal `aborted`/`not-clear` record with only its
+  executed prefix; a transport retry counts toward every case/sample ceiling and
+  cannot create a ninth attempt.
 - `REQ-004`: Four live M2 cases execute against the locked fixtures: clean
   control, seeded blocker, critical secondary routing, and malformed-output
   repair. Their hidden oracles are evaluated outside the reviewer prompt.

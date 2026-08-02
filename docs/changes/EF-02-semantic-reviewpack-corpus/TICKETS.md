@@ -18,7 +18,8 @@ Scope:
   privacy/grammar boundary with the existing stdlib tooling, including the
   focused P01…P07 positive/negative privacy fixtures.
 - Lock and run exactly SR-01, SR-02, SR-03, and SR-04 according to the
-  release-only runbook after the accepted-in-base dependency succeeds.
+  release-only runbook with its pinned execution profile after the
+  accepted-in-base dependency succeeds.
 - Classify the observed findings through the specified hidden-oracle matcher
   and record one evidence-backed M2 decision.
 

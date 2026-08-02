@@ -77,6 +77,13 @@ class M2EvaluationDocumentTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "m2-state-transition"):
             self.validator.validate_m2_evaluation_documents()
+        self.decisions.write_text(source_decisions, encoding="utf-8")
+        self.decisions.write_text(
+            source_decisions.replace("| plugin_version | not-locked |", "| plugin_version | dls 0.13.6+codex.20260802111333 |", 1),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "m2-state-transition"):
+            self.validator.validate_m2_evaluation_documents()
 
 
 if __name__ == "__main__":
