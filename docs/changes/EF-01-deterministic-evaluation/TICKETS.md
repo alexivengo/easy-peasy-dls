@@ -11,15 +11,16 @@ Requirements:
 Scope:
 
 - Add the HC-01 through HC-05A/B Markdown map and the smallest validator check
-  for required rows and exact test symbols.
+  for required rows and fully-qualified IDs in the existing discovered suite.
 - Add the privacy-minimal Markdown decision log and a synthetic record.
 - Reuse the existing DLS test suite; add a regression test only for a
   demonstrated uncovered behavior.
 
 Acceptance:
 
-- The map identifies exact behavior tests and hard oracles, the validator
-  rejects incomplete traceability, and the existing suite passes.
+- The map identifies exact executable behavior-test IDs and hard oracles, the
+  validator rejects incomplete or non-discoverable traceability, and the
+  existing suite passes.
 - The decision log has every required field and no forbidden private content.
 - No new runner, JSONL, model call, or lifecycle verdict is introduced.
 

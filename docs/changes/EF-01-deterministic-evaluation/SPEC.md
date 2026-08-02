@@ -20,25 +20,28 @@ single suite executor; no model call is part of this change.
 
   | Claim | Required proof families |
   |---|---|
-  | HC-01 decision integrity | `test_separate_atomic_approvals_and_staleness`, `test_stale_human_decision_cannot_accept_new_head` |
-  | HC-02 owner safety | `test_execution_context_prepares_owner_and_leaves_dirty_caller_untouched`, `test_dirty_main_routes_candidate_and_review_to_clean_owner`, `test_dirty_owner_stops_before_product_work`, `test_second_state_bearing_owner_is_an_explicit_conflict` |
-  | HC-03 exact evidence | `test_exact_head_evidence_and_invalidation`, `test_descendant_candidate_reuses_preserved_base_and_rejects_conflict`, `test_profile_drift_invalidates_candidate`, `test_validation_failure_never_creates_pack` |
-  | HC-04 review terminality | `test_stream_events_distinguish_running_from_terminal`, `test_single_flight_reports_running` |
-  | HC-05A consent | `test_dirty_owner_consent_yes_rearms_guard`, `test_dirty_owner_consent_no_clears_guard`, `test_changed_draft_does_not_reuse_stale_consent` |
-  | HC-05B bounded continuation | `test_two_continuations_then_terminal_bounded_diagnostic`, `test_git_churn_never_resets_absolute_budget`, `test_real_progress_does_not_expand_absolute_budget` |
+  | HC-01 decision integrity | `test_core_reset_v011.CoreResetTests.test_separate_atomic_approvals_and_staleness`, `test_core_reset_v011.CoreResetTests.test_stale_human_decision_cannot_accept_new_head` |
+  | HC-02 owner safety | `test_core_reset_v011.CoreResetTests.test_execution_context_prepares_owner_and_leaves_dirty_caller_untouched`, `test_core_reset_v011.CoreResetTests.test_dirty_main_routes_candidate_and_review_to_clean_owner`, `test_core_reset_v011.CoreResetTests.test_dirty_owner_stops_before_product_work`, `test_core_reset_v011.CoreResetTests.test_second_state_bearing_owner_is_an_explicit_conflict` |
+  | HC-03 exact evidence | `test_core_reset_v011.CoreResetTests.test_exact_head_evidence_and_invalidation`, `test_core_reset_v011.CoreResetTests.test_descendant_candidate_reuses_preserved_base_and_rejects_conflict`, `test_core_reset_v011.CoreResetTests.test_profile_drift_invalidates_candidate`, `test_core_reset_v011.CoreResetTests.test_validation_failure_never_creates_pack` |
+  | HC-04 review terminality | `test_core_reset_v011.CoreResetTests.test_stream_events_distinguish_running_from_terminal`, `test_core_reset_v011.CoreResetTests.test_single_flight_reports_running` |
+  | HC-05A consent | `test_task_guard.TaskGuardTests.test_dirty_owner_consent_yes_rearms_guard`, `test_task_guard.TaskGuardTests.test_dirty_owner_consent_no_clears_guard`, `test_task_guard.TaskGuardTests.test_changed_draft_does_not_reuse_stale_consent` |
+  | HC-05B bounded continuation | `test_task_guard.TaskGuardTests.test_two_continuations_then_terminal_bounded_diagnostic`, `test_task_guard.TaskGuardTests.test_git_churn_never_resets_absolute_budget`, `test_task_guard.TaskGuardTests.test_real_progress_does_not_expand_absolute_budget` |
 
 - State each row's hard oracle exactly as EF-00 defines it. The map is
   traceability evidence, not a replacement for the tests' behavioral oracle.
 - Extend `scripts/validate_public_repo.py` with the smallest standard-library
-  check: every required claim heading exists and every mapped `test_*` symbol
-  exists in the DLS test files. A missing row or symbol exits non-zero.
+  check: every required claim heading and fully-qualified `module.Class.method`
+  ID exists in the suite discovered with `run_tests.py`'s discovery settings. A
+  missing, moved, or non-discoverable ID exits non-zero.
 - Add `docs/evaluation-decisions.md`: a Markdown table with date, component,
   claim, exact version/HEAD, baseline, arm-manifest digest, cases, result,
   safety, cost/human delta, decision, next trigger, and privacy/retention
   status. Include one clearly synthetic M1-format record with no private data.
-- After EF-01 acceptance, append the M1-exit record using its exact receipt
-  digests. That record is an acceptance consequence, not a pre-acceptance
-  verdict.
+- The synthetic row is not an M1-exit verdict. After EF-01 acceptance, the M2
+  definition must record the immutable canonical receipt tuple (`change_id`,
+  accepted source HEAD, definition digest, and receipt digest) and receive a
+  fresh independent definition review. The authoritative M1 gate check is DLS
+  `status EF-01 --details receipt`, not the Markdown record.
 
 ## Non-goals
 
@@ -62,25 +65,29 @@ adds no duplicate regression test unless implementation demonstrates a gap.
 ## Requirements and acceptance
 
 - `REQ-001`: `evaluation-claim-map.md` includes HC-01, HC-02, HC-03, HC-04,
-  HC-05A, and HC-05B. Each maps to exact existing test symbols and the
+  HC-05A, and HC-05B. Each maps to an exact fully-qualified existing
+  `module.Class.method` test ID and the
   appropriate hard oracle.
 - `REQ-002`: `validate_public_repo.py` returns non-zero when a required map row
-  or referenced test symbol is absent. The full existing suite executes the
-  named test behavior successfully.
+  or referenced test ID is absent from the suite discovered by `run_tests.py`.
+  The full existing suite executes the named test behavior successfully.
 - `REQ-003`: `evaluation-decisions.md` is a Markdown-only log with all required
   fields and a synthetic, privacy-safe record. It contains no local path, raw
   transcript, source, secret, or private fixture content.
-- `REQ-004`: All EF-01 validation has zero model calls. The documentation says
-  M2 remains blocked until EF-01 is accepted and its M1-exit evidence is
-  recorded; it makes no release or production verdict.
+- `REQ-004`: All EF-01 validation has zero model calls. M2 implementation
+  remains blocked until DLS reports EF-01 accepted in base with its canonical
+  receipt tuple and an independently reviewed M2 definition records that
+  immutable reference. The synthetic row is evidence of log format only; it
+  cannot authorize M2, release, or production.
 
 <!-- dls:architecture:start -->
 ## Architecture and alternatives
 
 The claim map remains Markdown because it is one human-auditable mapping, and
-the existing public validator checks its minimal structural contract. This is
-smaller than a new runner or data format while retaining a non-zero failure for
-a missing claim. Existing `run_tests.py` remains the execution authority.
+the existing public validator checks its required fully-qualified test IDs
+against `run_tests.py`'s discovered suite. This is smaller than a new runner or
+data format while retaining a non-zero failure for a missing claim. Existing
+`run_tests.py` remains the execution authority.
 
 Rejected alternatives:
 
@@ -97,15 +104,27 @@ mapped test symbols are validation errors. No public CLI, plugin manifest,
 hook, DLS state schema, or runtime API changes.
 
 The decision log remains repository documentation. A malformed or incomplete
-record is not a PASS and cannot claim M1 exit, release, or production.
+record is not a PASS and cannot claim M1 exit, release, or production. The
+synthetic M1 row is never an authorization. The authoritative M1-exit evidence
+is the DLS receipt tuple; the later M2 definition records that immutable tuple
+and is independently reviewed before implementation can begin.
 
 ## Security, privacy, data, and operations
 
-The synthetic record uses only the change ID, an immutable source identifier,
-and aggregate validation outcome. It must not record a local repository path,
-raw transcript, source, secret, private fixture, or user data. For later
-private artifacts, the log may say only `deleted` or `retained-until:<date>`;
-the artifact is deleted after the decision or 30 days, whichever is earlier.
+The validator accepts the synthetic row only with this allowlist: an ISO date;
+the public component `DLS L0`; claim `decision-log-format`; exact version/HEAD
+`synthetic:format-check-v1`; baseline and arm digest `not-applicable-l0`; case
+`synthetic-m1-format-01`; result `passed`; safety `not-evaluated`; cost/human
+delta `not-measured`; decision `format-validated-not-m1-exit`; next trigger
+`EF-01 accepted receipt`; and privacy status `no-private-artifact`.
+
+`synthetic:format-check-v1` is an immutable public identifier, not source
+content. A real later record may instead contain only `git:<40 lowercase hex>`
+and immutable receipt digests. No record may contain a local repository path,
+raw transcript, source content, secret, private fixture, or user data. For
+later private artifacts, the log may say only `deleted` or
+`retained-until:<date>`; the artifact is deleted after the decision or 30 days,
+whichever is earlier.
 
 No telemetry, network request, model call, or external storage is introduced.
 
