@@ -20,7 +20,9 @@ make delivery safer, more correct, or cheaper, before adding an eval runtime.
 
 - A new evaluator, JSONL ledger, dashboard, database, web service, or DLS state
   schema.
-- Live model calls, iOS pilots, a generic MCP evaluator, or Harbor adoption.
+- Live model calls or iOS pilots in M0/M1, a generic MCP evaluator, or Harbor
+  adoption. L1 semantic calls begin only with accepted M1 and T04; iOS is later
+  M4 work.
 - Any claim that definition review, acceptance, release, or production is
   complete before its own gate.
 

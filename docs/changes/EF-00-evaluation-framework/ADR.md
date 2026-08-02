@@ -10,22 +10,23 @@ collecting private model trajectories.
 
 ## Decision
 
-MVP evaluation is a three-layer process:
+The framework's staged evaluation model is:
 
 1. L0 runs the existing deterministic tests and public validator with zero
    model calls. It maps HC-01 through HC-05 to exact executable tests.
-2. L1 is release-only: four frozen semantic ReviewPack cases use an explicit
+2. L1 is deferred to M2 and release-only: four frozen semantic ReviewPack cases use an explicit
    arm manifest. Component-off runs are causal and change one component only;
    current-versus-previous-release runs detect regressions but make no causal
    attribution because several components may differ. It has an explicit
    live-call budget.
-3. L2 records bounded, private field/iOS observations in a Markdown decision
-   log. It never writes raw transcripts, repository paths, or trajectories into
-   DLS state.
+3. L2 is deferred to M4: bounded, private field/iOS observations use a Markdown
+   decision log. They never write raw transcripts, repository paths, or
+   trajectories into DLS state.
 
 The M1 implementation uses existing tests plus `docs/evaluation-decisions.md`.
 No new runner, JSONL ledger, database, dashboard, service, MCP evaluator, or
-Harbor dependency is part of the MVP.
+Harbor dependency is part of M0/M1. No live model call or iOS observation is
+authorized before the accepted M1 exit gate and T04's frozen-case matrix lock.
 
 ## Alternatives
 

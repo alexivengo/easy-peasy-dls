@@ -39,7 +39,8 @@ missing deterministic regression proofs.
 Acceptance: every hard claim links to its exact test symbol and oracle; any
 new test fails before its protected behavior and passes after it; no model call
 is introduced into the deterministic suite. HC-06 through HC-08 are excluded
-from this M1 ticket and remain post-MVP work.
+from this M1 ticket and remain post-MVP work. HC-05 passes only when both
+HC-05A and HC-05B are mapped and pass.
 
 Validation: `python3 plugins/dls/scripts/run_tests.py`,
 `python3 scripts/validate_public_repo.py`, and `python3 -m compileall -q
@@ -86,6 +87,8 @@ records the four-step manual manifest/hard-oracle checklist from `SPEC.md` and
 one synthetic invalid-manifest record that is excluded from aggregation. A
 causal component-off case additionally uses a registry component ID, declared
 fixture/config switch, on/off configuration digests, and clean-copy HEADs.
+The M2 lock supplies every field of the `SR-01`…`SR-04` matrix before its first
+live call; a placeholder is not accepted.
 
 Validation: full L0 suite, four-case semantic release run, and budget/decision
 log review.

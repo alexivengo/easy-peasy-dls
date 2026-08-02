@@ -19,8 +19,8 @@ or evidence ledger.
 | `owner-routing-mutation` | Owner routing/worktree guard | HC-02: dirty, wrong, ambiguous, or foreign owner leaves caller and foreign tree digests unchanged | any implementation/remediation | DLS maintainer |
 | `candidate-provenance` | Candidate/receipt provenance | HC-03: candidate/review HEAD, tree, policy, and profile digests equal the executed inputs | candidate-ready and review | DLS maintainer |
 | `review-terminality` | Review runner/finalizer | HC-04: completion has `terminal=true` and non-null `review_result_path` | definition and code review | DLS maintainer |
-| `guard-consent` | Completion guard | HC-05A: exact consent binding is retained only for the unchanged active draft | explicit implementation/remediation task | DLS maintainer |
-| `guard-bound` | Completion guard | HC-05B: automatic continuation count is at most two per activation | explicit implementation/remediation task | DLS maintainer |
+| `guard-consent` | Consent-binding guard | HC-05A: exact consent binding is retained only for the unchanged active draft | explicit implementation/remediation task | DLS maintainer |
+| `guard-bound` | Continuation-bound guard | HC-05B: automatic continuation count is at most two per activation | explicit implementation/remediation task | DLS maintainer |
 | `routing-selection` | Structured reviewer routing | selected lanes equal the routing policy for the control/risk | release-only semantic cases | DLS maintainer |
 | `routing-early-stop` | Structured reviewer routing | actionable primary prevents a secondary call | release-only semantic cases | DLS maintainer |
 | `profile-projection` | Platform profiles | resolved profile exposes only its declared capability set in the ReviewPack | profile-selected change | DLS maintainer |
@@ -57,13 +57,30 @@ speed or cost comparison. The MVP hard gates are HC-01 through HC-05 from the
 registry.
 HC-05's authoritative limit is two automatic continuations per activation, as
 defined by the current `plugins/dls/skills/dls-workflow/SKILL.md` contract and
-enforced by the bundled task guard. Later HC-06 through HC-08 cover read-only
-source, single owning model call, and honest lifecycle status.
+enforced by the bundled task guard. `HC-05` means the guard family: it passes
+only when both independently mapped HC-05A and HC-05B pass; failure of either
+fails the family hard gate. Later HC-06 through HC-08 cover read-only source,
+single owning model call, and honest lifecycle status.
 
 The automation arm-count trigger is evaluated per case decision, not across a
 release or corpus: it fires only when resolving one primary claim requires more
 than two distinct arms. The planned four M2 cases each use at most a two-arm
 comparison, so their combined arm count does not trigger automation.
+
+### M2 frozen-case matrix
+
+| Immutable ID | Minimum covered claim/baseline | Expected reviewer verdict | Required M2 lock fields |
+|---|---|---|---|
+| `SR-01` | Clean-control noise; hard oracle/current | `clear` | clean disposable fixture SHA, task-input digest, oracle version |
+| `SR-02` | Seeded known root cause; hard oracle/current | `not-clear` | seeded fixture SHA, task-input digest, oracle version |
+| `SR-03` | `routing-selection` and `routing-early-stop`; component-off primary-only baseline | `not-clear` when the hidden secondary finding is present | critical-risk fixture SHA, task-input digest, oracle version, `routing-early-stop` switch/config digests |
+| `SR-04` | `review-terminality`; compact-repair versus fail-closed reference | unchanged `clear` or `not-clear` semantic verdict | malformed-output fixture SHA, task-input digest, oracle version, repair/reference config digests |
+
+These four IDs are fixed now. M2 creates the frozen fixtures and fills every
+lock field before its first live call; no placeholder is accepted. The cases
+collectively cover clean control/noise, dangerous miss, secondary routing value,
+and malformed-output repair. They do not establish the L0 HC-01 through HC-05
+mapping, which belongs to M1.
 
 Each case's expected reviewer verdict is `clear` or `not-clear`; it is separate
 from the arm outcome. The only arm outcomes are:
@@ -185,6 +202,19 @@ checklist in the decision log:
 This checklist is the authorized M2 validation procedure until the automation
 trigger permits a validator. The T04 runbook must include a synthetic invalid
 manifest record that demonstrates step 4.
+
+### Phase authorization
+
+- M0 is this docs-only definition and makes no live model call or iOS
+  observation.
+- M1 maps L0 HC-01 through HC-05A/B, fills demonstrated deterministic gaps, and
+  adds the decision log. Its commit/PR checks make zero model calls.
+- T04/L1 implementation is authorized only after the accepted M1 exit gate.
+  A semantic live call is authorized only after T04 locks its four fixtures,
+  runbook, and matrix fields. Before then no semantic live call, frozen semantic
+  fixture execution, or iOS observation is authorized.
+- L2/iOS field observation is later M4 work, after M2; it is not an M0, M1, or
+  M2 deliverable.
 
 ## Security, privacy, data, and operations
 
