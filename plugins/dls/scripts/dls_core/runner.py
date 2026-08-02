@@ -347,6 +347,22 @@ def _requirements(root: Path, state: dict[str, Any]) -> list[str]:
     pattern = re.compile(r"\b([A-Z][A-Z0-9]{0,15}-\d{2,})\b")
     for item in state["change"]["artifacts"].values():
         path = safe_resolve(root, item["path"], must_exist=True)
+        ticket_scope = item.get("producer_ticket_scope")
+        if isinstance(ticket_scope, list) and ticket_scope:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                epics = payload["epics"]
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
+                raise IntegrityError("Scoped traceability artifact must be a valid matrix") from exc
+            for epic in epics.values():
+                for requirement_id, record in epic.get("requirements", {}).items():
+                    if (
+                        isinstance(record, dict)
+                        and record.get("producerTicket") in ticket_scope
+                        and requirement_id.split("-", 1)[0] in prefixes
+                    ):
+                        found.add(requirement_id)
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:

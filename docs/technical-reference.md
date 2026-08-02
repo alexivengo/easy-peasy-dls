@@ -315,3 +315,7 @@ The release is proof-first: Apple UI definition/design, backend
 definition/architecture and a full backend review/acceptance lifecycle must
 complete as real pilots before the corresponding roadmap items are closed.
 Models, review routing and budgets are intentionally unchanged.
+
+The Apple pilot found that a shared traceability artifact was previously scanned
+as unscoped text. Requirement projection now honors its state-owned
+`producer_ticket_scope`; IDs owned by other changes cannot enter the ReviewPack.

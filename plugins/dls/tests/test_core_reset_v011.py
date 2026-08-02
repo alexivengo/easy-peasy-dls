@@ -27,6 +27,7 @@ from dls_core.runner import (
     _conflicts,
     _model_call,
     _prompt,
+    _requirements,
     _run_bounded,
     candidate_ready,
     review_run,
@@ -346,6 +347,42 @@ class CoreResetTests(unittest.TestCase):
         self.assertEqual(16, len(one["domain_skills"]))
         self.assertGreater(one["omitted_count"], 0)
         self.assertNotIn(str(self.root), json.dumps(one))
+
+    def test_shared_traceability_matrix_is_limited_to_ticket_scope(self) -> None:
+        change(self.root, control="routine")
+        matrix = self.root / "docs" / "shared-requirements.json"
+        matrix.parent.mkdir(parents=True, exist_ok=True)
+        matrix.write_text(
+            json.dumps(
+                {
+                    "epics": {
+                        "current": {
+                            "requirements": {
+                                "F-01": {"producerTicket": "C001-T01"},
+                            }
+                        },
+                        "other": {
+                            "requirements": {
+                                "F-99": {"producerTicket": "OTHER-T01"},
+                                "C-42": {"producerTicket": "OTHER-T01"},
+                            }
+                        },
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        def attach(value: dict) -> None:
+            value["change"]["requirement_prefixes"] = ["C", "F"]
+            value["change"]["artifacts"]["traceability"] = {
+                "path": "docs/shared-requirements.json",
+                "role": "definition",
+                "producer_ticket_scope": ["C001-T01"],
+            }
+
+        state = mutate_state(self.root, "C001", attach)
+        self.assertEqual(["F-01"], _requirements(self.root, state))
 
     def test_review_profile_provenance_is_in_result_state_and_metrics(self) -> None:
         _, previous = self._prepare_code(control="routine")
