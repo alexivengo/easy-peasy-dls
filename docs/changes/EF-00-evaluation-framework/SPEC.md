@@ -38,31 +38,43 @@ Bundled MCP is absent and is not an eval target.
 
 Every planned arm has a manifest containing case ID, exact HEAD/version, task
 input digest, oracle version, model/effort, permissions, toolchain, enabled and
-disabled components, and the reason for every allowed difference. The runner
+disabled components, and the reason for every allowed difference. The evaluator
 first validates that manifest against the baseline rule, then executes the hard
-oracle. An invalid manifest or hard-gate failure is rejected before speed or
-cost comparison. The MVP hard gates are HC-01 through HC-05 from the registry.
+oracle. Until automation is permitted, the manual checklist below performs
+those same checks; an invalid manifest or hard-gate failure is rejected before
+speed or cost comparison. The MVP hard gates are HC-01 through HC-05 from the
+registry.
 HC-05's authoritative limit is two automatic continuations per activation, as
 defined by the current `plugins/dls/skills/dls-workflow/SKILL.md` contract and
 enforced by the bundled task guard. Later HC-06 through HC-08 cover read-only
 source, single owning model call, and honest lifecycle status.
 
-Outcomes are `passed`, `product-failed`, `component-failed`,
-`infrastructure-failed`, and `invalid-case`. Xcode, Simulator, signing,
-network, and model-service failures are infrastructure failures unless the DLS
-component is the demonstrated cause. Missing telemetry is `unknown`/`null`.
+Each case's expected reviewer verdict is `clear` or `not-clear`; it is separate
+from the arm outcome. The only arm outcomes are:
+
+| Outcome | Meaning | Aggregation and release treatment |
+|---|---|---|
+| `passed` | Expected verdict and hard oracle both pass | Eligible for the applicable quality/cost window |
+| `product-failed` | Valid product oracle fails | Eligible negative result; release is `not-clear` |
+| `component-failed` | Valid component oracle fails | Eligible negative result; release is `not-clear` |
+| `infrastructure-failed` | Xcode, Simulator, signing, network, or model service fails without a demonstrated DLS cause | Excluded from quality/cost aggregation; release is incomplete and `not-clear` until a valid rerun |
+| `invalid-case` | Manifest, case setup, or oracle is incomparable/invalid | Excluded; repair case/manifest; release is `not-clear` |
+| `budget-exhausted` | Ceiling stops unscheduled or unfinished work | Excluded; release is incomplete and `not-clear` |
+
+Missing telemetry is `unknown`/`null`. No outcome other than `passed` can be
+summarized as a clear result.
 
 ### Decision and cost policy
 
 Record only `safety_violations`, `manual_nudges_or_corrections`, `model_calls`,
 `processed_tokens`, `wall_time_seconds`, and `review_cycles_to_clear_or_stop`.
 
-Each case declares one expected terminal label: `clear`, `not-clear`, or a
-typed non-product outcome. An applicable case exercises the component's primary
-claim and its declared oracle; a case that does not do so is excluded with the
-reason recorded in its arm manifest. A correct result has the expected label,
-passes its hard oracle, and has zero safety violations. A false block is an
-actual `not-clear` where the expected label is `clear`.
+Each case declares one expected reviewer verdict: `clear` or `not-clear`. An
+applicable case exercises the component's primary claim and its declared oracle;
+a case that does not do so is excluded with the reason recorded in its arm
+manifest. A correct result has the expected verdict, a `passed` arm outcome,
+and zero safety violations. A false block is an actual `not-clear` where the
+expected verdict is `clear`.
 
 The initial M2 four-case corpus is a per-case release gate: all four expected
 labels and hard oracles must pass. It is not a 20-case quality sample. The
@@ -117,9 +129,11 @@ is incomplete/not-clear, never clearance.
 - `REQ-004`: M1 is limited to mapping HC-01 through HC-05 onto the existing
   suite, filling only demonstrated coverage gaps, and creating one Markdown
   decision log. A runner/JSONL is forbidden until a documented trigger occurs.
-- `REQ-005`: The framework preserves digest-bound human approval, one product
-  owner, exact-HEAD evidence, read-only independent review, terminal review
-  completion, bounded execution, and separate lifecycle states.
+- `REQ-005`: M0 preserves digest-bound human approval, one product owner,
+  exact-HEAD evidence, read-only independent review, terminal review completion,
+  bounded execution, and separate lifecycle states by changing no DLS runtime
+  source, hook, state schema, or public CLI. M1 separately maps HC-01 through
+  HC-05; HC-06 through HC-08 are explicitly post-MVP.
 
 <!-- dls:architecture:start -->
 ## Architecture and alternatives
@@ -138,6 +152,23 @@ version/HEAD, baseline, arm-manifest digest, cases, result, safety, cost/human
 delta, decision, and next trigger. A malformed, incomparable, budget-exhausted,
 or infrastructure-failed arm records an explicit incomplete outcome and cannot
 become a clear result.
+
+Before each M2 live call, the evaluator performs this deterministic manual
+checklist in the decision log:
+
+1. Record both complete arm manifests side by side and mark the baseline type.
+2. For `component-off`, compare every manifest field and require exactly one
+   enabled/disabled component difference. For `previous-release` and `Native
+   Codex`, list every permitted difference and mark the run non-causal.
+3. Run the listed hard oracle immediately after each arm, before recording any
+   cost metric.
+4. If step 1–3 fails, record `invalid-case`, `infrastructure-failed`, or
+   `budget-exhausted` from the canonical taxonomy; record no aggregate metric
+   and stop that comparison.
+
+This checklist is the authorized M2 validation procedure until the automation
+trigger permits a validator. The T04 runbook must include a synthetic invalid
+manifest record that demonstrates step 4.
 
 ## Security, privacy, data, and operations
 

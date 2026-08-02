@@ -20,7 +20,8 @@ Scope:
 Acceptance:
 
 - Definition review clears the exact digest and the user approves definition
-  and architecture.
+  and architecture; the M0 diff changes only definition/roadmap documentation,
+  not `plugins/dls` runtime source, hooks, state schema, or public CLI.
 
 Validation:
 
@@ -37,7 +38,8 @@ missing deterministic regression proofs.
 
 Acceptance: every hard claim links to its exact test symbol and oracle; any
 new test fails before its protected behavior and passes after it; no model call
-is introduced into the deterministic suite.
+is introduced into the deterministic suite. HC-06 through HC-08 are excluded
+from this M1 ticket and remain post-MVP work.
 
 Validation: `python3 plugins/dls/scripts/run_tests.py`,
 `python3 scripts/validate_public_repo.py`, and `python3 -m compileall -q
@@ -71,7 +73,9 @@ cases alter one component only; previous-release cases are labeled regression
 only and Native Codex cases overall-overhead only; each case declares its
 expected terminal label and applicability; all four M2 cases pass individually,
 while 19/20 and false-block thresholds wait for the rolling 20-case window;
-infrastructure failures cannot be reported as product results.
+infrastructure failures cannot be reported as product results. The runbook
+records the four-step manual manifest/hard-oracle checklist from `SPEC.md` and
+one synthetic invalid-manifest record that is excluded from aggregation.
 
 Validation: full L0 suite, four-case semantic release run, and budget/decision
 log review.
