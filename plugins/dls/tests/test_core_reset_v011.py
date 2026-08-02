@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import importlib.util
+import io
 import json
+import os
 import shutil
+import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import unittest
@@ -573,6 +578,7 @@ class CoreResetTests(unittest.TestCase):
             card = reviewed["human_decision"]
             self.assertEqual("Принять результат? Да / Нет.", card["prompt"])
             self.assertEqual(card, status(self.root, "C001")["human_decision"])
+            before_rejection = stable_digest(load_state(self.root, "C001"))
             with self.assertRaisesRegex(IntegrityError, "affirmative"):
                 approve(
                     self.root,
@@ -586,6 +592,7 @@ class CoreResetTests(unittest.TestCase):
                     dry_run=False,
                     decision_id=card["id"],
                 )
+            self.assertEqual(before_rejection, stable_digest(load_state(self.root, "C001")))
             accepted = approve(
                 self.root,
                 change_id="C001",
@@ -625,6 +632,7 @@ class CoreResetTests(unittest.TestCase):
             card = review_run(self.root, change_id="C001", kind="code")["human_decision"]
             (self.root / "src.py").write_text("value = 2\n", encoding="utf-8")
             commit(self.root, "new candidate")
+            before_rejection = stable_digest(load_state(self.root, "C001"))
             with self.assertRaises(IntegrityError):
                 approve(
                     self.root,
@@ -638,6 +646,7 @@ class CoreResetTests(unittest.TestCase):
                     dry_run=False,
                     decision_id=card["id"],
                 )
+            self.assertEqual(before_rejection, stable_digest(load_state(self.root, "C001")))
             self.assertIsNone(load_state(self.root, "C001")["acceptance"])
         finally:
             restore_environment(previous)
@@ -740,9 +749,10 @@ class CoreResetTests(unittest.TestCase):
         _, previous = self._prepare_code(control="routine")
         events: list[dict] = []
         try:
-            review_run(self.root, change_id="C001", kind="code", stream=events.append)
+            result = review_run(self.root, change_id="C001", kind="code", stream=events.append)
             self.assertEqual(("started", False), (events[0]["event"], events[0]["terminal"]))
             self.assertEqual(("completed", True), (events[-1]["event"], events[-1]["terminal"]))
+            self.assertTrue(result["review_result_path"])
         finally:
             restore_environment(previous)
 
@@ -798,6 +808,142 @@ class CoreResetTests(unittest.TestCase):
         self._approve("B")
         dependency_set(self.root, change_id="B", target="A", dry_run=False)
         self.assertEqual("wait-dependency", status(self.root, "B")["next_action"]["id"])
+
+    def test_dependency_rejects_acceptance_of_old_definition(self) -> None:
+        change(self.root, change_id="A", control="routine")
+        change(self.root, change_id="B", control="routine")
+        commit(self.root, "definitions")
+        self._approve("A")
+        self._approve("B")
+        _, previous = self._fake()
+        try:
+            ticket_set(self.root, change_id="A", ticket_id="A-T01", value="implemented", note=None)
+            (self.root / "src.py").write_text("value = 1\n", encoding="utf-8")
+            commit(self.root, "A implementation")
+            candidate_ready(
+                self.root,
+                change_id="A",
+                base=self.base,
+                addressed=[],
+                noted=[],
+                dry_run=False,
+            )
+            card = review_run(self.root, change_id="A", kind="code")["human_decision"]
+            approve(
+                self.root,
+                change_id="A",
+                decision="accept",
+                include_design=False,
+                include_architecture=False,
+                actor="user",
+                response="Да",
+                git_sha=None,
+                dry_run=False,
+                decision_id=card["id"],
+            )
+            state = load_state(self.root, "A")
+            definition = self.root / state["change"]["artifacts"]["change"]["path"]
+            definition.write_text(definition.read_text(encoding="utf-8") + "\nChanged.\n", encoding="utf-8")
+            commit(self.root, "change accepted definition")
+            dependency_set(self.root, change_id="B", target="A", dry_run=False)
+            action = status(self.root, "B")["next_action"]
+            self.assertEqual("wait-dependency", action["id"])
+            self.assertEqual("accepted-definition-mismatch", action["detail"][0]["reason"])
+        finally:
+            restore_environment(previous)
+
+    def test_public_validator_enforces_evaluation_documents(self) -> None:
+        repository_root = Path(__file__).resolve().parents[3]
+        validator_path = repository_root / "scripts" / "validate_public_repo.py"
+        spec = importlib.util.spec_from_file_location("evaluation_public_validator", validator_path)
+        assert spec and spec.loader
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+        source_map = (repository_root / "docs" / "evaluation-claim-map.md").read_text(encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            documents = Path(directory) / "docs"
+            documents.mkdir()
+            claim_map = documents / "evaluation-claim-map.md"
+            decisions = documents / "evaluation-decisions.md"
+            original_map = validator.EVALUATION_CLAIM_MAP
+            original_decisions = validator.EVALUATION_DECISIONS
+            validator.EVALUATION_CLAIM_MAP = claim_map
+            validator.EVALUATION_DECISIONS = decisions
+            try:
+                def assert_valid(map_text: str = source_map, log_text: str = validator.DECISION_LOG_CONTENT) -> None:
+                    claim_map.write_text(map_text, encoding="utf-8")
+                    decisions.write_text(log_text, encoding="utf-8")
+                    validator.validate_evaluation_documents()
+
+                def assert_invalid(map_text: str = source_map, log_text: str = validator.DECISION_LOG_CONTENT) -> None:
+                    claim_map.write_text(map_text, encoding="utf-8")
+                    decisions.write_text(log_text, encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        validator.validate_evaluation_documents()
+
+                assert_valid()
+                for claim, (_oracle, test_ids) in validator.EVALUATION_CLAIMS.items():
+                    assert_invalid(map_text=source_map.replace(f"## {claim}\n", f"## {claim}-missing\n", 1))
+                    for test_id in test_ids:
+                        assert_invalid(map_text=source_map.replace(test_id, f"missing.{test_id}", 1))
+                for header in validator.DECISION_LOG_HEADERS:
+                    assert_invalid(log_text=validator.DECISION_LOG_CONTENT.replace(header, f"{header} changed", 1))
+                for value in validator.SYNTHETIC_DECISION_VALUES:
+                    assert_invalid(log_text=validator.DECISION_LOG_CONTENT.replace(value, f"{value} changed", 1))
+                for marker in ("/Users/", "/private/", "transcript", "def ", "-----BEGIN PRIVATE KEY-----", "private-fixture:"):
+                    assert_invalid(log_text=validator.DECISION_LOG_CONTENT + marker + "\n")
+            finally:
+                validator.EVALUATION_CLAIM_MAP = original_map
+                validator.EVALUATION_DECISIONS = original_decisions
+
+    def test_l0_validation_does_not_invoke_live_codex(self) -> None:
+        if os.environ.get("DLS_L0_SENTINEL_CHILD") == "1":
+            return
+        repository_root = Path(__file__).resolve().parents[3]
+        archive = subprocess.run(
+            ["git", "archive", "HEAD"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            extracted = Path(directory) / "source"
+            extracted.mkdir()
+            with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+                tar.extractall(extracted)
+            sentinel = Path(directory) / "bin"
+            sentinel.mkdir()
+            sentinel_log = Path(directory) / "codex-calls.log"
+            executable = sentinel / "codex"
+            executable.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$DLS_L0_SENTINEL_LOG\"\nexit 97\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            environment = {
+                **os.environ,
+                "PATH": f"{sentinel}{os.pathsep}{os.environ.get('PATH', '')}",
+                "DLS_L0_SENTINEL_CHILD": "1",
+                "DLS_L0_SENTINEL_LOG": str(sentinel_log),
+            }
+            commands = (
+                [sys.executable, "plugins/dls/scripts/run_tests.py"],
+                [sys.executable, "scripts/validate_public_repo.py"],
+                [sys.executable, "-m", "compileall", "-q", "plugins/dls/scripts", "plugins/dls/hooks", "scripts"],
+            )
+            for command in commands:
+                result = subprocess.run(
+                    command,
+                    cwd=extracted,
+                    env=environment,
+                    text=True,
+                    capture_output=True,
+                    timeout=120,
+                    check=False,
+                )
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertFalse(sentinel_log.exists())
 
     def test_worktree_identity_survives_move(self) -> None:
         change(self.root, control="standard")

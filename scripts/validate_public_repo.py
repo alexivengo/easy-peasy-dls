@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+import unittest
 from pathlib import Path
 
 
@@ -17,6 +18,8 @@ MANIFEST = PLUGIN / ".codex-plugin" / "plugin.json"
 MODEL_OUTPUT_SCHEMAS = (
     PLUGIN / "assets" / "schemas" / "review-decision.schema.json",
 )
+EVALUATION_CLAIM_MAP = ROOT / "docs" / "evaluation-claim-map.md"
+EVALUATION_DECISIONS = ROOT / "docs" / "evaluation-decisions.md"
 
 REQUIRED_FILES = (
     ROOT / "README.md",
@@ -31,6 +34,8 @@ REQUIRED_FILES = (
     PLUGIN / "hooks" / "task_guard.py",
     PLUGIN / "skills" / "dls-workflow" / "SKILL.md",
     PLUGIN / "skills" / "dls-debug" / "SKILL.md",
+    EVALUATION_CLAIM_MAP,
+    EVALUATION_DECISIONS,
 )
 
 FORBIDDEN_PATH_PARTS = {
@@ -54,6 +59,99 @@ SEMVER = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
+
+EVALUATION_CLAIMS = {
+    "HC-01": (
+        "Before/after state digest is identical",
+        (
+            "test_core_reset_v011.CoreResetTests.test_acceptance_is_separate_and_exact_head",
+            "test_core_reset_v011.CoreResetTests.test_stale_human_decision_cannot_accept_new_head",
+        ),
+    ),
+    "HC-02": (
+        "Caller/foreign worktree diff is identical",
+        (
+            "test_core_reset_v011.CoreResetTests.test_execution_context_prepares_owner_and_leaves_dirty_caller_untouched",
+            "test_core_reset_v011.CoreResetTests.test_dirty_main_routes_candidate_and_review_to_clean_owner",
+            "test_core_reset_v011.CoreResetTests.test_dirty_owner_stops_before_product_work",
+            "test_core_reset_v011.CoreResetTests.test_second_state_bearing_owner_is_an_explicit_conflict",
+        ),
+    ),
+    "HC-03": (
+        "HEAD/tree/policy/profile digests match",
+        (
+            "test_core_reset_v011.CoreResetTests.test_exact_head_evidence_and_invalidation",
+            "test_core_reset_v011.CoreResetTests.test_descendant_candidate_reuses_preserved_base_and_rejects_conflict",
+            "test_core_reset_v011.CoreResetTests.test_profile_drift_invalidates_candidate",
+            "test_core_reset_v011.CoreResetTests.test_validation_failure_never_creates_pack",
+        ),
+    ),
+    "HC-04": (
+        "terminal=true and review_result_path != null",
+        (
+            "test_core_reset_v011.CoreResetTests.test_stream_events_distinguish_running_from_terminal",
+        ),
+    ),
+    "HC-05A": (
+        "No bypass; continuation count <= contract",
+        (
+            "test_task_guard.TaskGuardTests.test_dirty_owner_consent_yes_rearms_guard",
+            "test_task_guard.TaskGuardTests.test_dirty_owner_consent_no_clears_guard",
+            "test_task_guard.TaskGuardTests.test_changed_draft_does_not_reuse_stale_consent",
+        ),
+    ),
+    "HC-05B": (
+        "No bypass; continuation count <= contract",
+        (
+            "test_task_guard.TaskGuardTests.test_two_continuations_then_terminal_bounded_diagnostic",
+            "test_task_guard.TaskGuardTests.test_git_churn_never_resets_absolute_budget",
+            "test_task_guard.TaskGuardTests.test_real_progress_does_not_expand_absolute_budget",
+        ),
+    ),
+}
+
+DECISION_LOG_HEADERS = (
+    "Date",
+    "Component",
+    "Claim",
+    "Exact version/HEAD",
+    "Baseline",
+    "Arm-manifest digest",
+    "Cases",
+    "Result",
+    "Safety",
+    "Cost/human delta",
+    "Decision",
+    "Next trigger",
+    "Privacy/retention",
+)
+SYNTHETIC_DECISION_VALUES = (
+    "2026-08-02",
+    "DLS L0",
+    "decision-log-format",
+    "synthetic:format-check-v1",
+    "not-applicable-l0",
+    "not-applicable-l0",
+    "synthetic-m1-format-01",
+    "passed",
+    "not-evaluated",
+    "not-measured",
+    "format-validated-not-m1-exit",
+    "EF-01 accepted receipt",
+    "no-private-artifact",
+)
+DECISION_LOG_CONTENT = "\n".join(
+    (
+        "# Evaluation decisions",
+        "",
+        "| " + " | ".join(DECISION_LOG_HEADERS) + " |",
+        "|" + "|".join("---" for _ in DECISION_LOG_HEADERS) + "|",
+        "| " + " | ".join(SYNTHETIC_DECISION_VALUES) + " |",
+        "",
+    )
+)
+
+
 def fail(message: str) -> None:
     raise ValueError(message)
 
@@ -254,6 +352,56 @@ def validate_platform_profiles() -> None:
             pass
 
 
+def _test_ids(suite: unittest.TestSuite):
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            yield from _test_ids(item)
+        else:
+            yield item.id()
+
+
+def discovered_dls_test_ids() -> set[str]:
+    scripts = str(PLUGIN / "scripts")
+    tests = str(PLUGIN / "tests")
+    sys.path[:0] = [scripts, tests]
+    try:
+        suite = unittest.defaultTestLoader.discover(tests, pattern="test_*.py")
+        return set(_test_ids(suite))
+    finally:
+        for path in (scripts, tests):
+            try:
+                sys.path.remove(path)
+            except ValueError:
+                pass
+
+
+def validate_evaluation_documents() -> None:
+    text = EVALUATION_CLAIM_MAP.read_text(encoding="utf-8")
+    headings = tuple(re.findall(r"^## (HC-[0-9]+[A-Z]?)$", text, flags=re.MULTILINE))
+    if headings != tuple(EVALUATION_CLAIMS):
+        fail("Evaluation claim map должен содержать только обязательные HC headings")
+    discovered = discovered_dls_test_ids()
+    for claim, (oracle, expected_ids) in EVALUATION_CLAIMS.items():
+        match = re.search(
+            rf"^## {re.escape(claim)}\n(?P<body>.*?)(?=^## |\Z)",
+            text,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if not match:
+            fail(f"Evaluation claim map: отсутствует {claim}")
+        body = match.group("body")
+        if f"Hard oracle: {oracle}" not in body:
+            fail(f"Evaluation claim map: неверный hard oracle для {claim}")
+        ids = tuple(re.findall(r"`(test_[A-Za-z0-9_.]+)`", body))
+        if ids != expected_ids:
+            fail(f"Evaluation claim map: неверные test IDs для {claim}")
+        missing = [test_id for test_id in ids if test_id not in discovered]
+        if missing:
+            fail(f"Evaluation claim map: test ID не discoverable: {', '.join(missing)}")
+    if EVALUATION_DECISIONS.read_text(encoding="utf-8") != DECISION_LOG_CONTENT:
+        fail("Evaluation decisions должен оставаться закрытым M1 seed log")
+
+
 def validate_public_surface() -> None:
     for relative in repository_files():
         parts = set(relative.parts)
@@ -279,6 +427,7 @@ def main() -> int:
         validate_model_output_schemas,
         validate_skills,
         validate_platform_profiles,
+        validate_evaluation_documents,
         validate_public_surface,
     )
     try:

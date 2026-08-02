@@ -568,6 +568,9 @@ def dependency_status(root: Path, state: dict[str, Any]) -> dict[str, Any]:
         if accepted is None:
             blocked.append({**item, "reason": "not-accepted"})
             continue
+        if accepted.get("digest") != item.get("target_definition_digest"):
+            blocked.append({**item, "reason": "accepted-definition-mismatch"})
+            continue
         target_head = accepted.get("git_sha")
         if not isinstance(target_head, str):
             blocked.append({**item, "reason": "accepted-head-missing"})
