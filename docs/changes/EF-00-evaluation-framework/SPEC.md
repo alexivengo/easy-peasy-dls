@@ -19,7 +19,7 @@ or evidence ledger.
 | Owner routing/worktree guard | HC-02: dirty, wrong, ambiguous, or foreign owner leaves caller and foreign tree digests unchanged | any implementation/remediation | DLS maintainer |
 | Candidate/receipt provenance | HC-03: candidate/review HEAD, tree, policy, and profile digests equal the executed inputs | candidate-ready and review | DLS maintainer |
 | Review runner/finalizer | HC-04: completion has `terminal=true` and non-null `review_result_path` | definition and code review | DLS maintainer |
-| Completion guard | HC-05: exact consent binding is retained and continuation count is at most the contract limit | explicit implementation/remediation task | DLS maintainer |
+| Completion guard | HC-05 composite: exact consent binding is retained for the unchanged active draft and automatic continuations are at most two per activation | explicit implementation/remediation task | DLS maintainer |
 | Structured reviewer routing | routing has the policy-selected lanes and no secondary call after actionable primary | release-only semantic cases | DLS maintainer |
 | Platform profiles | resolved profile exposes only its declared capability set in the ReviewPack | profile-selected change | DLS maintainer |
 | Named validation commands | the configured named command completes and its evidence records zero model calls | candidate/release gate | repository owner |
@@ -42,8 +42,10 @@ disabled components, and the reason for every allowed difference. The runner
 first validates that manifest against the baseline rule, then executes the hard
 oracle. An invalid manifest or hard-gate failure is rejected before speed or
 cost comparison. The MVP hard gates are HC-01 through HC-05 from the registry.
-Later HC-06 through HC-08 cover read-only source, single owning model call, and
-honest lifecycle status.
+HC-05's authoritative limit is two automatic continuations per activation, as
+defined by the current `plugins/dls/skills/dls-workflow/SKILL.md` contract and
+enforced by the bundled task guard. Later HC-06 through HC-08 cover read-only
+source, single owning model call, and honest lifecycle status.
 
 Outcomes are `passed`, `product-failed`, `component-failed`,
 `infrastructure-failed`, and `invalid-case`. Xcode, Simulator, signing,
@@ -55,10 +57,20 @@ component is the demonstrated cause. Missing telemetry is `unknown`/`null`.
 Record only `safety_violations`, `manual_nudges_or_corrections`, `model_calls`,
 `processed_tokens`, `wall_time_seconds`, and `review_cycles_to_clear_or_stop`.
 
-Safety requires zero violations. Normal corpus behavior requires at least
-`19/20` correct passes and at most `1/20` false block. Keep a quality component
-only after one uniquely prevented high-impact escape or two additional correct
-results in 20 applicable cases. Keep a cost component only after one saved
+Each case declares one expected terminal label: `clear`, `not-clear`, or a
+typed non-product outcome. An applicable case exercises the component's primary
+claim and its declared oracle; a case that does not do so is excluded with the
+reason recorded in its arm manifest. A correct result has the expected label,
+passes its hard oracle, and has zero safety violations. A false block is an
+actual `not-clear` where the expected label is `clear`.
+
+The initial M2 four-case corpus is a per-case release gate: all four expected
+labels and hard oracles must pass. It is not a 20-case quality sample. The
+`19/20` correct-pass and at-most-`1/20` false-block thresholds apply only to the
+rolling most-recent 20 applicable cases for one component and claim. Until that
+window exists, the decision is `insufficient-data`, except that a demonstrated
+unique high-impact escape may keep a quality component provisionally. Safety
+always requires zero violations. Keep a cost component only after one saved
 manual action or approximately 20% lower calls, tokens, or time with no quality
 loss. Three release cycles or 30 applicable cases with no unique benefit starts
 a delete/merge review. Rare safety guards use fault injection, not production
@@ -95,8 +107,10 @@ is incomplete/not-clear, never clearance.
 - `REQ-001`: The component registry has exactly one primary observable claim per
   included component, names its applicability and owner, and excludes unused
   internals and bundled MCP.
-- `REQ-002`: Each planned comparison names one baseline; arms differ only in the
-  tested component and reject a hard-gate violation before any aggregate metric.
+- `REQ-002`: Each planned comparison names one baseline. Causal component-off
+  arms differ only in the tested component; previous-release and Native Codex
+  arms are explicitly non-causal and labeled regression or overall-overhead.
+  Every arm rejects a hard-gate violation before any aggregate metric.
 - `REQ-003`: Canonical DLS state stores only minimal evidence references,
   digests, model IDs, timestamps, and counters; raw live artifacts stay local
   and removable without invalidating a receipt.

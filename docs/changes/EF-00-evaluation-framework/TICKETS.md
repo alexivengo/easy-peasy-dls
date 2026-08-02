@@ -68,7 +68,10 @@ Requirements: `REQ-001`, `REQ-002`, `REQ-005`.
 
 Acceptance: every case has a versioned oracle and arm manifest; component-off
 cases alter one component only; previous-release cases are labeled regression
-only; infrastructure failures cannot be reported as product results.
+only and Native Codex cases overall-overhead only; each case declares its
+expected terminal label and applicability; all four M2 cases pass individually,
+while 19/20 and false-block thresholds wait for the rolling 20-case window;
+infrastructure failures cannot be reported as product results.
 
 Validation: full L0 suite, four-case semantic release run, and budget/decision
 log review.

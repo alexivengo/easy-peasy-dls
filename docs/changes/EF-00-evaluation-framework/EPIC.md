@@ -27,8 +27,10 @@ make delivery safer, more correct, or cheaper, before adding an eval runtime.
 ## Success measures
 
 - Every included component has one observable claim and one owner.
-- Each planned comparison changes exactly one component and keeps task input,
-  permissions, model/effort, and toolchain fixed.
+- Each causal component-off comparison changes exactly one component and keeps
+  task input, permissions, model/effort, and toolchain fixed. Previous-release
+  and Native Codex comparisons are explicitly non-causal regression or
+  overall-overhead comparisons.
 - HC-01 through HC-05 have deterministic oracles; missing values are
   `unknown`, never zero.
 - The approved M1 slice needs only existing test infrastructure and one
