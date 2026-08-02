@@ -773,6 +773,18 @@ class CoreResetTests(unittest.TestCase):
         self.assertNotIn("Existing worktree branch does not match requested branch", skill)
         self.assertNotIn("ask the user to accept the exact reviewed HEAD", skill)
 
+    def test_workflow_skill_requires_single_explicit_dirty_draft_handoff(self) -> None:
+        plugin = Path(__file__).resolve().parents[1]
+        skill = (plugin / "skills" / "dls-workflow" / "SKILL.md").read_text()
+        cli = (plugin / "skills" / "dls-workflow" / "references" / "cli.md").read_text()
+        prompt = "Продолжить существующий черновик? Да / Нет."
+        self.assertEqual(1, skill.count(prompt))
+        self.assertIn("immediately following user response is `Да`", skill)
+        self.assertIn("without asking again for that draft", skill)
+        self.assertIn("Draft permission authorizes continuation only", skill)
+        self.assertIn(prompt, cli)
+        self.assertIn("preserve the existing diff and continue", cli)
+
     def test_dependency_requires_accepted_head_in_base(self) -> None:
         change(self.root, change_id="A", control="routine")
         change(self.root, change_id="B", control="routine")

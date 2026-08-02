@@ -42,8 +42,14 @@ when asking for a human decision.
 - On `prepare-owner-worktree` or `bind-owner-worktree`, invoke `worktree prepare
   CHANGE_ID` without inventing a base, then read status once more. Git identity,
   not branch naming, owns the change.
-- Stop on dirty, missing, or ambiguous owner conflicts. Never stash, reset,
-  transfer, delete, or merge an uncommitted draft automatically.
+- On `commit-owner-source`, do not touch the draft before permission. Ask once,
+  exactly: `Продолжить существующий черновик? Да / Нет.`
+- If the immediately following user response is `Да`, preserve every existing
+  change, inspect the diff, use `owner_root`, and continue the non-terminal
+  implementation loop without asking again for that draft. On `Нет`, stop.
+- Stop on missing, ambiguous, divergent, or cross-repository owner conflicts.
+  Never stash, reset, transfer, delete, overwrite, or merge an uncommitted
+  draft automatically. Draft permission authorizes continuation only.
 - Use the single lifecycle `next_action` to select the current stage; do not
   inspect state internals or reconstruct history.
 - Implement the accepted scope, run focused tests while coding, commit the

@@ -47,8 +47,10 @@ work:
 - `ready`: run all repository operations from `owner_root`;
 - `prepare-owner-worktree` or `bind-owner-worktree`: invoke `worktree prepare
   CHANGE_ID` without `--base`, then repeat status once;
-- `commit-owner-source` or `resolve-owner-conflict`: stop without editing,
-  stashing, resetting, or moving files.
+- `commit-owner-source`: ask `Продолжить существующий черновик? Да / Нет.` once.
+  On the immediately following `Да`, preserve the existing diff and continue in
+  `owner_root`; on `Нет`, stop. Never stash, reset, overwrite, or move files.
+- `resolve-owner-conflict`: stop without mutation.
 
 `caller_root` and `owner_root` are local machine routing values. Do not repeat
 them in user-facing summaries or persist them in canonical artifacts.

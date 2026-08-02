@@ -1,6 +1,6 @@
 # Roadmap
 
-Текущая линия: `v0.13.2 Non-terminal Implementation Loop`
+Текущая линия: `v0.13.3 Interrupted Draft Handoff`
 
 Полный прежний KANO-каталог заморожен как
 [planning snapshot](archive/kano-snapshot-2026-07-30.md). Он больше не участвует
@@ -17,6 +17,8 @@
 - промежуточный remediation-коммит не создаёт partial candidate/review loop.
 - implementation/remediation продолжается без повторного пользовательского
   prompt до `open-review-task` или доказанного внешнего blocker.
+- прерванный dirty owner продолжает работу после одного явного `Да / Нет`,
+  сохраняя draft без stash/reset/transfer.
 
 ## Next
 

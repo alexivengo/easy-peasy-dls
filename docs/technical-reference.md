@@ -153,6 +153,12 @@ only at `open-review-task`, a human decision, an external conflict, or a proven
 integrity/infrastructure blocker. Already-open Codex tasks do not hot-reload an
 updated plugin skill and must be replaced after reinstall.
 
+An interrupted dirty owner remains protected by default. For the unique
+`commit-owner-source` boundary the workflow asks once whether to continue the
+existing draft. An immediate `Да` authorizes preserving and extending that diff
+in the owner; it never authorizes reset, stash, overwrite, transfer or merge.
+Ambiguous, divergent and cross-repository owners remain hard blockers.
+
 `review-clear`, `accepted`, `release` and `production` are separate. Receipt is
 a deterministic read-only projection available through status; it creates no
 artifact and performs no model call.
@@ -210,3 +216,6 @@ partial review candidate.
 
 `v0.13.2` makes the implementation loop explicitly non-terminal until its DLS
 handoff or a real external blocker.
+
+`v0.13.3` adds an explicit one-question recovery handoff for an interrupted
+uncommitted owner draft without weakening the default worktree safety rule.
