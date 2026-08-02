@@ -59,6 +59,14 @@ artifact leaves its receipt-reference rule intact.
 
 Validation: public validator plus a documented synthetic record review.
 
+## M1 exit gate
+
+M2 may start only after the DLS change delivering T02 and T03 is accepted. Its
+receipt must bind the exact claim-to-test map, successful deterministic suite
+and compile/public-validator evidence, and one synthetic decision-log record
+that passes T03 privacy checks. The DLS maintainer records `M1-exit` with those
+receipt digests in the decision log; otherwise M2 remains blocked.
+
 ## T04 — M2 semantic corpus (follow-up change)
 
 Blocked by: M1 exit gate.
@@ -71,11 +79,13 @@ Requirements: `REQ-001`, `REQ-002`, `REQ-005`.
 Acceptance: every case has a versioned oracle and arm manifest; component-off
 cases alter one component only; previous-release cases are labeled regression
 only and Native Codex cases overall-overhead only; each case declares its
-expected terminal label and applicability; all four M2 cases pass individually,
+expected reviewer verdict and applicability; all four M2 cases pass individually,
 while 19/20 and false-block thresholds wait for the rolling 20-case window;
 infrastructure failures cannot be reported as product results. The runbook
 records the four-step manual manifest/hard-oracle checklist from `SPEC.md` and
-one synthetic invalid-manifest record that is excluded from aggregation.
+one synthetic invalid-manifest record that is excluded from aggregation. A
+causal component-off case additionally uses a registry component ID, declared
+fixture/config switch, on/off configuration digests, and clean-copy HEADs.
 
 Validation: full L0 suite, four-case semantic release run, and budget/decision
 log review.
@@ -88,9 +98,9 @@ allowed merely because the backlog exists.
 Requirements: `REQ-004`.
 
 Acceptance: the recorded trigger identifies two over-30-minute manual release
-evaluations, more than four live cases, more than two arms, two transcription
-errors, or required machine-readable interchange; the proposed automation keeps
-the arm-manifest and privacy contracts.
+evaluations, more than four live cases, one case decision requiring more than
+two arms, two transcription errors, or required machine-readable interchange;
+the proposed automation keeps the arm-manifest and privacy contracts.
 
 Validation: deterministic self-checks, repeatable output check, and public
 validator. Harbor additionally requires its separate M2 scale, privacy, and

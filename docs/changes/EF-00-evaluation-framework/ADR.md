@@ -42,8 +42,9 @@ Harbor dependency is part of the MVP.
 The first follow-up change is limited to the claim-to-test map, any genuinely
 missing L0 regression proofs, and the decision log. Automation is allowed only
 after two manual release evaluations exceed 30 minutes, more than four live
-cases exist, more than two arms are needed, two transcription errors occur, or
-a machine-readable Harbor/backend interchange is required.
+cases exist, one case decision needs more than two distinct arms, two
+transcription errors occur, or a machine-readable Harbor/backend interchange is
+required. Arm counts do not accumulate across the four planned M2 cases.
 
 The framework preserves DLS as the only lifecycle source of truth. Release and
 production remain external decisions; an eval result cannot grant either.

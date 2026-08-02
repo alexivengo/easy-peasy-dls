@@ -13,19 +13,30 @@ or evidence ledger.
 
 ### Component claim registry
 
-| Component | Primary claim and observable oracle | Applies when | Decision owner |
-|---|---|---|---|
-| Definition/decision cards | HC-01: stale/negative consent leaves the state digest unchanged | definition or acceptance approval | DLS maintainer |
-| Owner routing/worktree guard | HC-02: dirty, wrong, ambiguous, or foreign owner leaves caller and foreign tree digests unchanged | any implementation/remediation | DLS maintainer |
-| Candidate/receipt provenance | HC-03: candidate/review HEAD, tree, policy, and profile digests equal the executed inputs | candidate-ready and review | DLS maintainer |
-| Review runner/finalizer | HC-04: completion has `terminal=true` and non-null `review_result_path` | definition and code review | DLS maintainer |
-| Completion guard | HC-05 composite: exact consent binding is retained for the unchanged active draft and automatic continuations are at most two per activation | explicit implementation/remediation task | DLS maintainer |
-| Structured reviewer routing | routing has the policy-selected lanes and no secondary call after actionable primary | release-only semantic cases | DLS maintainer |
-| Platform profiles | resolved profile exposes only its declared capability set in the ReviewPack | profile-selected change | DLS maintainer |
-| Named validation commands | the configured named command completes and its evidence records zero model calls | candidate/release gate | repository owner |
+| Component ID | Component | Primary claim and observable oracle | Applies when | Decision owner |
+|---|---|---|---|---|
+| `decision-card-consent` | Definition/decision cards | HC-01: stale/negative consent leaves the state digest unchanged | definition or acceptance approval | DLS maintainer |
+| `owner-routing-mutation` | Owner routing/worktree guard | HC-02: dirty, wrong, ambiguous, or foreign owner leaves caller and foreign tree digests unchanged | any implementation/remediation | DLS maintainer |
+| `candidate-provenance` | Candidate/receipt provenance | HC-03: candidate/review HEAD, tree, policy, and profile digests equal the executed inputs | candidate-ready and review | DLS maintainer |
+| `review-terminality` | Review runner/finalizer | HC-04: completion has `terminal=true` and non-null `review_result_path` | definition and code review | DLS maintainer |
+| `guard-consent` | Completion guard | HC-05A: exact consent binding is retained only for the unchanged active draft | explicit implementation/remediation task | DLS maintainer |
+| `guard-bound` | Completion guard | HC-05B: automatic continuation count is at most two per activation | explicit implementation/remediation task | DLS maintainer |
+| `routing-selection` | Structured reviewer routing | selected lanes equal the routing policy for the control/risk | release-only semantic cases | DLS maintainer |
+| `routing-early-stop` | Structured reviewer routing | actionable primary prevents a secondary call | release-only semantic cases | DLS maintainer |
+| `profile-projection` | Platform profiles | resolved profile exposes only its declared capability set in the ReviewPack | profile-selected change | DLS maintainer |
+| `named-validation` | Named validation commands | the configured named command completes with an evidence record | candidate/release gate | repository owner |
 
 Internal helpers with no caller-visible behavior have no independent claim.
 Bundled MCP is absent and is not an eval target.
+
+A component ID is immutable for one eval-definition version. A causal
+`component-off` arm is valid only when a frozen case declares that ID, a
+predeclared `fixture-toggle` or isolated configuration switch, the on/off
+configuration digests, and the exact clean-copy HEADs. The off arm may change
+only that declared switch; both arms run the same non-target hard oracle. A
+free-form patch or a self-declared manifest difference is not a component-off
+arm. Until a frozen case supplies those fields, a component is L0-only and is
+not eligible for causal M2 attribution.
 
 ### Baselines and hard gates
 
@@ -48,6 +59,11 @@ HC-05's authoritative limit is two automatic continuations per activation, as
 defined by the current `plugins/dls/skills/dls-workflow/SKILL.md` contract and
 enforced by the bundled task guard. Later HC-06 through HC-08 cover read-only
 source, single owning model call, and honest lifecycle status.
+
+The automation arm-count trigger is evaluated per case decision, not across a
+release or corpus: it fires only when resolving one primary claim requires more
+than two distinct arms. The planned four M2 cases each use at most a two-arm
+comparison, so their combined arm count does not trigger automation.
 
 Each case's expected reviewer verdict is `clear` or `not-clear`; it is separate
 from the arm outcome. The only arm outcomes are:
