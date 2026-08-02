@@ -23,7 +23,7 @@ single suite executor; no model call is part of this change.
   | HC-01 decision integrity | `test_core_reset_v011.CoreResetTests.test_acceptance_is_separate_and_exact_head`, `test_core_reset_v011.CoreResetTests.test_stale_human_decision_cannot_accept_new_head` |
   | HC-02 owner safety | `test_core_reset_v011.CoreResetTests.test_execution_context_prepares_owner_and_leaves_dirty_caller_untouched`, `test_core_reset_v011.CoreResetTests.test_dirty_main_routes_candidate_and_review_to_clean_owner`, `test_core_reset_v011.CoreResetTests.test_dirty_owner_stops_before_product_work`, `test_core_reset_v011.CoreResetTests.test_second_state_bearing_owner_is_an_explicit_conflict` |
   | HC-03 exact evidence | `test_core_reset_v011.CoreResetTests.test_exact_head_evidence_and_invalidation`, `test_core_reset_v011.CoreResetTests.test_descendant_candidate_reuses_preserved_base_and_rejects_conflict`, `test_core_reset_v011.CoreResetTests.test_profile_drift_invalidates_candidate`, `test_core_reset_v011.CoreResetTests.test_validation_failure_never_creates_pack` |
-  | HC-04 review terminality | `test_core_reset_v011.CoreResetTests.test_stream_events_distinguish_running_from_terminal`, `test_core_reset_v011.CoreResetTests.test_single_flight_reports_running` |
+  | HC-04 successful review terminality | `test_core_reset_v011.CoreResetTests.test_stream_events_distinguish_running_from_terminal` |
   | HC-05A consent | `test_task_guard.TaskGuardTests.test_dirty_owner_consent_yes_rearms_guard`, `test_task_guard.TaskGuardTests.test_dirty_owner_consent_no_clears_guard`, `test_task_guard.TaskGuardTests.test_changed_draft_does_not_reuse_stale_consent` |
   | HC-05B bounded continuation | `test_task_guard.TaskGuardTests.test_two_continuations_then_terminal_bounded_diagnostic`, `test_task_guard.TaskGuardTests.test_git_churn_never_resets_absolute_budget`, `test_task_guard.TaskGuardTests.test_real_progress_does_not_expand_absolute_budget` |
 
@@ -35,8 +35,12 @@ single suite executor; no model call is part of this change.
   behavioral oracle.
 - Strengthen the existing HC-01 tests to compare `stable_digest(load_state())`
   immediately before and after negative and stale approval attempts. Strengthen
-  the existing HC-04 stream test to require its completed result to contain a
-  non-empty canonical `review_result_path` as well as `terminal=true`.
+  the existing HC-04 stream test to invoke a successful code review and require
+  its completed result to contain a non-empty canonical `review_result_path` as
+  well as `terminal=true`. A failed review is not a successful completion and
+  may have a null path; it must never be classified by this map as passed.
+  `test_single_flight_reports_running` covers candidate validation concurrency,
+  not review terminality, and is deliberately excluded from HC-04.
 - Extend `scripts/validate_public_repo.py` with the smallest standard-library
   check: every required claim heading and fully-qualified `module.Class.method`
   ID exists in the suite discovered with `run_tests.py`'s discovery settings. A
