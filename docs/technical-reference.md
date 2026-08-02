@@ -233,12 +233,28 @@ change implementation/remediation prompt creates a private binding in
 `PLUGIN_DATA` under a SHA-256 session key. On a non-terminal DLS action the Stop
 hook returns `decision: block` with a short `[DLS_CONTINUE]` prompt. It never
 stores a raw session ID, transcript or repository path, never changes DLS state
-or product source, and allows at most two continuations per user turn. A guard
-failure is fail-open and visible; a third premature stop ends with
-`dls-auto-continuation-exhausted` instead of an automatic loop.
+or product source. A guard failure is fail-open and visible.
 
 The skill still describes the desired behavior; the hook enforces the runtime
 boundary. Human decisions, `open-review-task`, dependency/workspace conflicts
 and integrity failures remain terminal. Plugin hooks are trusted separately by
 Codex: inspect and trust the exact definition once through `/hooks` after an
 install or hook update.
+
+### v0.13.5 consent and progress continuity
+
+Two live EPIC-03a turns exposed gaps in the first guard contract. A task that
+created its own dirty draft received the same `commit-owner-source` boundary as
+a pre-existing user draft. After the required question, the short answer `Да`
+did not look like a new implementation command, so `UserPromptSubmit` cleared
+the binding and the following turn ran without Stop protection.
+
+The guard now records only safe private aggregates: whether the owner was dirty
+at activation, an approval state, HEAD and a SHA-256 Git progress fingerprint.
+A pre-existing draft enters `awaiting-owner-consent`; exact `Да` revalidates the
+same unchanged draft and rearms the guard, while `Нет`, cancellation or drift
+clears it. A draft created by the active task is already authorized by the
+implementation request and remains non-terminal. The two-continuation ceiling
+now counts consecutive stops without Git progress; a commit or draft change
+resets it. Exhaustion gets one visible diagnostic continuation and then ends,
+so the guard stays bounded without hiding the failure from the user.

@@ -1,6 +1,6 @@
 # Roadmap
 
-Текущая линия: `v0.13.4 Runtime Completion Guard`
+Текущая линия: `v0.13.5 Consent & Progress Guard`
 
 Полный прежний KANO-каталог заморожен как
 [planning snapshot](archive/kano-snapshot-2026-07-30.md). Он больше не участвует
@@ -21,6 +21,8 @@
   сохраняя draft без stash/reset/transfer.
 - plugin-bundled `Stop` guard исполняет нетерминальную границу runtime и не даёт
   checkpoint-отчёту подменить завершение implementation/remediation.
+- dirty-owner consent сохраняет guard для следующего `Да`, а лимит Stop
+  сбрасывается при подтверждённом Git-прогрессе.
 
 ## Next
 

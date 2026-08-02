@@ -46,7 +46,9 @@ when asking for a human decision.
   exactly: `Продолжить существующий черновик? Да / Нет.`
 - If the immediately following user response is `Да`, preserve every existing
   change, inspect the diff, use `owner_root`, and continue the non-terminal
-  implementation loop without asking again for that draft. On `Нет`, stop.
+  implementation loop without asking again for that draft. The runtime guard
+  keeps this consent handoff bound to the same change and unchanged draft. On
+  `Нет`, stop.
 - Stop on missing, ambiguous, divergent, or cross-repository owner conflicts.
   Never stash, reset, transfer, delete, overwrite, or merge an uncommitted
   draft automatically. Draft permission authorizes continuation only.
@@ -69,9 +71,12 @@ when asking for a human decision.
   never send a progress-only final response or ask the user to say `continue`.
 - The bundled `Stop` guard enforces this boundary for explicit implementation
   and remediation turns after the user trusts it through `/hooks`. If the model
-  stops early, follow its `[DLS_CONTINUE]` prompt. It allows at most two
-  automatic continuations; `dls-auto-continuation-exhausted` is a bounded
-  diagnostic, not an invitation to silently start a new task.
+  stops early, follow its `[DLS_CONTINUE]` prompt. A draft created by the active
+  task is non-terminal; only a draft present when the task started requires the
+  one explicit consent. The guard allows two consecutive continuations without
+  Git progress and resets that budget when the HEAD or draft changes. Its
+  visible `dls-auto-continuation-exhausted` turn is a bounded diagnostic, not an
+  invitation to silently start a new task.
 - After each checkpoint commit, read `status` again and stay in the loop. Split
   large findings into internal steps without turning them into user handoffs.
 - `candidate-ready` runs repository-owned required commands, records exact-HEAD

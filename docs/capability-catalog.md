@@ -8,7 +8,7 @@
 - one-writer worktree ownership через Git identity;
 - owner-first execution context без отдельного Codex-проекта для worktree;
 - безопасная диагностика dirty/ambiguous owner без автоматического переноса;
-- bounded runtime completion guard для implementation/remediation turns;
+- consent-aware и Git-progress-aware bounded completion guard;
 - accepted-in-base dependencies;
 - one-call routine/standard structured review;
 - risk-triggered second critical reviewer;

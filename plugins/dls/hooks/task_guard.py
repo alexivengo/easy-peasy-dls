@@ -7,14 +7,15 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
 
-CONTRACT = "dls-runtime-completion-guard/v1"
-MAX_CONTINUATIONS = 2
+CONTRACT = "dls-runtime-completion-guard/v2"
+MAX_STALLED_CONTINUATIONS = 2
 CHANGE_ID_PATTERN = re.compile(
     r"(?<![A-Za-z0-9._-])([A-Z][A-Za-z0-9._-]{0,63})"
 )
@@ -31,6 +32,8 @@ IMPLEMENTATION_WORDS = (
     "continue",
 )
 CANCEL_WORDS = ("стоп", "остановись", "отмена", "отмени", "cancel", "stop")
+YES_WORDS = ("да", "yes")
+NO_WORDS = ("нет", "no")
 
 
 def _plugin_root() -> Path:
@@ -93,7 +96,11 @@ def _read_binding(path: Path) -> dict[str, Any] | None:
         not isinstance(value, dict)
         or value.get("contract") != CONTRACT
         or not isinstance(value.get("change_id"), str)
-        or not isinstance(value.get("continuation_count"), int)
+        or value.get("state") not in {"active", "awaiting-owner-consent", "exhausted"}
+        or not isinstance(value.get("stalled_count"), int)
+        or not isinstance(value.get("progress_fingerprint"), str)
+        or not isinstance(value.get("initial_owner_dirty"), bool)
+        or not isinstance(value.get("draft_authorized"), bool)
     ):
         raise RuntimeError("invalid guard binding")
     return value
@@ -111,6 +118,11 @@ def _is_plan_mode(payload: dict[str, Any]) -> bool:
 def _is_cancel(prompt: str) -> bool:
     normalized = prompt.strip().casefold()
     return any(re.fullmatch(rf"{re.escape(word)}[.!]?", normalized) for word in CANCEL_WORDS)
+
+
+def _is_answer(prompt: str, words: tuple[str, ...]) -> bool:
+    normalized = prompt.strip().casefold()
+    return any(re.fullmatch(rf"{re.escape(word)}[.!]?", normalized) for word in words)
 
 
 def _has_implementation_intent(prompt: str) -> bool:
@@ -132,6 +144,80 @@ def _status_action(value: dict[str, Any]) -> str | None:
     return action.get("id") if isinstance(action, dict) and isinstance(action.get("id"), str) else None
 
 
+def _owner_dirty(value: dict[str, Any]) -> bool:
+    context = value.get("execution_context")
+    if isinstance(context, dict) and isinstance(context.get("owner_dirty"), bool):
+        return context["owner_dirty"]
+    return value.get("source_clean") is False
+
+
+def _git_progress_digest(root: Path) -> str | None:
+    if not root.is_dir():
+        return None
+    digest = hashlib.sha256()
+    commands = (
+        ("status", "--porcelain=v1", "-z", "--untracked-files=all"),
+        ("diff", "--binary", "--no-ext-diff", "--no-color", "--"),
+        ("diff", "--cached", "--binary", "--no-ext-diff", "--no-color", "--"),
+    )
+    for command in commands:
+        result = subprocess.run(
+            ["git", "-C", str(root), *command],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+        )
+        if result.returncode != 0:
+            return None
+        digest.update(result.stdout)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _progress_fingerprint(value: dict[str, Any]) -> str:
+    context = value.get("execution_context")
+    owner_root = context.get("owner_root") if isinstance(context, dict) else None
+    git_digest = _git_progress_digest(Path(owner_root)) if isinstance(owner_root, str) else None
+    projection = {
+        "change_id": value.get("change_id"),
+        "state_revision": value.get("state_revision"),
+        "head_sha": value.get("head_sha"),
+        "candidate_head": value.get("candidate_head"),
+        "action": _status_action(value),
+        "owner_head": context.get("owner_head") if isinstance(context, dict) else None,
+        "owner_dirty": _owner_dirty(value),
+        "git": git_digest,
+    }
+    payload = json.dumps(projection, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _continuation(binding: dict[str, Any], action: str, fingerprint: str) -> dict[str, Any]:
+    stalled = binding["stalled_count"] + 1 if fingerprint == binding["progress_fingerprint"] else 0
+    binding["progress_fingerprint"] = fingerprint
+    binding["stalled_count"] = stalled
+    if stalled > MAX_STALLED_CONTINUATIONS:
+        binding["state"] = "exhausted"
+        return {
+            "decision": "block",
+            "reason": (
+                "[DLS_GUARD_EXHAUSTED] dls-auto-continuation-exhausted: "
+                f"DLS still reports {action} for {binding['change_id']} after two "
+                "continuations without Git progress. Report this exact diagnostic and "
+                "the concrete blocker; do not claim completion."
+            ),
+        }
+    return {
+        "decision": "block",
+        "reason": (
+            f"[DLS_CONTINUE] DLS reports {action} for {binding['change_id']}. "
+            "Continue the same implementation task. Do not finish with a progress report; "
+            "stop only at open-review-task or a proven external blocker."
+        ),
+    }
+
+
 def handle(
     payload: dict[str, Any],
     *,
@@ -150,31 +236,68 @@ def handle(
         prompt = payload.get("prompt")
         if not isinstance(prompt, str):
             raise RuntimeError("UserPromptSubmit lacks prompt")
-        if prompt.startswith("[DLS_CONTINUE]"):
+        if prompt.startswith(("[DLS_CONTINUE]", "[DLS_GUARD_EXHAUSTED]")):
             return None
         if _is_plan_mode(payload) or _is_cancel(prompt):
             _clear(binding_path)
             return None
+        binding = _read_binding(binding_path)
+        if binding is not None and binding["state"] == "awaiting-owner-consent":
+            if _is_answer(prompt, NO_WORDS):
+                _clear(binding_path)
+                return None
+            if not _is_answer(prompt, YES_WORDS):
+                _clear(binding_path)
+                return None
+            value = status_loader(Path(cwd), binding["change_id"])
+            fingerprint = _progress_fingerprint(value)
+            if (
+                _status_action(value) != "commit-owner-source"
+                or fingerprint != binding.get("consent_fingerprint")
+            ):
+                _clear(binding_path)
+                return {
+                    "decision": "block",
+                    "reason": (
+                        "dls-owner-consent-stale: the owner draft changed after the consent "
+                        "question. Read DLS status and ask for fresh confirmation."
+                    ),
+                }
+            binding.update(
+                state="active",
+                draft_authorized=True,
+                progress_fingerprint=fingerprint,
+                stalled_count=0,
+            )
+            binding.pop("consent_fingerprint", None)
+            _write_binding(binding_path, binding)
+            return None
         if not _has_implementation_intent(prompt):
             _clear(binding_path)
             return None
-        valid: list[str] = []
+        valid: list[tuple[str, dict[str, Any]]] = []
         for change_id in _candidate_ids(prompt):
             try:
                 value = status_loader(Path(cwd), change_id)
             except Exception:
                 continue
             if value.get("ok") is not False and value.get("change_id") == change_id:
-                valid.append(change_id)
+                valid.append((change_id, value))
         if len(valid) != 1:
             _clear(binding_path)
             return None
+        change_id, value = valid[0]
+        dirty = _owner_dirty(value)
         _write_binding(
             binding_path,
             {
                 "contract": CONTRACT,
-                "change_id": valid[0],
-                "continuation_count": 0,
+                "change_id": change_id,
+                "state": "active",
+                "stalled_count": 0,
+                "progress_fingerprint": _progress_fingerprint(value),
+                "initial_owner_dirty": dirty,
+                "draft_authorized": not dirty,
                 "role": "implementation",
             },
         )
@@ -189,6 +312,9 @@ def handle(
         raise
     if binding is None:
         return None
+    if binding["state"] == "exhausted":
+        _clear(binding_path)
+        return None
     if _is_plan_mode(payload):
         _clear(binding_path)
         return None
@@ -198,28 +324,22 @@ def handle(
         _clear(binding_path)
         return {"systemMessage": f"dls-task-guard-failed-open: {type(error).__name__}"}
     action = _status_action(value)
-    if action not in continue_actions:
+    fingerprint = _progress_fingerprint(value)
+    if action == "commit-owner-source" and not binding["draft_authorized"]:
+        binding.update(
+            state="awaiting-owner-consent",
+            consent_fingerprint=fingerprint,
+            progress_fingerprint=fingerprint,
+            stalled_count=0,
+        )
+        _write_binding(binding_path, binding)
+        return None
+    if action not in continue_actions and action != "commit-owner-source":
         _clear(binding_path)
         return None
-    count = binding["continuation_count"]
-    if count >= MAX_CONTINUATIONS:
-        _clear(binding_path)
-        return {
-            "systemMessage": (
-                "dls-auto-continuation-exhausted: DLS still reports a non-terminal "
-                f"action for {binding['change_id']}; manual diagnosis is required."
-            )
-        }
-    binding["continuation_count"] = count + 1
+    result = _continuation(binding, action, fingerprint)
     _write_binding(binding_path, binding)
-    return {
-        "decision": "block",
-        "reason": (
-            f"[DLS_CONTINUE] DLS reports {action} for {binding['change_id']}. "
-            "Continue the same implementation task. Do not finish with a progress report; "
-            "stop only at open-review-task or a proven external blocker."
-        ),
-    }
+    return result
 
 
 def main() -> int:
