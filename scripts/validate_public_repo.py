@@ -27,6 +27,8 @@ REQUIRED_FILES = (
     ROOT / "docs" / "roadmap.md",
     MARKETPLACE,
     MANIFEST,
+    PLUGIN / "hooks" / "hooks.json",
+    PLUGIN / "hooks" / "task_guard.py",
     PLUGIN / "skills" / "dls-workflow" / "SKILL.md",
     PLUGIN / "skills" / "dls-debug" / "SKILL.md",
 )
@@ -146,6 +148,29 @@ def validate_plugin_manifest() -> None:
         fail("defaultPrompt должен содержать от одного до трёх коротких prompts")
 
 
+def validate_plugin_hooks() -> None:
+    path = PLUGIN / "hooks" / "hooks.json"
+    config = load_json(path)
+    hooks = config.get("hooks") if isinstance(config, dict) else None
+    if not isinstance(hooks, dict) or set(hooks) != {"UserPromptSubmit", "Stop"}:
+        fail("DLS hooks должны содержать только UserPromptSubmit и Stop")
+    for event, groups in hooks.items():
+        if not isinstance(groups, list) or len(groups) != 1:
+            fail(f"Hook {event} должен иметь одну matcher group")
+        handlers = groups[0].get("hooks") if isinstance(groups[0], dict) else None
+        if not isinstance(handlers, list) or len(handlers) != 1:
+            fail(f"Hook {event} должен иметь один handler")
+        handler = handlers[0]
+        command = handler.get("command") if isinstance(handler, dict) else None
+        if (
+            handler.get("type") != "command"
+            or not isinstance(command, str)
+            or "${PLUGIN_ROOT}/hooks/task_guard.py" not in command
+            or "/" + "Users/" in command
+        ):
+            fail(f"Hook {event} должен использовать только plugin-local task_guard.py")
+
+
 def validate_json_files() -> None:
     for path in sorted(ROOT.rglob("*.json")):
         if ".git" not in path.parts:
@@ -243,6 +268,7 @@ def main() -> int:
         validate_required_files,
         validate_marketplace,
         validate_plugin_manifest,
+        validate_plugin_hooks,
         validate_json_files,
         validate_model_output_schemas,
         validate_skills,

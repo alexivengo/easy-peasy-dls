@@ -1,0 +1,28 @@
+{
+  "description": "Keep explicit DLS implementation tasks running until a real handoff or blocker.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/task_guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/task_guard.py\"",
+            "timeout": 30,
+            "statusMessage": "Checking DLS completion boundary"
+          }
+        ]
+      }
+    ]
+  }
+}

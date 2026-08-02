@@ -61,6 +61,17 @@ ARCH_END = "<!-- dls:architecture:end -->"
 DESIGN_START = "<!-- dls:design:start -->"
 DESIGN_END = "<!-- dls:design:end -->"
 UI_HEADINGS = {"ui/ux source", "ui/ux contract"}
+IMPLEMENTATION_CONTINUE_ACTIONS = frozenset(
+    {
+        "prepare-owner-worktree",
+        "bind-owner-worktree",
+        "continue-implementation",
+        "remediate-findings",
+        "run-candidate-ready",
+        "fix-validation",
+        "wait-candidate",
+    }
+)
 
 
 def stable_digest(value: object) -> str:

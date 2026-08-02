@@ -1,6 +1,6 @@
 # Roadmap
 
-Текущая линия: `v0.13.3 Interrupted Draft Handoff`
+Текущая линия: `v0.13.4 Runtime Completion Guard`
 
 Полный прежний KANO-каталог заморожен как
 [planning snapshot](archive/kano-snapshot-2026-07-30.md). Он больше не участвует
@@ -19,6 +19,8 @@
   prompt до `open-review-task` или доказанного внешнего blocker.
 - прерванный dirty owner продолжает работу после одного явного `Да / Нет`,
   сохраняя draft без stash/reset/transfer.
+- plugin-bundled `Stop` guard исполняет нетерминальную границу runtime и не даёт
+  checkpoint-отчёту подменить завершение implementation/remediation.
 
 ## Next
 

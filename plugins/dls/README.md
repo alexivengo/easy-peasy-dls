@@ -7,7 +7,9 @@
 - **Easy Peasy DLS: процесс** — definition, implementation, review,
   remediation и acceptance;
 - **Easy Peasy DLS: отладка** — root-cause-first bug workflow;
-- plugin-local `scripts/dls.py`.
+- plugin-local `scripts/dls.py`;
+- bounded `Stop` guard, который после доверия через `/hooks` не даёт
+  implementation/remediation завершиться на промежуточном checkpoint.
 
 v0.11 использует 12 публичных команд, state v2, ReviewPack/ReviewIR v3 и один
 strict structured review decision schema. Обычный пользователь работает

@@ -219,3 +219,26 @@ handoff or a real external blocker.
 
 `v0.13.3` adds an explicit one-question recovery handoff for an interrupted
 uncommitted owner draft without weakening the default worktree safety rule.
+
+### v0.13.4 runtime completion guard
+
+`v0.13.1` fixed the candidate resolver, while `v0.13.2` and `v0.13.3` made the
+non-terminal loop explicit in the skill. EPIC-03a still stopped after a clean
+checkpoint because those instructions were advisory: `continue-implementation`
+existed in JSON, but nothing intercepted the Codex `Stop` event. Text-level
+forward tests therefore passed without exercising turn completion.
+
+The plugin now bundles `UserPromptSubmit` and `Stop` hooks. An explicit single-
+change implementation/remediation prompt creates a private binding in
+`PLUGIN_DATA` under a SHA-256 session key. On a non-terminal DLS action the Stop
+hook returns `decision: block` with a short `[DLS_CONTINUE]` prompt. It never
+stores a raw session ID, transcript or repository path, never changes DLS state
+or product source, and allows at most two continuations per user turn. A guard
+failure is fail-open and visible; a third premature stop ends with
+`dls-auto-continuation-exhausted` instead of an automatic loop.
+
+The skill still describes the desired behavior; the hook enforces the runtime
+boundary. Human decisions, `open-review-task`, dependency/workspace conflicts
+and integrity failures remain terminal. Plugin hooks are trusted separately by
+Codex: inspect and trust the exact definition once through `/hooks` after an
+install or hook update.

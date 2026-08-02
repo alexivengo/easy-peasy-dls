@@ -46,6 +46,9 @@ Simple AI delivery. Proof included.
   один раз, только после полной обработки текущих findings.
 - `continue-implementation` больше не является поводом завершать задачу или
   просить пользователя написать «продолжай».
+- plugin-bundled `Stop` guard технически продолжает преждевременно завершённую
+  implementation/remediation-задачу (не больше двух раз за пользовательский
+  turn), а не полагается только на текст skill.
 - Прерванный незакоммиченный draft можно продолжить после одного вопроса
   «Продолжить существующий черновик? Да / Нет» — без reset, stash или переноса.
 
@@ -68,6 +71,11 @@ Simple AI delivery. Proof included.
 codex plugin marketplace add alexivengo/easy-peasy-dls
 codex plugin add dls@easy-peasy-dls
 ```
+
+После первой установки или изменения hook откройте `/hooks`, проверьте и один
+раз доверьте точное определение Easy Peasy DLS, затем перезапустите Codex.
+Codex привязывает доверие к hash hook, поэтому после его изменения запрос может
+появиться снова.
 
 В Codex выберите **Easy Peasy DLS: процесс** или просто продолжайте работу в
 репозитории с `.dls`:

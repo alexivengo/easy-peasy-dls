@@ -765,6 +765,8 @@ class CoreResetTests(unittest.TestCase):
         self.assertIn("never send a progress-only final response", skill)
         self.assertIn("After each checkpoint commit, read `status` again", skill)
         self.assertIn("End an implementation task only at `open-review-task`", skill)
+        self.assertIn("The bundled `Stop` guard enforces this boundary", skill)
+        self.assertIn("dls-auto-continuation-exhausted", skill)
         self.assertIn("an already-open task keeps its old skill", skill)
         implementation = skill.split("## Implementation and remediation", 1)[1].split(
             "## Independent review", 1

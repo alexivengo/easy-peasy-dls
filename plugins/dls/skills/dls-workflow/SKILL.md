@@ -63,9 +63,15 @@ when asking for a human decision.
   has a deliberate disposition, then invoke `candidate-ready` once.
 - Never use `--note` for unfinished work. It is only for a genuine dispute or
   independent reclassification that the next reviewer must adjudicate.
-- Treat `continue-implementation`, `remediate-findings`, `run-candidate-ready`,
-  `fix-validation`, and `wait-candidate` as non-terminal. Execute the action;
+- Treat `prepare-owner-worktree`, `bind-owner-worktree`, `continue-implementation`,
+  `remediate-findings`, `run-candidate-ready`, `fix-validation`, and
+  `wait-candidate` as non-terminal. Execute the action;
   never send a progress-only final response or ask the user to say `continue`.
+- The bundled `Stop` guard enforces this boundary for explicit implementation
+  and remediation turns after the user trusts it through `/hooks`. If the model
+  stops early, follow its `[DLS_CONTINUE]` prompt. It allows at most two
+  automatic continuations; `dls-auto-continuation-exhausted` is a bounded
+  diagnostic, not an invitation to silently start a new task.
 - After each checkpoint commit, read `status` again and stay in the loop. Split
   large findings into internal steps without turning them into user handoffs.
 - `candidate-ready` runs repository-owned required commands, records exact-HEAD
