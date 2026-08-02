@@ -46,24 +46,134 @@ declared arm; an arm outcome is only `passed`, `product-failed`,
 `component-failed`, `infrastructure-failed`, `invalid-case`, or
 `budget-exhausted`.
 
+### Normative Markdown field schema
+
+The public validator treats the following headings, field names, table headers,
+and order as literals. It rejects an unknown or missing field, an extra arm, a
+reordered arm, a duplicate field, or a value outside the named enum.
+
+`docs/evaluation-m2-cases.md` has, in order, `# M2 frozen cases`,
+`## Case registry`, and `## SR-01` through `## SR-04`. Its registry header is
+exactly `Case | Current arm | Reference arm | Nominal attempts | Retry ceiling`.
+Its ordered rows are:
+
+| Case | Current arm | Reference arm | Nominal attempts | Retry ceiling |
+|---|---|---|---:|---:|
+| `SR-01` | `SR-01.current` | `not-applicable` | 1 | 2 |
+| `SR-02` | `SR-02.current` | `not-applicable` | 1 | 2 |
+| `SR-03` | `SR-03.current` | `SR-03.primary-only` | 3 | 4 |
+| `SR-04` | `SR-04.repair` | `SR-04.fail-closed` | 2 | 3 |
+
+Each case section has a `Case fields` table with the exact header `Field |
+Value` and this field order:
+
+`case_id`, `claim`, `fixture_sha`, `tree_digest`, `task_input_digest`,
+`oracle_version`, `oracle_digest`, `custody_digest`, `current_manifest_digest`,
+`reference_manifest_digest`, `permitted_manifest_difference`,
+`time_ceiling_seconds`, `token_ceiling`, `privacy`, `custody_retention`.
+
+Every digest is lowercase `sha256:<64 hex>` when locked and `not-locked` only
+in `planned`; `fixture_sha` is lowercase `git:<40 hex>` when locked.
+`reference_manifest_digest` is `not-applicable` only for SR-01/SR-02. `privacy`
+is exactly `public-synthetic`; `time_ceiling_seconds` and `token_ceiling` are
+positive base-10 integers. `custody_retention` is
+`retained-until:YYYY-MM-DD` and must be at least one year after the recorded M2
+decision date. `permitted_manifest_difference` is exactly one of:
+
+| Arm | Value |
+|---|---|
+| `SR-01.current` | `none` |
+| `SR-02.current` | `none` |
+| `SR-03.current` | `none` |
+| `SR-03.primary-only` | `secondary-lane=disabled` |
+| `SR-04.repair` | `repair-mode=compact` |
+| `SR-04.fail-closed` | `repair-mode=fail-closed` |
+
+`docs/evaluation-m2-decisions.md` has `# M2 release records`, `## SR-01`
+through `## SR-04`, then `## M2 decision`, in that order. Each case has a
+`Record fields` table with header `Field | Value` and this exact field order:
+
+`case_id`, `run_state`, `fixture_sha`, `tree_digest`, `task_input_digest`,
+`oracle_version`, `oracle_digest`, `custody_digest`, `current_manifest_digest`,
+`reference_manifest_digest`, `processed_tokens`, `wall_time_seconds`,
+`privacy_retention`.
+
+It follows with an `Arm records` table whose exact header is `Arm | Expected
+verdict | Expected lanes | Actual verdict | Outcome | Hard oracle | Lanes |
+Attempts | Successful calls | Finding class`. Its rows use the arm order in the
+registry: the current arm first, then the reference arm where one exists.
+`docs/evaluation-m2-cases.md` uses that same `Arm records` table with expected
+columns populated and all actual columns set to `not-run`.
+
+`Expected verdict` and `Actual verdict` are one of `review-clear`,
+`not-clear`, `not-applicable`, or `not-run`. `Expected lanes` and `Lanes` are
+one of `primary`, `primary,secondary`, `none`, or `not-run`. `Outcome` is one
+of `passed`, `product-failed`, `component-failed`, `infrastructure-failed`,
+`invalid-case`, `budget-exhausted`, or `not-run`. `Hard oracle` is `passed`,
+`failed`, or `not-run`. `Finding class` is `useful`, `noisy`,
+`dangerous-miss`, `uncertain`, `no-finding`, `not-applicable`, or `not-run`.
+SR-01.current and SR-04.repair use `no-finding` on a clear result;
+SR-04.fail-closed uses `not-applicable`; no other literal stands for an absent
+finding.
+
+`Attempts` is exactly `primary=<n>;secondary=<n>;repair=<n>;transport-failed=<n>`
+and `Successful calls` is exactly `primary=<n>;secondary=<n>;repair=<n>`, with
+each `<n>` a non-negative base-10 integer. Before execution both are `not-run`.
+The validator sums every arm's attempt counters and requires exactly seven for
+a completed no-retry sample or eight with exactly one transport-failed attempt;
+the matching per-case ceiling and all successful-call counters must agree.
+
+`docs/evaluation-m2-runbook.md` has, in order, `# M2 release runbook`,
+`## Preconditions`, `## Custody and locks`, `## Arm order`, `## Attempt
+accounting`, `## Stop outcomes`, `## Record transition`, and `## Retention`.
+Every section has exactly one `Rule | Value` table. The exact ordered rules are
+`dependency`, `plugin-version`, `fresh-task`, `source-clean`;
+`custody-bundle`, `lock-check`, `private-replay`; `SR-01`, `SR-02`, `SR-03`,
+`SR-04`; `attempt-syntax`, `successful-call-syntax`, `sample-budget`,
+`transport-retry`; `hard-gate`, `invalid-case`, `infrastructure-failed`,
+`budget-exhausted`; `planned`, `locked-not-run`, `completed`, `decision`; and
+`custody-retention`, `raw-output-retention`, `public-record`. Their values are
+the dependency, arm order, attempt syntax, transition rules, and retention
+policy in this specification. The validator asserts every heading, table, rule,
+and named value rather than executing a command from the document.
+
+The focused test and public validator expose one assertion per schema rule:
+
+| Assertion | Schema coverage |
+|---|---|
+| `m2-document-order` | all three heading sequences, case order, and arm order |
+| `m2-field-shape` | every table header, field order, and duplicate/unknown field rejection |
+| `m2-enums` | digest/SHA syntax, literals, lanes, outcomes, finding classes, metrics, and retention |
+| `m2-state-transition` | planned, locked-not-run, completed, and pre-live no-result values |
+| `m2-attempt-budget` | arm counters, seven nominal attempts, one retry, and eight-attempt maximum |
+| `m2-decision-evidence` | completed useful arm token required for keep/improve/delete |
+| `m2-privacy` | prohibited raw artifact markers and non-executable document boundary |
+
 ### Record state, custody, and transition grammar
 
 Every `docs/evaluation-m2-decisions.md` record has one immutable case ID, all
 of that case's declared arms, and one `run_state`. Its fixed grammar permits
-only these transitions:
+only these transitions and the field values from the normative schema:
 
 | State | Required values | Forbidden values | Transition |
 |---|---|---|---|
-| `planned` | fixture/input/oracle/custody/manifest locks are `not-locked`; result, routing, attempts, metrics, and finding class are `not-run`; decision is `pending-live-sample` | terminal outcome or hard-oracle pass/fail | lock only |
-| `locked-not-run` | all lock digests and custody digest are present; result fields remain `not-run` | terminal outcome or invented metrics | execute only |
-| `completed` | terminal outcome and hard-oracle result for every declared arm, actual routing, every counted attempt, metrics or `unknown`, and finding class | `not-locked` or `not-run` result fields | none |
+| `planned` | every lock field is `not-locked`; every actual arm column is `not-run`; decision is `pending-live-sample` | a locked digest, terminal result, or metrics | lock only |
+| `locked-not-run` | every required lock/custody value matches its case record; every actual arm column remains `not-run` | terminal outcome, counter, or invented metric | execute only |
+| `completed` | terminal outcome, hard oracle, lanes, attempt counters, successful-call counters, metrics or `unknown`, and finding class for every declared arm | `not-locked` or `not-run` actual field | none |
 
 The document has exactly four records, one per SR ID, and one decision record.
 While any case is non-completed, the decision is exactly
 `pending-live-sample` with `not-applicable` rationale. Only after all four
 records are completed may it become exactly one `keep`, `improve`, or `delete`
-decision with its useful-evidence rationale. This is a transition contract,
-not a fabricated result.
+decision with its useful-evidence rationale. `## M2 decision` has a `Decision
+fields` table with exact header `Field | Value` and row order `decision_state`,
+`decision`, `evidence`. In the pending state its values are
+`pending-live-sample`, `not-applicable`, and `not-applicable`. In the completed
+state they are `completed`, one of `keep`, `improve`, `delete`, and one or more
+semicolon-separated `SR-##.<arm>:useful` tokens. Each token must name a
+completed arm whose `Finding class` is exactly `useful`; `no-finding`, `noisy`,
+`dangerous-miss`, `uncertain`, and `not-applicable` cannot support a decision.
+This is a transition contract, not a fabricated result.
 
 For reproducibility, the DLS maintainer creates one immutable private custody
 bundle per case before `locked-not-run`. It contains the synthetic fixture
@@ -107,12 +217,13 @@ call, time, or token ceiling, it is not launched and the case becomes
 `infrastructure-failed`. A semantic retry is never allowed.
 
 `docs/evaluation-m2-decisions.md` must contain exactly four case records and
-one M2 decision in the preceding transition grammar. Every record has
-case/arm/claim, fixture/input/oracle/custody and manifest digests, run state,
-outcome, hard-oracle result, routing, every call attempt and successful-call
-count, processed tokens/time or `unknown`, finding classification, and a
-privacy-retention value. It must not contain a path, transcript, raw prompt,
-session, source, secret, or a release/production claim.
+one M2 decision in the preceding transition grammar. Case/arm fields, values,
+and ordering are exactly the normative schema. Each completed case additionally
+has `processed_tokens` and `wall_time_seconds` in its `Record fields` table,
+each a non-negative base-10 integer or `unknown`; planned and locked-not-run
+use `not-run`. `privacy_retention` is `not-applicable` before completion and
+then `deleted` or `retained-until:YYYY-MM-DD`. It must not contain a path,
+transcript, raw prompt, session, source, secret, or a release/production claim.
 
 ### Finding matcher
 

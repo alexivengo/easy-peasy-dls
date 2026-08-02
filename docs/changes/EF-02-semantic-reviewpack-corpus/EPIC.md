@@ -54,8 +54,9 @@ JSONL ledger, service, dashboard, or DLS runtime input.
   bounds; SR-04 permits at most one source-blind repair; no current arm has a
   hard blocker miss or safety violation. The declared SR-03 component-off miss
   is expected contrast evidence, not a current-arm clearance.
-- The release sample uses at most four cases and six to eight live analysis or
-  repair calls. Any incomplete, unintended invalid,
+- The release sample has exactly seven nominal live analysis/repair attempts
+  across four cases and at most eight after its one transport retry. Any
+  incomplete, unintended invalid,
   infrastructure-failed, or budget-exhausted case is `not-clear`, never a
   PASS; the declared SR-04 fail-closed reference is expected contrast evidence.
 - One documented keep, improve, or delete decision follows the recorded M2
