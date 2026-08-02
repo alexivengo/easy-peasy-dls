@@ -1650,11 +1650,21 @@ def review_run(
         else current_review(root, state)
     )
     profile_digest = resolve_profile(root)["digest"]
+    current_definition_pack_digest = (
+        _definition_pack(root, state, write=False)[0]["pack_digest"]
+        if kind == "definition" and state["change"]["control"] not in {"micro", "routine"}
+        else None
+    )
     if (
         isinstance(existing, dict)
         and existing.get("head_sha") == head
         and existing.get("definition_digest") == definition_digest(root, state)
         and existing.get("profile_digest", profile_digest) == profile_digest
+        and (
+            kind != "definition"
+            or current_definition_pack_digest is None
+            or existing.get("pack_digest") == current_definition_pack_digest
+        )
         and existing.get("result_path")
     ):
         action = next_action(root, state)

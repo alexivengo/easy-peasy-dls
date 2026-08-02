@@ -564,7 +564,7 @@ class CoreResetTests(unittest.TestCase):
             restore_environment(previous)
 
     def test_definition_review_includes_explicit_authored_evidence(self) -> None:
-        change(self.root, control="routine")
+        change(self.root, control="standard")
         state = load_state(self.root, "C001")
         tickets = self.root / state["change"]["artifacts"]["tickets"]["path"]
         evidence = tickets.parent / "evidence" / "C001-T01-proof.md"
@@ -589,6 +589,35 @@ class CoreResetTests(unittest.TestCase):
             write=False,
         )
         self.assertEqual(projection, pack["evidence"])
+
+        current = load_state(self.root, "C001")
+        head = git(self.root, "rev-parse", "HEAD")
+        current_definition = definition_digest(self.root, current)
+        profile_digest = status(self.root, "C001")["platform_profile"]["digest"]
+        mutate_state(
+            self.root,
+            "C001",
+            lambda value: value.update(
+                {
+                    "definition_review": {
+                        "review_id": "legacy-empty-evidence",
+                        "head_sha": head,
+                        "definition_digest": current_definition,
+                        "profile_digest": profile_digest,
+                        "pack_digest": "0" * 64,
+                        "verdict": "not-clear",
+                        "result_path": ".dls/reviews/C001/results/legacy.json",
+                    }
+                }
+            ),
+        )
+        executable, previous = self._fake()
+        try:
+            reviewed = review_run(self.root, change_id="C001", kind="definition")
+            self.assertNotEqual("legacy-empty-evidence", reviewed["review_id"])
+            self.assertEqual(1, len(self._calls(executable.with_name("calls.jsonl"))))
+        finally:
+            restore_environment(previous)
 
     def test_critical_actionable_primary_short_circuits_secondary(self) -> None:
         log, previous = self._prepare_code(control="critical", impacts=["public-api"])

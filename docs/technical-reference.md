@@ -344,3 +344,5 @@ an empty evidence list. DLS now projects only existing repository-relative files
 explicitly named in authored `**Evidence:**` fields, with path and SHA-256 bound
 to the exact review pack. Commands and prose in the same field are not executed
 or treated as evidence, and more than 32 referenced files is an integrity error.
+The derived evidence projection participates in the ReviewPack digest, so an
+older empty-evidence result is not reused after the contract becomes available.
