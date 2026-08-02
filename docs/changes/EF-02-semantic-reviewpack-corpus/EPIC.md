@@ -29,7 +29,8 @@ JSONL ledger, service, dashboard, or DLS runtime input.
   distinct from the closed M1 format seed.
 - Existing stdlib tests and the public validator reject missing, reordered, or
   malformed case/runbook/decision data and the specified raw-artifact markers
-  before a release-only live run. They do not invoke a model.
+  before a release-only live run. They require one digest-only execution receipt
+  for every executed arm. They do not invoke a model.
 - The four disposable synthetic Git fixtures are created and locked only by
   the runbook. An immutable private custody bundle per case holds the fixture
   recipe and hidden oracle for authorised independent replay; its recorded
@@ -86,8 +87,9 @@ JSONL ledger, service, dashboard, or DLS runtime input.
   manifest difference, hard-oracle result, routing, per-arm maximum-call
   contract, and the allowed outcome taxonomy before its live arm is evaluated.
   SR-04 additionally records a locked source-blind boundary and an
-  independently replayed execution proof. SR-01 and SR-02 are current-only;
-  SR-03 and SR-04 alone have reference arms.
+  independently replayed execution proof. Every executed arm records an
+  independently replayed oracle/matcher receipt. SR-01 and SR-02 are
+  current-only; SR-03 and SR-04 alone have reference arms.
 - `REQ-003`: The release-only runbook enforces the accepted M1 dependency,
   pinned execution profile, fresh-task/plugin boundary, current/reference
   pairing only where a reference exists, at most four cases and eight counted
@@ -101,9 +103,10 @@ JSONL ledger, service, dashboard, or DLS runtime input.
 - `REQ-005`: The matcher classifies useful, noisy, dangerous-miss, or uncertain
   findings without a second LLM judge. A validator-enforced M2 outcome is clear
   only when every required current/reference condition and meter passes, except
-  the two declared contrast references; any current safety violation or failed
-  safety hard oracle makes it `not-clear`. Only useful findings from a clear M2
-  outcome can support the recorded decision.
+  the two declared contrast references, and independently replayed receipts bind
+  the oracle/matcher result to every executed arm; any current safety violation
+  or failed safety hard oracle makes it `not-clear`. Only useful findings from a
+  clear M2 outcome can support the recorded decision.
 
 ## Risk rationale
 

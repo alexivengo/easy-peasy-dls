@@ -34,9 +34,9 @@
 
 ### Arm records
 
-| Arm | Expected verdict | Expected lanes | Call contract | Permitted manifest difference | Repair access | Actual verdict | Outcome | Hard oracle | Safety violations | Lanes | Attempts | Successful calls | Finding class |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| SR-01.current | review-clear | primary | primary=1;secondary=0;repair=0;transport-retry<=1 | none | not-applicable | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run |
+| Arm | Expected verdict | Expected lanes | Call contract | Permitted manifest difference | Repair access | Actual verdict | Outcome | Hard oracle | Safety violations | Lanes | Attempts | Successful calls | Finding class | Execution receipt |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| SR-01.current | review-clear | primary | primary=1;secondary=0;repair=0;transport-retry<=1 | none | not-applicable | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run |
 
 ## SR-02
 
@@ -63,9 +63,9 @@
 
 ### Arm records
 
-| Arm | Expected verdict | Expected lanes | Call contract | Permitted manifest difference | Repair access | Actual verdict | Outcome | Hard oracle | Safety violations | Lanes | Attempts | Successful calls | Finding class |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| SR-02.current | not-clear | primary | primary=1;secondary=0;repair=0;transport-retry<=1 | none | not-applicable | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run |
+| Arm | Expected verdict | Expected lanes | Call contract | Permitted manifest difference | Repair access | Actual verdict | Outcome | Hard oracle | Safety violations | Lanes | Attempts | Successful calls | Finding class | Execution receipt |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| SR-02.current | not-clear | primary | primary=1;secondary=0;repair=0;transport-retry<=1 | none | not-applicable | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run |
 
 ## SR-03
 
@@ -92,10 +92,10 @@
 
 ### Arm records
 
-| Arm | Expected verdict | Expected lanes | Call contract | Permitted manifest difference | Repair access | Actual verdict | Outcome | Hard oracle | Safety violations | Lanes | Attempts | Successful calls | Finding class |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| SR-03.current | not-clear | primary,secondary | primary=1;secondary=1;repair=0;transport-retry<=1 | none | not-applicable | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run |
-| SR-03.primary-only | review-clear | primary | primary=1;secondary=0;repair=0;transport-retry<=1 | secondary-lane=disabled | not-applicable | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run |
+| Arm | Expected verdict | Expected lanes | Call contract | Permitted manifest difference | Repair access | Actual verdict | Outcome | Hard oracle | Safety violations | Lanes | Attempts | Successful calls | Finding class | Execution receipt |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| SR-03.current | not-clear | primary,secondary | primary=1;secondary=1;repair=0;transport-retry<=1 | none | not-applicable | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run |
+| SR-03.primary-only | review-clear | primary | primary=1;secondary=0;repair=0;transport-retry<=1 | secondary-lane=disabled | not-applicable | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run |
 
 ## SR-04
 
@@ -122,7 +122,7 @@
 
 ### Arm records
 
-| Arm | Expected verdict | Expected lanes | Call contract | Permitted manifest difference | Repair access | Actual verdict | Outcome | Hard oracle | Safety violations | Lanes | Attempts | Successful calls | Finding class |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| SR-04.repair | review-clear | primary | primary=1;secondary=0;repair=1;transport-retry<=1 | repair-mode=compact | source-blind:review-output+format-error | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run |
-| SR-04.fail-closed | not-applicable | none | primary=0;secondary=0;repair=0;transport-retry<=0 | repair-mode=fail-closed | not-applicable | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run |
+| Arm | Expected verdict | Expected lanes | Call contract | Permitted manifest difference | Repair access | Actual verdict | Outcome | Hard oracle | Safety violations | Lanes | Attempts | Successful calls | Finding class | Execution receipt |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| SR-04.repair | review-clear | primary | primary=1;secondary=0;repair=1;transport-retry<=1 | repair-mode=compact | source-blind:review-output+format-error | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run |
+| SR-04.fail-closed | not-applicable | none | primary=0;secondary=0;repair=0;transport-retry<=0 | repair-mode=fail-closed | not-applicable | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run | not-run |

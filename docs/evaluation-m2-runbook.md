@@ -8,18 +8,20 @@
 | plugin-version | dls 0.13.6+codex.20260802111333; reinstall or hot reload during an arm invalidates that arm |
 | execution-profile | lock one plugin, agent, model, effort, and same-day run date in every record before manual-m2-arm |
 | fresh-task | a new Codex task starts before the first arm; no restart during an arm |
-| source-clean | the fixture and DLS source are clean before and after each arm |
+| source-clean | the fixture and release-record worktree are clean at arm launch; after recording, validation, and commit they are clean before the next arm |
 | manual-m2-arm | a release-authorized human invokes unchanged review-run --kind code in the declared disposable fixture; this M2 procedure does not restrict ordinary definition/code review |
+| record-commit | write only the decision record in a dedicated release-record worktree after arm cleanup; validate and commit it before the next arm |
 
 ## Custody and locks
 
 | Rule | Value |
 |---|---|
-| custody-bundle | one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, SR-04 boundary receipt, and SR-04 execution proof |
+| custody-bundle | one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, per-arm execution receipts, SR-04 boundary receipt, and SR-04 execution proof |
+| arm-receipt | every completed arm records an arm-receipt-v1 digest bound to its locks, profile, DLS result, hard oracle, matcher, counters, and actual fields; no raw artifact enters public record |
 | source-blind-boundary | SR-04 repair accepts only prior review output and format error in a fresh empty temporary workspace with allowlist-empty environment and read-only sandbox; fixture, task source, hidden oracle, custody, network, and tool access are denied |
 | lock-check | fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-boundary locks match before a live arm |
 | repair-proof | a completed SR-04.repair records a source-blind-v1 proof digest bound to that arm; the proof carries only digests, empty-temporary workspace, allowlist-empty environment, read-only sandbox, and zero denied reads |
-| private-replay | an authorized evaluator receives read-only bundle and DLS receipt access, reproduces every lock, recomputes the SR-04 proof digest, and rejects any proof or boundary mismatch before a clear M2 outcome |
+| private-replay | an authorized evaluator receives read-only bundle and DLS receipt access, reproduces every lock, recomputes every arm receipt and the SR-04 proof digest, and rejects any mismatch before a clear M2 outcome |
 
 ## Arm order
 
@@ -54,7 +56,7 @@
 |---|---|
 | planned | the planned profile uses not-locked lock placeholders except required not-applicable values; actual arm values and meters not-run; custody retained-for:365d-after-decision |
 | locked-not-run | all locks match the case record; actual arm values not-run; custody retained-for:365d-after-decision |
-| completed | terminal arm values and cumulative meters recorded; SR-04.repair requires its verified proof digest before clear; missing meter is infrastructure-failed |
+| completed | terminal arm values and cumulative meters recorded; every executed arm requires its verified receipt and SR-04.repair its verified proof digest before clear; missing meter is infrastructure-failed |
 | aborted | a stop writes decision_state=aborted and m2_outcome=not-clear; the executed case prefix is retained and all later case records stay unrun |
 | decision | keep/improve/delete only for a clear M2 outcome with useful evidence; otherwise not-applicable |
 

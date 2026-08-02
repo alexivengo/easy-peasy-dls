@@ -473,6 +473,7 @@ M2_ARM_HEADER = (
     "Attempts",
     "Successful calls",
     "Finding class",
+    "Execution receipt",
 )
 M2_ARMS = {
     "SR-01": (
@@ -496,15 +497,17 @@ M2_RUNBOOK = (
         ("plugin-version", "dls 0.13.6+codex.20260802111333; reinstall or hot reload during an arm invalidates that arm"),
         ("execution-profile", "lock one plugin, agent, model, effort, and same-day run date in every record before manual-m2-arm"),
         ("fresh-task", "a new Codex task starts before the first arm; no restart during an arm"),
-        ("source-clean", "the fixture and DLS source are clean before and after each arm"),
+        ("source-clean", "the fixture and release-record worktree are clean at arm launch; after recording, validation, and commit they are clean before the next arm"),
         ("manual-m2-arm", "a release-authorized human invokes unchanged review-run --kind code in the declared disposable fixture; this M2 procedure does not restrict ordinary definition/code review"),
+        ("record-commit", "write only the decision record in a dedicated release-record worktree after arm cleanup; validate and commit it before the next arm"),
     )),
     ("Custody and locks", (
-        ("custody-bundle", "one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, SR-04 boundary receipt, and SR-04 execution proof"),
+        ("custody-bundle", "one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, per-arm execution receipts, SR-04 boundary receipt, and SR-04 execution proof"),
+        ("arm-receipt", "every completed arm records an arm-receipt-v1 digest bound to its locks, profile, DLS result, hard oracle, matcher, counters, and actual fields; no raw artifact enters public record"),
         ("source-blind-boundary", "SR-04 repair accepts only prior review output and format error in a fresh empty temporary workspace with allowlist-empty environment and read-only sandbox; fixture, task source, hidden oracle, custody, network, and tool access are denied"),
         ("lock-check", "fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-boundary locks match before a live arm"),
         ("repair-proof", "a completed SR-04.repair records a source-blind-v1 proof digest bound to that arm; the proof carries only digests, empty-temporary workspace, allowlist-empty environment, read-only sandbox, and zero denied reads"),
-        ("private-replay", "an authorized evaluator receives read-only bundle and DLS receipt access, reproduces every lock, recomputes the SR-04 proof digest, and rejects any proof or boundary mismatch before a clear M2 outcome"),
+        ("private-replay", "an authorized evaluator receives read-only bundle and DLS receipt access, reproduces every lock, recomputes every arm receipt and the SR-04 proof digest, and rejects any mismatch before a clear M2 outcome"),
     )),
     ("Arm order", (
         ("SR-01", "SR-01.current"),
@@ -527,7 +530,7 @@ M2_RUNBOOK = (
     ("Record transition", (
         ("planned", "the planned profile uses not-locked lock placeholders except required not-applicable values; actual arm values and meters not-run; custody retained-for:365d-after-decision"),
         ("locked-not-run", "all locks match the case record; actual arm values not-run; custody retained-for:365d-after-decision"),
-        ("completed", "terminal arm values and cumulative meters recorded; SR-04.repair requires its verified proof digest before clear; missing meter is infrastructure-failed"),
+        ("completed", "terminal arm values and cumulative meters recorded; every executed arm requires its verified receipt and SR-04.repair its verified proof digest before clear; missing meter is infrastructure-failed"),
         ("aborted", "a stop writes decision_state=aborted and m2_outcome=not-clear; the executed case prefix is retained and all later case records stay unrun"),
         ("decision", "keep/improve/delete only for a clear M2 outcome with useful evidence; otherwise not-applicable"),
     )),
@@ -686,18 +689,20 @@ def _m2_contract(value: str) -> dict[str, int]:
 def _m2_validate_actual(case_id: str, arm: tuple[str, str, str, str, str, str], row: list[str], state: str) -> None:
     actual = row[6:]
     if state in {"planned", "locked-not-run"}:
-        if actual != ["not-run"] * 8:
+        if actual != ["not-run"] * 9:
             _m2_fail("m2-state-transition", f"{case_id} pre-live arm values")
         return
     if state != "completed":
         _m2_fail("m2-state-transition", f"{case_id} run_state")
-    verdict, outcome, oracle, safety, lanes, attempts, successful, finding = actual
-    if actual == ["not-run"] * 8:
+    verdict, outcome, oracle, safety, lanes, attempts, successful, finding, receipt = actual
+    if actual == ["not-run"] * 9:
         return
     if outcome == "budget-exhausted":
-        if actual != ["not-run", "budget-exhausted", "not-run", "not-run", "not-run", "not-run", "not-run", "not-run"]:
+        if actual != ["not-run", "budget-exhausted", "not-run", "not-run", "not-run", "not-run", "not-run", "not-run", "not-run"]:
             _m2_fail("m2-state-transition", f"{case_id} budget-exhausted arm")
         return
+    if not M2_SHA256.fullmatch(receipt):
+        _m2_fail("m2-receipt", f"{case_id} arm receipt")
     if verdict not in {"review-clear", "not-clear", "not-applicable"}:
         _m2_fail("m2-enums", f"{case_id} actual verdict")
     if outcome not in {"passed", "product-failed", "component-failed", "infrastructure-failed", "invalid-case", "budget-exhausted"}:
@@ -879,7 +884,7 @@ def _m2_validate_terminal_sample(records: dict[str, tuple[dict[str, str], dict[s
             continue
         for arm in M2_ARMS[case_id]:
             row = arms[arm[0]]
-            if row[6:] == ["not-run"] * 8:
+            if row[6:] == ["not-run"] * 9:
                 if not stopped:
                     _m2_fail("m2-state-transition", "unrun arm before terminal stop")
                 continue
@@ -922,6 +927,8 @@ def _m2_validate_clear(records: dict[str, tuple[dict[str, str], dict[str, list[s
         current = arms[M2_CASE_REGISTRY[case_id][0]]
         if current[7] != "passed" or current[8] != "passed" or current[9] != "0":
             _m2_fail("m2-overall-outcome", f"{case_id} clear current arm")
+        if any(not M2_SHA256.fullmatch(row[14]) for row in arms.values()):
+            _m2_fail("m2-overall-outcome", f"{case_id} clear arm receipt")
     sr03_reference = records["SR-03"][1]["SR-03.primary-only"]
     sr04_reference = records["SR-04"][1]["SR-04.fail-closed"]
     if not M2_SHA256.fullmatch(records["SR-04"][0]["repair_execution_proof_digest"]):

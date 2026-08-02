@@ -96,6 +96,82 @@ class M2EvaluationDocumentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "m2-state-transition"):
             self.validator.validate_m2_evaluation_documents()
 
+    def test_clear_requires_each_arm_receipt(self) -> None:
+        receipt = "sha256:" + "a" * 64
+
+        def fields(proof: str = "not-applicable") -> dict[str, str]:
+            return {
+                "processed_tokens": "1",
+                "wall_time_seconds": "1",
+                "repair_execution_proof_digest": proof,
+            }
+
+        def row(
+            arm_id: str,
+            verdict: str,
+            outcome: str,
+            safety: str,
+            finding: str,
+        ) -> list[str]:
+            return [
+                arm_id,
+                "",
+                "",
+                "",
+                "",
+                "",
+                verdict,
+                outcome,
+                "passed",
+                safety,
+                "primary",
+                "not-run",
+                "not-run",
+                finding,
+                receipt,
+            ]
+
+        records = {
+            "SR-01": (fields(), {"SR-01.current": row("SR-01.current", "review-clear", "passed", "0", "useful")}),
+            "SR-02": (fields(), {"SR-02.current": row("SR-02.current", "not-clear", "passed", "0", "no-finding")}),
+            "SR-03": (
+                fields(),
+                {
+                    "SR-03.current": row("SR-03.current", "not-clear", "passed", "0", "no-finding"),
+                    "SR-03.primary-only": row("SR-03.primary-only", "review-clear", "passed", "not-applicable", "dangerous-miss"),
+                },
+            ),
+            "SR-04": (
+                fields(receipt),
+                {
+                    "SR-04.repair": row("SR-04.repair", "review-clear", "passed", "0", "no-finding"),
+                    "SR-04.fail-closed": row("SR-04.fail-closed", "not-applicable", "invalid-case", "not-applicable", "not-applicable"),
+                },
+            ),
+        }
+        self.validator._m2_validate_clear(records, "SR-01.current:useful")
+        records["SR-03"][1]["SR-03.current"][14] = "not-run"
+        with self.assertRaisesRegex(ValueError, "m2-overall-outcome"):
+            self.validator._m2_validate_clear(records, "SR-01.current:useful")
+
+    def test_executed_arm_requires_receipt(self) -> None:
+        arm = self.validator.M2_ARMS["SR-01"][0]
+        row = list(arm) + [
+            "review-clear",
+            "passed",
+            "passed",
+            "0",
+            "primary",
+            "primary=1;secondary=0;repair=0;transport-failed=0",
+            "primary=1;secondary=0;repair=0",
+            "no-finding",
+            "not-run",
+        ]
+        with self.assertRaisesRegex(ValueError, "m2-receipt"):
+            self.validator._m2_validate_actual("SR-01", arm, row, "completed")
+        row[-1] = "sha256:" + "a" * 64
+        self.validator._m2_validate_actual("SR-01", arm, row, "completed")
+
 
 if __name__ == "__main__":
     unittest.main()
