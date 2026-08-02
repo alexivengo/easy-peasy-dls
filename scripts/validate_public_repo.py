@@ -65,7 +65,6 @@ def repository_files() -> list[Path]:
             for path in ROOT.rglob("*")
             if path.is_file()
             and ".git" not in path.parts
-            and ".dls" not in path.parts
             and "__pycache__" not in path.parts
             and path.name != ".DS_Store"
             and path.suffix not in FORBIDDEN_SUFFIXES
