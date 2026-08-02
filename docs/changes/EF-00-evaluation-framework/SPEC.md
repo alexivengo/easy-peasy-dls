@@ -47,6 +47,19 @@ not eligible for causal M2 attribution.
 | Native Codex | DLS is absent; product oracle, permissions, task, model, effort, and toolchain are fixed | overall DLS overhead/value, not one-component attribution |
 | Hard oracle | expected Git/state/artifact/test invariant | guarantees unique to DLS |
 
+Each baseline selects its applicable hard-oracle set in the arm manifest:
+
+- `component-off` runs every non-target applicable HC gate. The target claim is
+  measured by its declared case oracle; failure of any non-target HC invalidates
+  the comparison.
+- `previous-release` runs only HCs with identical semantics on both versions;
+  excluded/incompatible HC IDs and the reason are recorded. It cannot claim an
+  excluded guarantee passed.
+- `Native Codex` runs a named product oracle and comparability oracle only. It
+  runs none of HC-01 through HC-05A/B, cannot verify any DLS hard claim, and is
+  invalid unless task input, permissions, model, effort, and toolchain match the
+  DLS arm.
+
 Every planned arm has a manifest containing case ID, exact HEAD/version, task
 input digest, oracle version, model/effort, permissions, toolchain, enabled and
 disabled components, and the reason for every allowed difference. The evaluator
@@ -155,7 +168,8 @@ is incomplete/not-clear, never clearance.
 - `REQ-002`: Each planned comparison names one baseline. Causal component-off
   arms differ only in the tested component; previous-release and Native Codex
   arms are explicitly non-causal and labeled regression or overall-overhead.
-  Every arm rejects a hard-gate violation before any aggregate metric.
+  Every arm records its baseline-specific hard-oracle set and rejects an
+  applicable hard-gate violation before any aggregate metric.
 - `REQ-003`: Canonical DLS state stores only minimal evidence references,
   digests, model IDs, timestamps, and counters; raw live artifacts stay local
   and removable without invalidating a receipt.
