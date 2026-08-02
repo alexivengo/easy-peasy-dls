@@ -190,6 +190,40 @@ FAKE_TICKET_LIFECYCLE_REPAIR_FAIL = FAKE_TICKET_LIFECYCLE_REPAIR.replace(
     '"blocked"',
 )
 
+FAKE_ACTIONABLE_LIFECYCLE_REPAIR = r'''#!/usr/bin/env python3
+import json, pathlib, sys
+args=sys.argv[1:]
+out=pathlib.Path(args[args.index("--output-last-message")+1])
+prompt=sys.stdin.read(); repair=prompt.startswith("Repair only")
+log=pathlib.Path(__file__).with_name("calls.jsonl")
+with log.open("a") as f: f.write(json.dumps({"repair":repair,"prompt":prompt[:1200]})+"\n")
+if repair:
+    bundle=json.loads(prompt.split("\n",1)[1]); tickets=bundle["ticket_ids"]
+    requirements=bundle["requirement_ids"]
+else:
+    payload=json.loads(prompt.split("INPUT:\n",1)[1]); tickets=list(payload["tickets"])
+    requirements=payload["requirement_ids"]
+finding={
+ "id":"NEW-1","severity":"should-fix","kind":"governance","location":"docs/spec.md:1",
+ "issue":"release evidence conflicts with cleanliness","impact":"release proof cannot complete",
+ "required_fix":"separate generated evidence from the clean source tree","ticket_ids":[tickets[-1]],
+ "requirement_ids":[],"blocks":["acceptance","release"] + (["review"] if repair else []),
+ "provenance":["definition contract"]
+}
+decision={
+ "verdict":"not-clear","summary":"release evidence boundary is inconsistent","findings":[finding],
+ "ticket_verdicts":[
+   {"ticket_id":item,"verdict":("not-clear" if item == tickets[-1] else ("clear" if repair else "blocked")),
+    "finding_ids":["NEW-1"] if item == tickets[-1] else []}
+   for item in tickets
+ ],
+ "requirement_verdicts":[{"requirement_id":item,"verdict":"clear","finding_ids":[]} for item in requirements],
+ "prior_finding_verdicts":[]
+}
+out.write_text(json.dumps(decision))
+print(json.dumps({"usage":{"input_tokens":100,"output_tokens":50}}))
+'''
+
 FAKE_CONFLICT = r'''#!/usr/bin/env python3
 import json, os, pathlib, sys
 args=sys.argv[1:]; model=args[args.index("--model")+1]

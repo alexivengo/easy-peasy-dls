@@ -51,7 +51,7 @@ from .repo import (
 
 RUNNER_CONTRACT = "dls-review-runner/v4"
 MODEL_EXECUTION_CONTRACT = "dls-model-exec/v2"
-REPAIR_CONTRACT = "dls-decision-repair/v2"
+REPAIR_CONTRACT = "dls-decision-repair/v3"
 ROUTING_CONTRACT = "dls-review-routing/v1"
 PACK_CONTRACT = "dls-review-pack/v3"
 RESULT_CONTRACT = "dls-review-ir/v3"
@@ -1033,11 +1033,15 @@ def _repair(
     }
     prompt = (
         "Repair only the JSON structure/reference error below. Preserve the global verdict and "
-        "findings; do not invent findings. Ticket and requirement verdicts evaluate the reviewed "
+        "finding IDs, classification, issue, impact, required fix, and references; do not invent "
+        "findings or change semantic verdicts. Ticket and requirement verdicts evaluate the reviewed "
         "definition/code, not authored lifecycle status. Every non-clear item verdict must reference "
-        "a finding. Therefore, when the global verdict is review-clear and findings are empty, change "
-        "lifecycle-derived blocked/not-clear item rows to clear with no finding IDs. Return one "
-        "complete decision matching the schema.\n"
+        "a finding; change lifecycle-derived blocked/not-clear rows with no finding to clear. A global "
+        "not-clear verdict requires at least one blocker or should-fix finding that blocks review; if "
+        "such an existing actionable finding omitted only that block, add review to its blocks. A "
+        "global review-clear verdict cannot contain a review-blocking actionable finding. Apply all "
+        "of these cross-field rules in the same repair and return one complete decision matching the "
+        "schema.\n"
         + json.dumps(bundle, ensure_ascii=False, sort_keys=True)
     )
     with tempfile.TemporaryDirectory(prefix="dls-repair-workspace-") as temp:

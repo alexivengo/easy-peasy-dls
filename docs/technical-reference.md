@@ -147,6 +147,15 @@ makes that distinction explicit and permits exactly one new compact repair for
 a failed legacy repair contract. It reuses the immutable primary output and
 never repeats repository analysis.
 
+The same pilot then exposed a chained cross-field case: a `not-clear` decision
+combined lifecycle-derived blocked ticket rows with an existing should-fix that
+blocked acceptance/release but omitted `review`. Fail-fast validation reported
+only the ticket-row error, so repair v2 could reveal and then fail on the second
+constraint. Repair contract v3 states all cross-field rules up front: it clears
+unsupported lifecycle rows and may add only the missing `review` block to an
+already actionable finding required by the preserved global verdict. It still
+cannot invent a finding, change its semantic content or repeat source analysis.
+
 ReviewIR v3 and the corresponding current review record optionally carry
 `platform_profile {contract, name, digest}` copied from the digest-bound
 ReviewPack. Results without this additive provenance remain readable.

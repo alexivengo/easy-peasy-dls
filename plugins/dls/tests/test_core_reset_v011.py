@@ -40,6 +40,7 @@ from dls_core.worktrees import execution_context, prepare, registry_path, resolv
 from support import (
     FAKE_CODEX,
     FAKE_REPAIR,
+    FAKE_ACTIONABLE_LIFECYCLE_REPAIR,
     FAKE_TICKET_LIFECYCLE_REPAIR,
     FAKE_TICKET_LIFECYCLE_REPAIR_FAIL,
     FAKE_CONFLICT,
@@ -811,6 +812,23 @@ class CoreResetTests(unittest.TestCase):
             self.assertEqual("review-clear", result["verdict"])
             self.assertEqual([False, True], [item["repair"] for item in calls])
             self.assertIn("authored lifecycle status", calls[1]["prompt"])
+        finally:
+            restore_environment(previous)
+
+    def test_actionable_lifecycle_output_is_repaired_in_one_pass(self) -> None:
+        _, previous = self._prepare_code(control="routine")
+        try:
+            fake_codex(self.root, FAKE_ACTIONABLE_LIFECYCLE_REPAIR)
+            log = self.root / ".dls" / "cache" / "fake-bin" / "calls.jsonl"
+            before = len(self._calls(str(log)))
+            result = review_run(self.root, change_id="C001", kind="code")
+            calls = [json.loads(line) for line in self._calls(str(log))[before:]]
+            self.assertEqual("not-clear", result["verdict"])
+            self.assertEqual([False, True], [item["repair"] for item in calls])
+            self.assertIn("global not-clear verdict requires", calls[1]["prompt"])
+            self.assertIn("lifecycle-derived blocked/not-clear rows", calls[1]["prompt"])
+            finding = next(iter(load_state(self.root, "C001")["findings"].values()))
+            self.assertIn("review", finding["blocks"])
         finally:
             restore_environment(previous)
 
