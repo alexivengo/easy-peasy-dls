@@ -48,32 +48,38 @@ single suite executor; no model call is part of this change.
   is a `## HC-0x` heading, a literal `Hard oracle:` line, then one or more
   backticked fully-qualified test IDs; the required headings, exact oracle
   strings, and mapped IDs are fixed by the validator.
-- Add `docs/evaluation-decisions.md`: a Markdown table with date, component,
+- Add `docs/evaluation-decisions.md`: a closed Markdown seed document with a
+  table containing date, component,
   claim, exact version/HEAD, baseline, arm-manifest digest, cases, result,
   safety, cost/human delta, decision, next trigger, and privacy/retention
   status. Include one clearly synthetic M1-format record with no private data.
 - The validator requires exactly this 13-column table header in order:
   `Date | Component | Claim | Exact version/HEAD | Baseline | Arm-manifest
   digest | Cases | Result | Safety | Cost/human delta | Decision | Next trigger
-  | Privacy/retention`. It requires one exact synthetic row using the privacy
-  allowlist below. It rejects a missing header/cell, altered allowlist value,
-  or a record containing `/Users/`, `/private/`, `transcript`, `def `,
-  `-----BEGIN PRIVATE KEY-----`, or `private-fixture:`.
+  | Privacy/retention`. For M1, the complete file is the title, that header,
+  its separator, and one literal row. Its Date is exactly `2026-08-02`; every
+  other literal is the allowlist below. Any additional, missing, or changed
+  content fails. A later real record requires a separately reviewed change to
+  extend this closed grammar.
 - Add one focused standard-library validator test with an isolated documents
   root: it proves the valid map/log pass, then loops each required map heading,
   test ID, table header, and synthetic cell to prove its absence/alteration
-  fails; it separately proves each prohibited-content class fails.
+  fails; it also injects each prohibited-content class as extra content, which
+  fails under the closed grammar.
 - Fix the demonstrated dependency defect: `dependency_status()` must reject a
   target whose current `accept` approval digest differs from the stored target
   definition digest. Add the focused regression where a target definition
   changes after acceptance, then a dependent candidate remains blocked.
-- Add one focused no-live-model regression. It runs the three M1 commands from
+- Add one focused no-live-model regression. For M1, “model call” is the
+  repository's supported `codex` subprocess route; absolute/renamed executors
+  and direct network/API transports are not supported routes and require a new
+  reviewed definition before they can be added. The regression runs the three
+  M1 commands from
   a clean `git archive` with a failing `codex` sentinel first on `PATH` and an
   inherited `DLS_L0_SENTINEL_CHILD=1` flag to prevent recursive self-invocation.
   The child suite may use its existing temporary fake-Codex fixtures, but the
   sentinel must have no invocation record. A sentinel invocation fails the
-  test; this proves the validation commands make no live PATH-resolved model
-  call.
+  test; this proves the validation commands make no live supported-model call.
 - The synthetic row is not an M1-exit verdict. After EF-01 acceptance, the M2
   definition may record the acceptance evidence and receives a fresh independent
   definition review. Its implementation is gated by the existing DLS
@@ -109,10 +115,13 @@ adds no duplicate regression test unless implementation demonstrates a gap.
   It also returns non-zero for each missing decision-log header, altered
   synthetic allowlist cell, and prohibited content class. The focused
   validator test and the full existing suite both pass.
-- `REQ-003`: `evaluation-decisions.md` is a Markdown-only log with all required
-  fields and a synthetic, privacy-safe record. It contains no local path, raw
-  transcript, source, secret, or private fixture content.
-- `REQ-004`: All EF-01 validation has zero model calls. Before M2
+- `REQ-003`: `evaluation-decisions.md` is the exact closed M1 seed document:
+  one fixed table header and one fixed synthetic, privacy-safe record. It
+  contains no local path, raw transcript, source, secret, or private fixture
+  content because any extra or altered content fails validation.
+- `REQ-004`: All EF-01 validation has zero calls through the repository's
+  supported `codex` subprocess route. Adding an absolute/renamed executor or
+  network/API transport requires a new reviewed definition. Before M2
   implementation, DLS must store `dependency set EF-02 --on EF-01` with
   `requires=accepted-in-base` and the EF-01 target definition digest. At
   `candidate-ready`, the existing dependency check requires that digest to
@@ -152,22 +161,23 @@ Rejected alternatives:
 ## Interfaces, state, and failure behavior
 
 The public validator gains one documentation contract: missing M1 claim rows,
-mapped test IDs, decision-log headers, safe synthetic values, or forbidden
-private content are validation errors. `dependency_status()` gains one
+mapped test IDs, or any byte-level departure from the closed seed log are
+validation errors. `dependency_status()` gains one
 integrity condition: an accepted definition digest must equal the dependent
 change's recorded target digest. No public CLI, plugin manifest, hook, state
 schema, or runtime API changes.
 
-The decision log remains repository documentation. A malformed or incomplete
-record is not a PASS and cannot claim M1 exit, release, or production. The
-synthetic M1 row and any copied receipt are never authorization. The
-authoritative M1-exit gate is DLS's existing accepted-in-base dependency check:
-matching target definition digest, current accept SHA, and Git ancestry. The
-later M2 definition is independently reviewed before implementation can begin.
+The seed decision log remains repository documentation. It is a fixed M1 format
+check, not a mutable ledger or PASS. Its synthetic row and any copied receipt
+are never authorization. The authoritative M1-exit gate is DLS's existing
+accepted-in-base dependency check: matching target definition digest, current
+accept SHA, and Git ancestry. The later M2 definition is independently reviewed
+before implementation can begin.
 
 ## Security, privacy, data, and operations
 
-The validator accepts the synthetic row only with this allowlist: an ISO date;
+The validator accepts the synthetic row only with this allowlist: Date
+`2026-08-02`;
 the public component `DLS L0`; claim `decision-log-format`; exact version/HEAD
 `synthetic:format-check-v1`; baseline and arm digest `not-applicable-l0`; case
 `synthetic-m1-format-01`; result `passed`; safety `not-evaluated`; cost/human

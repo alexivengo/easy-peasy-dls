@@ -14,8 +14,8 @@ one privacy-minimal Markdown decision log.
 - The existing public validator rejects an incomplete map or a map that names a
   missing/non-discoverable test ID or an invalid synthetic log record; the
   existing `run_tests.py` remains the only test runner.
-- `docs/evaluation-decisions.md` supplies one small, privacy-minimal Markdown
-  record format and a synthetic M1 record. It does not add JSONL or DLS state.
+- `docs/evaluation-decisions.md` is a closed, privacy-minimal Markdown seed
+  document with one fixed synthetic M1 row. It does not add JSONL or DLS state.
 - The synthetic M1 record is format evidence only. M1 exit is enforced by the
   existing DLS `accepted-in-base` dependency; a later M2 definition may record
   the EF-01 acceptance evidence and receives its own independent review.
@@ -53,8 +53,9 @@ one privacy-minimal Markdown decision log.
 - `REQ-002`: The fast public check rejects a missing required claim or missing
   mapped test ID, unsafe synthetic decision-log record, or missing required
   decision-log field; behavior remains proven by the existing full suite.
-- `REQ-003`: The decision log is Markdown-only, privacy-minimal, and contains a
-  synthetic record without paths, raw transcripts, source, or secrets.
+- `REQ-003`: The decision log is a closed Markdown-only seed document with one
+  fixed synthetic record and therefore contains no paths, raw transcripts,
+  source, secrets, or private fixtures.
 - `REQ-004`: M1 checks make zero model calls and cannot authorize M2, release,
   or production. Only DLS's accepted-in-base dependency can unlock M2
   implementation, and it requires the current acceptance digest to match the
