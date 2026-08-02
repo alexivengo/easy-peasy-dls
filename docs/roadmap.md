@@ -14,6 +14,9 @@
 - показывать bounded platform profile в status и exact-review provenance;
 - показывать одну локализованную human-decision card без copy-paste digest/SHA;
 - не менять модели, routing или budgets до сопоставимых pilot observations.
+- RUCORE-E03 regression: authored lifecycle `blocked` не считается semantic
+  review verdict; legacy failed repair восстанавливается одним compact repair
+  без повторного анализа репозитория.
 
 Стабилизированное ядро v0.13:
 

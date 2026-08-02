@@ -19,6 +19,8 @@
 - risk-triggered second critical reviewer;
 - early `not-clear` и восстановление actionable primary без повторного model call;
 - compact contradiction reconciliation и JSON repair;
+- contract-versioned compact repair с безопасным восстановлением legacy failure
+  без повторного анализа source;
 - reviewer-owned finding verification;
 - deterministic receipt через `status --details receipt`;
 - one-shot state v1 → v2 converter.

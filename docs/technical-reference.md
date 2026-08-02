@@ -138,6 +138,15 @@ ReviewIR routing provenance records planned, completed, skipped and recovered
 lanes. A pre-v0.13 failed run with an exact, digest-valid actionable primary can
 be finalized without another model call.
 
+The RUCORE-E03 pilot exposed a narrower invalid-output case: a reviewer copied
+authored ticket lifecycle `blocked` into semantic ticket verdicts while its
+global decision was `review-clear`. The validator correctly rejected those
+rows, but the old compact repair prompt did not distinguish lifecycle status
+from review verdict, and its failed attempt became sticky. Repair contract v2
+makes that distinction explicit and permits exactly one new compact repair for
+a failed legacy repair contract. It reuses the immutable primary output and
+never repeats repository analysis.
+
 ReviewIR v3 and the corresponding current review record optionally carry
 `platform_profile {contract, name, digest}` copied from the digest-bound
 ReviewPack. Results without this additive provenance remain readable.

@@ -51,6 +51,7 @@ from .repo import (
 
 RUNNER_CONTRACT = "dls-review-runner/v4"
 MODEL_EXECUTION_CONTRACT = "dls-model-exec/v2"
+REPAIR_CONTRACT = "dls-decision-repair/v2"
 ROUTING_CONTRACT = "dls-review-routing/v1"
 PACK_CONTRACT = "dls-review-pack/v3"
 RESULT_CONTRACT = "dls-review-ir/v3"
@@ -1023,6 +1024,7 @@ def _repair(
     budget: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     bundle = {
+        "contract": REPAIR_CONTRACT,
         "raw_decision": raw,
         "validation_error": error[:4000],
         "ticket_ids": sorted(pack["tickets"]),
@@ -1030,8 +1032,12 @@ def _repair(
         "prior_findings": pack["prior_findings"],
     }
     prompt = (
-        "Repair only the JSON structure/reference error below. Do not change semantic verdicts "
-        "or invent findings. Return one complete decision matching the schema.\n"
+        "Repair only the JSON structure/reference error below. Preserve the global verdict and "
+        "findings; do not invent findings. Ticket and requirement verdicts evaluate the reviewed "
+        "definition/code, not authored lifecycle status. Every non-clear item verdict must reference "
+        "a finding. Therefore, when the global verdict is review-clear and findings are empty, change "
+        "lifecycle-derived blocked/not-clear item rows to clear with no finding IDs. Return one "
+        "complete decision matching the schema.\n"
         + json.dumps(bundle, ensure_ascii=False, sort_keys=True)
     )
     with tempfile.TemporaryDirectory(prefix="dls-repair-workspace-") as temp:
@@ -1116,7 +1122,11 @@ def _lane(
         if isinstance(cached_repair, dict) and cached_repair.get("status") == "completed":
             decision = cached_repair["decision"]
             repair_metadata = cached_repair["metadata"]
-        elif isinstance(cached_repair, dict) and cached_repair.get("status") == "failed":
+        elif (
+            isinstance(cached_repair, dict)
+            and cached_repair.get("status") == "failed"
+            and cached_repair.get("contract") == REPAIR_CONTRACT
+        ):
             raise IntegrityError(f"Review repair previously failed: {cached_repair.get('error')}")
         else:
             _set_lane(
@@ -1124,7 +1134,7 @@ def _lane(
                 pack["change_id"],
                 run_id,
                 repair_lane,
-                {"status": "running", "started_at": utc_now()},
+                {"status": "running", "contract": REPAIR_CONTRACT, "started_at": utc_now()},
             )
             try:
                 repaired, repair_metadata = _repair(
@@ -1135,13 +1145,19 @@ def _lane(
                     budget=BUDGETS[pack["control_level"]]["repair"],
                 )
                 decision = _validate_decision(repaired, pack=pack)
+                repair_metadata["contract"] = REPAIR_CONTRACT
             except Exception as exc:
                 _set_lane(
                     root,
                     pack["change_id"],
                     run_id,
                     repair_lane,
-                    {"status": "failed", "error": str(exc), "completed_at": utc_now()},
+                    {
+                        "status": "failed",
+                        "contract": REPAIR_CONTRACT,
+                        "error": str(exc),
+                        "completed_at": utc_now(),
+                    },
                 )
                 raise
             _set_lane(
@@ -1151,6 +1167,7 @@ def _lane(
                 repair_lane,
                 {
                     "status": "completed",
+                    "contract": REPAIR_CONTRACT,
                     "decision": decision,
                     "metadata": repair_metadata,
                     "completed_at": utc_now(),
@@ -1326,7 +1343,11 @@ def _reconcile(
             if isinstance(cached_repair, dict) and cached_repair.get("status") == "completed":
                 decision = cached_repair["decision"]
                 repair_metadata = cached_repair["metadata"]
-            elif isinstance(cached_repair, dict) and cached_repair.get("status") == "failed":
+            elif (
+                isinstance(cached_repair, dict)
+                and cached_repair.get("status") == "failed"
+                and cached_repair.get("contract") == REPAIR_CONTRACT
+            ):
                 raise IntegrityError(
                     f"Reconciliation repair previously failed: {cached_repair.get('error')}"
                 )
@@ -1336,7 +1357,7 @@ def _reconcile(
                     pack["change_id"],
                     run_id,
                     repair_lane,
-                    {"status": "running", "started_at": utc_now()},
+                    {"status": "running", "contract": REPAIR_CONTRACT, "started_at": utc_now()},
                 )
                 try:
                     repaired, repair_metadata = _repair(
@@ -1347,6 +1368,7 @@ def _reconcile(
                         budget=BUDGETS["critical"]["repair"],
                     )
                     decision = _validate_decision(repaired, pack=pack)
+                    repair_metadata["contract"] = REPAIR_CONTRACT
                 except Exception as repair_error:
                     _set_lane(
                         root,
@@ -1355,6 +1377,7 @@ def _reconcile(
                         repair_lane,
                         {
                             "status": "failed",
+                            "contract": REPAIR_CONTRACT,
                             "error": str(repair_error),
                             "completed_at": utc_now(),
                         },
@@ -1367,6 +1390,7 @@ def _reconcile(
                     repair_lane,
                     {
                         "status": "completed",
+                        "contract": REPAIR_CONTRACT,
                         "decision": decision,
                         "metadata": repair_metadata,
                         "completed_at": utc_now(),

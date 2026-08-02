@@ -25,6 +25,7 @@ from dls_core.core import (
 from dls_core.errors import IntegrityError
 from dls_core.runner import (
     BUDGETS,
+    REPAIR_CONTRACT,
     RUNNER_CONTRACT,
     _codex_argv,
     _conflicts,
@@ -39,6 +40,8 @@ from dls_core.worktrees import execution_context, prepare, registry_path, resolv
 from support import (
     FAKE_CODEX,
     FAKE_REPAIR,
+    FAKE_TICKET_LIFECYCLE_REPAIR,
+    FAKE_TICKET_LIFECYCLE_REPAIR_FAIL,
     FAKE_CONFLICT,
     FAKE_BUDGET,
     change,
@@ -794,6 +797,52 @@ class CoreResetTests(unittest.TestCase):
             self.assertEqual("review-clear", result["verdict"])
             self.assertEqual([False, True], [item["repair"] for item in calls])
             self.assertNotIn("src.py", calls[1]["prompt"])
+        finally:
+            restore_environment(previous)
+
+    def test_lifecycle_blocked_ticket_is_compactly_repaired_to_clear(self) -> None:
+        _, previous = self._prepare_code(control="routine")
+        try:
+            fake_codex(self.root, FAKE_TICKET_LIFECYCLE_REPAIR)
+            log = self.root / ".dls" / "cache" / "fake-bin" / "calls.jsonl"
+            before = len(self._calls(str(log)))
+            result = review_run(self.root, change_id="C001", kind="code")
+            calls = [json.loads(line) for line in self._calls(str(log))[before:]]
+            self.assertEqual("review-clear", result["verdict"])
+            self.assertEqual([False, True], [item["repair"] for item in calls])
+            self.assertIn("authored lifecycle status", calls[1]["prompt"])
+        finally:
+            restore_environment(previous)
+
+    def test_old_failed_repair_retries_only_repair_under_new_contract(self) -> None:
+        _, previous = self._prepare_code(control="routine")
+        try:
+            executable, _ = fake_codex(self.root, FAKE_TICKET_LIFECYCLE_REPAIR_FAIL)
+            log = self.root / ".dls" / "cache" / "fake-bin" / "calls.jsonl"
+            with self.assertRaisesRegex(
+                IntegrityError,
+                "non-clear verdict must reference a finding",
+            ):
+                review_run(self.root, change_id="C001", kind="code")
+            failed_count = len(self._calls(str(log)))
+            self.assertEqual(
+                REPAIR_CONTRACT,
+                load_state(self.root, "C001")["active_run"]["lanes"]["primary:repair"]["contract"],
+            )
+
+            with self.assertRaisesRegex(IntegrityError, "repair previously failed"):
+                review_run(self.root, change_id="C001", kind="code")
+            self.assertEqual(failed_count, len(self._calls(str(log))))
+
+            def mark_legacy(value: dict) -> None:
+                value["active_run"]["lanes"]["primary:repair"].pop("contract")
+
+            mutate_state(self.root, "C001", mark_legacy)
+            executable.write_text(FAKE_TICKET_LIFECYCLE_REPAIR, encoding="utf-8")
+            result = review_run(self.root, change_id="C001", kind="code")
+            new_calls = [json.loads(line) for line in self._calls(str(log))[failed_count:]]
+            self.assertEqual("review-clear", result["verdict"])
+            self.assertEqual([True], [item["repair"] for item in new_calls])
         finally:
             restore_environment(previous)
 
