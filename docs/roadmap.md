@@ -1,6 +1,6 @@
 # Roadmap
 
-Текущая линия: `v0.13.5 Consent & Progress Guard`
+Текущая линия: `v0.13.6 Bounded & Upgrade-Safe Runtime Guard`
 
 Полный прежний KANO-каталог заморожен как
 [planning snapshot](archive/kano-snapshot-2026-07-30.md). Он больше не участвует
@@ -21,8 +21,12 @@
   сохраняя draft без stash/reset/transfer.
 - plugin-bundled `Stop` guard исполняет нетерминальную границу runtime и не даёт
   checkpoint-отчёту подменить завершение implementation/remediation.
-- dirty-owner consent сохраняет guard для следующего `Да`, а лимит Stop
-  сбрасывается при подтверждённом Git-прогрессе.
+- `M73`: захваченный старой задачей hook безопасно переживает удаление
+  versioned plugin root и возвращает `dls-hook-upgrade-required`.
+- `M74`: два автоматических продолжения являются абсолютным лимитом одной
+  пользовательской активации и не сбрасываются Git-активностью.
+- `P49`: исчерпание guard завершает turn одной короткой диагностикой без
+  дополнительного model call.
 
 ## Next
 

@@ -767,6 +767,9 @@ class CoreResetTests(unittest.TestCase):
         self.assertIn("End an implementation task only at `open-review-task`", skill)
         self.assertIn("The bundled `Stop` guard enforces this boundary", skill)
         self.assertIn("dls-auto-continuation-exhausted", skill)
+        self.assertIn("absolute per-activation limit", skill)
+        self.assertIn("edits, commits,\n  reverts and state changes never reset it", skill)
+        self.assertIn("dls-hook-upgrade-required", skill)
         self.assertIn("an already-open task keeps its old skill", skill)
         implementation = skill.split("## Implementation and remediation", 1)[1].split(
             "## Independent review", 1

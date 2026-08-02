@@ -8,7 +8,8 @@
 - one-writer worktree ownership через Git identity;
 - owner-first execution context без отдельного Codex-проекта для worktree;
 - безопасная диагностика dirty/ambiguous owner без автоматического переноса;
-- consent-aware и Git-progress-aware bounded completion guard;
+- consent-aware completion guard с абсолютным лимитом двух продолжений;
+- upgrade-safe hook bootstrap без fallback на другую версию DLS;
 - accepted-in-base dependencies;
 - one-call routine/standard structured review;
 - risk-triggered second critical reviewer;

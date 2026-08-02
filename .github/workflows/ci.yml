@@ -39,4 +39,4 @@ jobs:
         run: python3 scripts/validate_public_repo.py
 
       - name: Проверить компиляцию Python
-        run: python3 -m compileall -q plugins/dls/scripts plugins/dls/tests
+        run: python3 -m compileall -q plugins/dls/scripts plugins/dls/hooks plugins/dls/tests

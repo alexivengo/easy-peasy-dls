@@ -254,7 +254,36 @@ at activation, an approval state, HEAD and a SHA-256 Git progress fingerprint.
 A pre-existing draft enters `awaiting-owner-consent`; exact `Да` revalidates the
 same unchanged draft and rearms the guard, while `Нет`, cancellation or drift
 clears it. A draft created by the active task is already authorized by the
-implementation request and remains non-terminal. The two-continuation ceiling
-now counts consecutive stops without Git progress; a commit or draft change
-resets it. Exhaustion gets one visible diagnostic continuation and then ends,
-so the guard stays bounded without hiding the failure from the user.
+implementation request and remains non-terminal. This release counted only
+consecutive stops without Git activity. A later live remediation proved that
+edits and reverts could reset the counter indefinitely.
+
+### v0.13.6 bounded and upgrade-safe runtime guard
+
+The EPIC-03a remediation received 17 automatic continuations while oscillating
+between patches. The root cause was using a Git fingerprint as proof of semantic
+progress: every edit, revert, commit or state change reset the guard even when
+the actionable finding and failing tests did not improve.
+
+The v3 private guard contract removes progress scoring. Each explicit
+implementation/remediation prompt receives at most two automatic continuations.
+The third premature Stop clears the binding and returns
+`continue:false`, `dls-auto-continuation-exhausted` and a bounded diagnostic;
+it does not spend another model call. Hook-generated prompts never rearm the
+guard.
+
+Draft consent remains exact but is now bound to hashes of the Git common-dir,
+owner gitdir, HEAD and tracked/staged/untracked content. Snapshot collection has
+one deadline and output limits. A changed identity or draft requires new
+consent. Private bindings expire after 24 hours; legacy/corrupt bindings and
+guard failures are cleared fail-open.
+
+Codex snapshots a hook definition for an open task. Previously that definition
+directly executed a script under versioned `PLUGIN_ROOT`; removing the old cache
+made the hook itself impossible to start. `hooks.json` now contains a tiny
+inline bootstrap. It executes the exact captured plugin-local script when
+present. When the versioned root has gone, it emits
+`dls-hook-upgrade-required` and exits successfully without blocking Stop or
+searching PATH/source/latest cache. A plugin update still requires a Codex
+restart and a fresh task; the bootstrap makes this failure finite and explicit,
+not hot-reloadable.

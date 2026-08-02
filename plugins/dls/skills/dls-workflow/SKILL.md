@@ -73,10 +73,11 @@ when asking for a human decision.
   and remediation turns after the user trusts it through `/hooks`. If the model
   stops early, follow its `[DLS_CONTINUE]` prompt. A draft created by the active
   task is non-terminal; only a draft present when the task started requires the
-  one explicit consent. The guard allows two consecutive continuations without
-  Git progress and resets that budget when the HEAD or draft changes. Its
-  visible `dls-auto-continuation-exhausted` turn is a bounded diagnostic, not an
-  invitation to silently start a new task.
+  one explicit consent. The guard allows two automatic continuations without
+  another user prompt. This is an absolute per-activation limit: edits, commits,
+  reverts and state changes never reset it. The third premature Stop ends without
+  another model call and reports `dls-auto-continuation-exhausted`; do not claim
+  completion or silently start a new task.
 - After each checkpoint commit, read `status` again and stay in the loop. Split
   large findings into internal steps without turning them into user handoffs.
 - `candidate-ready` runs repository-owned required commands, records exact-HEAD
@@ -153,3 +154,5 @@ locations as inline comments; the core stores no presentation directives.
   archived evidence and never executable runtime input.
 - Plugin upgrades are loaded only by fresh Codex tasks. Restart Codex and open
   a new task after reinstalling DLS; an already-open task keeps its old skill.
+  If its captured plugin root was removed, the hook fails open with
+  `dls-hook-upgrade-required` instead of looking for another DLS installation.

@@ -165,10 +165,16 @@ def validate_plugin_hooks() -> None:
         if (
             handler.get("type") != "command"
             or not isinstance(command, str)
+            or not command.startswith("python3 -c ")
             or "${PLUGIN_ROOT}/hooks/task_guard.py" not in command
+            or "os.execv" not in command
+            or "dls-hook-upgrade-required" not in command
             or "/" + "Users/" in command
         ):
-            fail(f"Hook {event} должен использовать только plugin-local task_guard.py")
+            fail(
+                f"Hook {event} должен использовать upgrade-safe plugin-local "
+                "task_guard bootstrap"
+            )
 
 
 def validate_json_files() -> None:

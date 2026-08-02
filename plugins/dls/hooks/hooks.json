@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/hooks/task_guard.py\"",
+            "command": "python3 -c 'import json,os,sys; p=sys.argv[1]; os.path.isfile(p) and os.execv(sys.executable,[sys.executable,p]); print(json.dumps({\"systemMessage\":\"dls-hook-upgrade-required: restart Codex and open a fresh task.\"},separators=(\",\",\":\")))' \"${PLUGIN_ROOT}/hooks/task_guard.py\"",
             "timeout": 10
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT}/hooks/task_guard.py\"",
+            "command": "python3 -c 'import json,os,sys; p=sys.argv[1]; os.path.isfile(p) and os.execv(sys.executable,[sys.executable,p]); print(json.dumps({\"systemMessage\":\"dls-hook-upgrade-required: restart Codex and open a fresh task.\"},separators=(\",\",\":\")))' \"${PLUGIN_ROOT}/hooks/task_guard.py\"",
             "timeout": 30,
             "statusMessage": "Checking DLS completion boundary"
           }

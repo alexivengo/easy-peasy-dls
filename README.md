@@ -47,11 +47,15 @@ Simple AI delivery. Proof included.
 - `continue-implementation` больше не является поводом завершать задачу или
   просить пользователя написать «продолжай».
 - plugin-bundled `Stop` guard технически продолжает преждевременно завершённую
-  implementation/remediation-задачу; два Stop без Git-прогресса дают видимую
-  bounded-диагностику, а новый commit или draft сбрасывает этот счётчик.
+  implementation/remediation-задачу; лимит — ровно два автоматических
+  продолжения на пользовательский запрос, и edits/commits/reverts его не
+  сбрасывают.
 - Прерванный незакоммиченный draft можно продолжить после одного вопроса
   «Продолжить существующий черновик? Да / Нет»; ответ `Да` сохраняет runtime
   guard активным без reset, stash или переноса.
+- Если открытая задача сохранила hook уже удалённой версии плагина, bootstrap
+  безопасно завершает её с `dls-hook-upgrade-required`, без fallback на другую
+  установку и без цикла `FileNotFoundError`.
 
 ## Что изменилось в v0.11 Core Reset
 
