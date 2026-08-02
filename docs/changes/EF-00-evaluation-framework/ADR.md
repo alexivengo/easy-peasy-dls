@@ -14,8 +14,11 @@ MVP evaluation is a three-layer process:
 
 1. L0 runs the existing deterministic tests and public validator with zero
    model calls. It maps HC-01 through HC-05 to exact executable tests.
-2. L1 is release-only: four frozen semantic ReviewPack cases are compared on
-   pinned current and previous arms. It has an explicit live-call budget.
+2. L1 is release-only: four frozen semantic ReviewPack cases use an explicit
+   arm manifest. Component-off runs are causal and change one component only;
+   current-versus-previous-release runs detect regressions but make no causal
+   attribution because several components may differ. It has an explicit
+   live-call budget.
 3. L2 records bounded, private field/iOS observations in a Markdown decision
    log. It never writes raw transcripts, repository paths, or trajectories into
    DLS state.

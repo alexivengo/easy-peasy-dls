@@ -13,8 +13,8 @@ make delivery safer, more correct, or cheaper, before adding an eval runtime.
 - A baseline, hard-gate, failure-taxonomy, privacy, retention, and budget
   contract.
 - The architecture boundary for the smallest M1 implementation.
-- An implementation sequence bound to
-  `docs/evaluation-framework-roadmap.md`.
+- A self-contained implementation sequence; the separate roadmap is planning
+  context, not an input required to interpret this definition.
 
 ## Non-goals
 

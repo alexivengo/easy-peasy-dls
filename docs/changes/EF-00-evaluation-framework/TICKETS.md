@@ -30,14 +30,32 @@ Validation:
 
 Blocked by: EF-00 definition and architecture approval.
 
+Requirements: `REQ-001`, `REQ-002`, `REQ-004`, `REQ-005`.
+
 Scope: map HC-01 through HC-05 to current tests and add only demonstrated
 missing deterministic regression proofs.
+
+Acceptance: every hard claim links to its exact test symbol and oracle; any
+new test fails before its protected behavior and passes after it; no model call
+is introduced into the deterministic suite.
+
+Validation: `python3 plugins/dls/scripts/run_tests.py`,
+`python3 scripts/validate_public_repo.py`, and `python3 -m compileall -q
+plugins/dls/scripts plugins/dls/hooks`.
 
 ## T03 — M1 decision log (follow-up change)
 
 Blocked by: EF-00 definition and architecture approval.
 
 Scope: add one privacy-minimal Markdown decision log; do not add JSONL.
+
+Requirements: `REQ-003`, `REQ-004`.
+
+Acceptance: records contain the contract fields, arm-manifest digest, and
+retention disposition but no raw private content or path; deleting a raw local
+artifact leaves its receipt-reference rule intact.
+
+Validation: public validator plus a documented synthetic record review.
 
 ## T04 — M2 semantic corpus (follow-up change)
 
@@ -46,7 +64,27 @@ Blocked by: M1 exit gate.
 Scope: four frozen release-only cases with the exact hard-oracle and
 classification contract from `SPEC.md`.
 
+Requirements: `REQ-001`, `REQ-002`, `REQ-005`.
+
+Acceptance: every case has a versioned oracle and arm manifest; component-off
+cases alter one component only; previous-release cases are labeled regression
+only; infrastructure failures cannot be reported as product results.
+
+Validation: full L0 suite, four-case semantic release run, and budget/decision
+log review.
+
 ## T05 — Automation and Harbor (deferred)
 
 Blocked by: the documented automation or scale trigger. No implementation is
 allowed merely because the backlog exists.
+
+Requirements: `REQ-004`.
+
+Acceptance: the recorded trigger identifies two over-30-minute manual release
+evaluations, more than four live cases, more than two arms, two transcription
+errors, or required machine-readable interchange; the proposed automation keeps
+the arm-manifest and privacy contracts.
+
+Validation: deterministic self-checks, repeatable output check, and public
+validator. Harbor additionally requires its separate M2 scale, privacy, and
+container-scope decision.

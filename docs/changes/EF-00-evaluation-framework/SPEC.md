@@ -13,32 +13,37 @@ or evidence ledger.
 
 ### Component claim registry
 
-| Component | Primary claim | Applies when | Decision owner |
+| Component | Primary claim and observable oracle | Applies when | Decision owner |
 |---|---|---|---|
-| Definition/decision cards | HC-01: stale or negative consent cannot mutate state | definition or acceptance approval | DLS maintainer |
-| Owner routing/worktree guard | HC-02: dirty, wrong, ambiguous, or foreign owner cannot mutate product source | any implementation/remediation | DLS maintainer |
-| Candidate/receipt provenance | HC-03: candidate and review evidence bind to exact HEAD and policy/profile digests | candidate-ready and review | DLS maintainer |
-| Review runner/finalizer | HC-04: no review is complete without a terminal result path | definition and code review | DLS maintainer |
-| Completion guard | HC-05: consent is preserved and automatic continuation stays bounded | explicit implementation/remediation task | DLS maintainer |
-| Structured reviewer routing | quality/cost: useful findings without unnecessary calls | release-only semantic cases | DLS maintainer |
-| Platform profiles | quality: applicable domain evidence is requested without unrelated routing | profile-selected change | DLS maintainer |
-| Named validation commands | safety/cost: required local evidence runs without a model call | candidate/release gate | repository owner |
+| Definition/decision cards | HC-01: stale/negative consent leaves the state digest unchanged | definition or acceptance approval | DLS maintainer |
+| Owner routing/worktree guard | HC-02: dirty, wrong, ambiguous, or foreign owner leaves caller and foreign tree digests unchanged | any implementation/remediation | DLS maintainer |
+| Candidate/receipt provenance | HC-03: candidate/review HEAD, tree, policy, and profile digests equal the executed inputs | candidate-ready and review | DLS maintainer |
+| Review runner/finalizer | HC-04: completion has `terminal=true` and non-null `review_result_path` | definition and code review | DLS maintainer |
+| Completion guard | HC-05: exact consent binding is retained and continuation count is at most the contract limit | explicit implementation/remediation task | DLS maintainer |
+| Structured reviewer routing | routing has the policy-selected lanes and no secondary call after actionable primary | release-only semantic cases | DLS maintainer |
+| Platform profiles | resolved profile exposes only its declared capability set in the ReviewPack | profile-selected change | DLS maintainer |
+| Named validation commands | the configured named command completes and its evidence records zero model calls | candidate/release gate | repository owner |
 
 Internal helpers with no caller-visible behavior have no independent claim.
 Bundled MCP is absent and is not an eval target.
 
 ### Baselines and hard gates
 
-| Baseline | One allowed difference | Use |
+| Baseline | Allowed-difference rule | Use |
 |---|---|---|
 | Component-off | one skill, hook, prompt, route, profile, schema, or validation command | causal contribution |
-| Previous release | accepted current versus accepted previous DLS version | regression detection |
-| Native Codex | DLS absent; product oracle and permissions unchanged | DLS overhead/value |
+| Previous release | arbitrary released changes are permitted but must be listed in the arm manifest | regression detection only; never causal attribution |
+| Native Codex | DLS is absent; product oracle, permissions, task, model, effort, and toolchain are fixed | overall DLS overhead/value, not one-component attribution |
 | Hard oracle | expected Git/state/artifact/test invariant | guarantees unique to DLS |
 
-An arm failing a hard gate is rejected before speed or cost comparison. The MVP
-hard gates are HC-01 through HC-05 from the registry. Later HC-06 through HC-08
-cover read-only source, single owning model call, and honest lifecycle status.
+Every planned arm has a manifest containing case ID, exact HEAD/version, task
+input digest, oracle version, model/effort, permissions, toolchain, enabled and
+disabled components, and the reason for every allowed difference. The runner
+first validates that manifest against the baseline rule, then executes the hard
+oracle. An invalid manifest or hard-gate failure is rejected before speed or
+cost comparison. The MVP hard gates are HC-01 through HC-05 from the registry.
+Later HC-06 through HC-08 cover read-only source, single owning model call, and
+honest lifecycle status.
 
 Outcomes are `passed`, `product-failed`, `component-failed`,
 `infrastructure-failed`, and `invalid-case`. Xcode, Simulator, signing,
@@ -115,18 +120,22 @@ spike after M2, not an MVP dependency or iOS runtime substitute.
 
 M0 changes no public CLI, plugin manifest, hook, state schema, or runtime
 behavior. Future decision-log records include date, component, claim, exact
-version/HEAD, baseline, cases, result, safety, cost/human delta, decision, and
-next trigger. A malformed, incomparable, budget-exhausted, or infrastructure
-failed arm records an explicit incomplete outcome and cannot become a clear
-result.
+version/HEAD, baseline, arm-manifest digest, cases, result, safety, cost/human
+delta, decision, and next trigger. A malformed, incomparable, budget-exhausted,
+or infrastructure-failed arm records an explicit incomplete outcome and cannot
+become a clear result.
 
 ## Security, privacy, data, and operations
 
-Public fixtures may contain only synthetic/minimal source. Private iOS pilots
-use local storage and retain raw artifacts only for the approved local period;
-their deletion must not alter the canonical receipt. Third-party harness
-telemetry is opt-in only. Commit/PR gates remain local, deterministic, and make
-zero model calls.
+Public fixtures may contain only synthetic/minimal source. The DLS maintainer
+owns private iOS artifacts and deletes each raw artifact after its decision is
+recorded or after 30 days, whichever comes first. The owner verifies deletion
+from the private store and records only `deleted` or `retained-until` plus the
+expiry in the decision log; no path, source, transcript, or secret is recorded.
+A receipt may refer only to a case ID and immutable content digest, so deleting
+the private artifact never invalidates its canonical evidence. Third-party
+harness telemetry is opt-in only. Commit/PR gates remain local, deterministic,
+and make zero model calls.
 
 ## UI/UX contract
 
