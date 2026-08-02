@@ -17,15 +17,22 @@ JSONL ledger, service, dashboard, or DLS runtime input.
 - `docs/evaluation-m2-runbook.md` defines the release-only manual procedure:
   fresh task/plugin boundary, same-day paired arm order, manifest checks,
   hard-gate stop, transport-only retries, and infrastructure-failed handling.
-- `docs/evaluation-m2-decisions.md` contains only the four resulting
-  privacy-minimal case records and one actionable M2 decision. It is distinct
-  from the closed M1 format seed.
+- `docs/evaluation-m2-decisions.md` contains exactly four privacy-minimal case
+  records and one M2 decision. Before live work, records are explicitly
+  `planned` or `locked-not-run`; only completed records carry a terminal arm
+  outcome. Its decision is `pending-live-sample` until all four records are
+  complete, then one actionable M2 decision. It is distinct from the closed M1
+  format seed.
 - Existing stdlib tests and the public validator reject missing, reordered, or
   malformed case/runbook/decision data before a release-only live run. They do
   not invoke a model.
 - The four disposable synthetic Git fixtures are created and locked only by
-  the runbook. Their repository paths, raw source, prompts, transcripts, and
-  session data never enter committed documents or DLS state.
+  the runbook. An immutable private custody bundle per case holds the fixture
+  recipe and hidden oracle for authorised independent replay; its recorded
+  digest is verified against the public lock. The DLS maintainer retains each
+  bundle for one year after the M2 decision and grants read-only replay access
+  on request. Repository paths, raw source, prompts, transcripts, and session
+  data never enter committed documents or DLS state.
 
 ## Non-goals
 
@@ -40,14 +47,17 @@ JSONL ledger, service, dashboard, or DLS runtime input.
 
 ## Success measures
 
-- SR-01…SR-04 are reproducible from their locked disposable fixtures and all
-  required lock fields are recorded before each live arm.
+- SR-01…SR-04 are reproducible from their locked disposable fixtures and the
+  matching private custody bundle; all required lock fields are recorded before
+  each live arm.
 - SR-02 cannot receive `review-clear`; SR-03 proves its actual routing/call
-  bounds; SR-04 permits at most one source-blind repair; no case has a hard
-  blocker miss or safety violation.
+  bounds; SR-04 permits at most one source-blind repair; no current arm has a
+  hard blocker miss or safety violation. The declared SR-03 component-off miss
+  is expected contrast evidence, not a current-arm clearance.
 - The release sample uses at most four cases and six to eight live analysis or
-  repair calls. Any incomplete, invalid, infrastructure-failed, or
-  budget-exhausted case is `not-clear`, never a PASS.
+  repair calls. Any incomplete, unintended invalid,
+  infrastructure-failed, or budget-exhausted case is `not-clear`, never a
+  PASS; the declared SR-04 fail-closed reference is expected contrast evidence.
 - One documented keep, improve, or delete decision follows the recorded M2
   evidence without asserting release or production readiness.
 
@@ -63,11 +73,13 @@ JSONL ledger, service, dashboard, or DLS runtime input.
   all four cases and contain no private data or executable DLS input.
 - `REQ-002`: Every SR case records immutable fixture/input/oracle locks,
   expected verdict, arm manifest, hard-oracle result, routing/call bounds, and
-  the allowed outcome taxonomy before its live arm is evaluated.
+  the allowed outcome taxonomy before its live arm is evaluated. SR-01 and
+  SR-02 are current-only; SR-03 and SR-04 alone have reference arms.
 - `REQ-003`: The release-only runbook enforces the accepted M1 dependency,
-  fresh-task/plugin boundary, at most four cases and six to eight calls,
-  same-day paired comparison, zero live calls in normal validation, and a
-  fail-closed incomplete outcome.
+  fresh-task/plugin boundary, current/reference pairing only where a reference
+  exists, at most four cases and eight counted attempts, zero live calls in
+  normal validation, and a fail-closed incomplete outcome. A transport retry
+  counts toward every case/sample ceiling and cannot create a ninth attempt.
 - `REQ-004`: Four live M2 cases execute against the locked fixtures: clean
   control, seeded blocker, critical secondary routing, and malformed-output
   repair. Their hidden oracles are evaluated outside the reviewer prompt.
