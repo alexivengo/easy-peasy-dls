@@ -1,4 +1,4 @@
-# DLS v0.13 CLI
+# DLS v0.14 CLI
 
 Invoke the installed plugin-local launcher:
 
@@ -31,7 +31,7 @@ Expected boundary results use exit code 0 and a typed `next_action`. Non-zero
 means usage, integrity, configuration, or infrastructure failure.
 
 For normal human decisions, read `human_decision` from `status` or `review-run`,
-show its summary and prompt, then pass its hidden `id` as `--decision-id` with
+show its localized `presentation` and prompt, then pass its hidden `id` as `--decision-id` with
 the user's verbatim `--response`. A current card accepts `Да`; DLS derives and
 records the exact HEAD/digests. Do not ask the user to copy them. Legacy direct
 CLI use without a decision ID keeps the explicit digest/SHA contract.
@@ -54,6 +54,10 @@ work:
 
 `caller_root` and `owner_root` are local machine routing values. Do not repeat
 them in user-facing summaries or persist them in canonical artifacts.
+
+The first `status` also returns a bounded `platform_profile`. Use its advisory
+capabilities and only installed relevant domain skills; missing skills do not
+block delivery and never justify profile inference.
 
 ## Long-running review in Codex App
 

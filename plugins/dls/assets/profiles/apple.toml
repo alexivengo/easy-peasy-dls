@@ -22,7 +22,7 @@ domain_skills = [
   "swift-concurrency",
   "swift-testing",
   "swiftui-design-principles",
-  "ios-accessibility"
+  "swift-accessibility-skill"
 ]
 process_owner = "dls"
 

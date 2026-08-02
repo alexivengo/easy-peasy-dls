@@ -1445,6 +1445,10 @@ def _review_result(
     reconciliation: dict[str, Any] | None,
     routing: dict[str, Any],
 ) -> dict[str, Any]:
+    profile = {
+        key: pack["platform_profile"][key]
+        for key in ("contract", "name", "digest")
+    }
     return {
         "schema_version": RESULT_SCHEMA,
         "contract": RESULT_CONTRACT,
@@ -1455,6 +1459,7 @@ def _review_result(
         "head_sha": pack["head_sha"],
         "pack_digest": pack["pack_digest"],
         "definition_digest": pack["definition_digest"],
+        "platform_profile": profile,
         "verdict": decision["verdict"],
         "summary": decision["summary"],
         "findings": decision["findings"],
@@ -1785,6 +1790,10 @@ def review_run(
                 "definition_digest": pack["definition_digest"],
                 "source_digest": pack["source_digest"],
                 "profile_digest": pack["platform_profile"]["digest"],
+                "platform_profile": {
+                    key: pack["platform_profile"][key]
+                    for key in ("contract", "name", "digest")
+                },
                 "decision_digests": pack["decision_digests"],
                 "verdict": result["verdict"],
                 "result_path": relative,

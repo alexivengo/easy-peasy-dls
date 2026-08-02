@@ -31,6 +31,15 @@ Simple AI delivery. Proof included.
 
 Обычный пользователь не вводит CLI, SHA, пути к evidence или ReviewPack.
 
+## Что меняется в v0.14
+
+- `status` показывает активный platform profile и его advisory capabilities;
+- human decision отображается одной русской карточкой: пользователь отвечает
+  только `Да` или `Нет`, без копирования digest или SHA;
+- профиль, использованный независимым review, сохраняется в ReviewIR и metrics;
+- Apple UI и server-backend flows проходят реальные proof-first pilots до
+  публикации релиза; модели, routing и budgets не меняются.
+
 ## Что изменилось в v0.13
 
 - основной проект остаётся единственной точкой входа в Codex;

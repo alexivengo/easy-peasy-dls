@@ -4,8 +4,8 @@ Definition, architecture, and design are separate digest-scoped approvals. They
 may be written atomically from one explicit user response, but one decision
 never implies another.
 
-DLS renders pending approvals as a digest-bound `human_decision` card. Show the
-listed decisions and ask `Да / Нет`; the user does not repeat SHA or digests.
+DLS renders pending approvals as a digest-bound `human_decision` card. Show its
+localized presentation and ask `Да / Нет`; the user does not repeat SHA or digests.
 Pass the hidden card ID with the verbatim affirmative response. DLS recomputes
 the card before writing and rejects drift or a negative/ambiguous answer.
 

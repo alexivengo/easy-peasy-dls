@@ -1,12 +1,21 @@
 # Roadmap
 
-Текущая линия: `v0.13.6 Bounded & Upgrade-Safe Runtime Guard`
+Текущая линия: `v0.14.0 Platform Proof & Decision UX`
 
 Полный прежний KANO-каталог заморожен как
 [planning snapshot](archive/kano-snapshot-2026-07-30.md). Он больше не участвует
 в runtime validation.
 
 ## Now
+
+- доказать `M38–M39` на реальном Apple UI definition/design lifecycle;
+- доказать `M40` на backend architecture decision;
+- доказать `P30/P39` полным backend review/acceptance и абсолютными metrics;
+- показывать bounded platform profile в status и exact-review provenance;
+- показывать одну локализованную human-decision card без copy-paste digest/SHA;
+- не менять модели, routing или budgets до сопоставимых pilot observations.
+
+Стабилизированное ядро v0.13:
 
 - `M71`: owner-worktree определяется до первой product-операции;
 - `M72`: actionable primary сохраняется при optional lane/budget failure;
@@ -30,9 +39,11 @@
 
 ## Next
 
-- UI/design pilot на настоящем change;
-- backend review pilot после current definition approval;
 - точечная настройка budgets по сопоставимым данным.
+- `P28`: расширенная conflict inventory без destructive automation;
+- `P12`: risk routing вне review только после нескольких platform baselines;
+- `A01/A02`: design connectors и immutable design provenance;
+- `A04/A05`: model/cost recommendations только по надёжным данным.
 
 ## Later
 

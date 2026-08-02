@@ -4,6 +4,10 @@
 - independent semantic definition review для standard/critical;
 - отдельные definition, architecture, design и acceptance approvals;
 - state-bound decision cards с ответом `Да / Нет` без copy-paste идентификаторов;
+- локализованная decision presentation без изменения decision ID;
+- bounded platform profile projection в status и exact-review provenance в
+  ReviewIR/metrics;
+- advisory Apple UI и server-backend skill routing без ложных platform gates;
 - trusted named validation и exact-HEAD evidence;
 - one-writer worktree ownership через Git identity;
 - owner-first execution context без отдельного Codex-проекта для worktree;

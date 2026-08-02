@@ -16,6 +16,14 @@ repositories, or fall back to a source/R&D checkout.
 Read [cli.md](references/cli.md) before invoking the CLI and [gates.md](references/gates.md)
 when asking for a human decision.
 
+Use `platform_profile` from the first `status` response as advisory discovery
+and skill routing. Invoke only relevant domain skills that are actually
+available; a missing advisory skill never blocks delivery. For Apple UI work,
+use architecture, concurrency, testing and design guidance plus the universal
+`swift-accessibility-skill`. For backend work, never add Apple UI, App Store or
+Apple-platform gates; Swift skills remain applicable when the source is Swift.
+Never infer another profile or ask the user to select one during delivery.
+
 ## Definition
 
 - Use `CHANGE.md` for routine work. Standard/critical use the smallest useful
@@ -25,8 +33,8 @@ when asking for a human decision.
   SPEC/ADR or an exact design source/bypass.
 - Standard/critical definition approval requires a current independent
   `review-run CHANGE_ID --kind definition --stream`.
-- Show the DLS-provided `human_decision` card once. List every pending decision
-  and short digest, then ask its exact `Да / Нет` prompt. The user never copies
+- Show the DLS-provided localized `human_decision.presentation` once, then ask
+  its exact `Да / Нет` prompt. The user never copies
   identifiers; on `Да`, pass the hidden decision ID and verbatim response to one
   atomic approval command. On `Нет`, stop without mutation.
 - A dependency only blocks implementation and always means

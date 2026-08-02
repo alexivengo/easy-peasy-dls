@@ -1,4 +1,4 @@
-# Technical reference — v0.13
+# Technical reference — v0.14
 
 ## Public CLI
 
@@ -19,6 +19,11 @@ worktree prepare
 
 `status CHANGE_ID --details findings|receipt|metrics|history` replaces the old
 candidate/review/delivery status, receipt, metrics, history and cache surfaces.
+Every status response includes a bounded `platform_profile` projection with its
+contract, name, digest and at most 16 advisory capabilities and skills. It never
+contains profile source paths or repository discovery output. Review metrics use
+the profile provenance stored with that exact canonical result rather than the
+current repository profile.
 
 `review-run CHANGE_ID --kind definition|code --stream` is the only public review
 orchestration command. No public command accepts an operation ID, state revision,
@@ -51,6 +56,11 @@ change, action, current HEAD, review and decision digests. The user answers
 write. A stale card, negative answer or mismatched bundle changes no state.
 Legacy direct CLI calls may still repeat explicit digests/SHA, but the workflow
 never asks a person to copy them.
+
+The optional derived `presentation` does not participate in the decision ID. It
+adds localized labels, short digests and the effect of `Да`; `Нет` explicitly
+leaves state unchanged. The acceptance presentation states that acceptance is
+bound to the reviewed HEAD and does not establish release or production.
 
 Standard/critical definition approval requires a current clear
 `review-run --kind definition`. Changing authored definition or a scoped
@@ -127,6 +137,10 @@ Completed valid lanes are reused during deterministic finalization.
 ReviewIR routing provenance records planned, completed, skipped and recovered
 lanes. A pre-v0.13 failed run with an exact, digest-valid actionable primary can
 be finalized without another model call.
+
+ReviewIR v3 and the corresponding current review record optionally carry
+`platform_profile {contract, name, digest}` copied from the digest-bound
+ReviewPack. Results without this additive provenance remain readable.
 
 Public runner states are `not-prepared`, `running`, `completed`, `blocked` and
 `failed`. `started` and `lane-transition` stream events are non-terminal; only a
@@ -287,3 +301,17 @@ present. When the versioned root has gone, it emits
 searching PATH/source/latest cache. A plugin update still requires a Codex
 restart and a fresh task; the bootstrap makes this failure finite and explicit,
 not hot-reloadable.
+
+### v0.14.0 platform proof and decision UX
+
+The workflow reads the resolved profile from its first status call. Domain
+skills are advisory: only installed and relevant skills are used, and their
+absence never blocks delivery. Apple UI work may use architecture, concurrency,
+testing, design and the universal Swift accessibility companion. Backend work
+does not inherit Apple UI, App Store or Apple-platform gates; Swift guidance may
+still apply to Swift server source.
+
+The release is proof-first: Apple UI definition/design, backend
+definition/architecture and a full backend review/acceptance lifecycle must
+complete as real pilots before the corresponding roadmap items are closed.
+Models, review routing and budgets are intentionally unchanged.

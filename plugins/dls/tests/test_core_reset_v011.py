@@ -193,6 +193,38 @@ class CoreResetTests(unittest.TestCase):
         self.assertTrue(projection["design"]["required"])
         self.assertRegex(projection["design"]["digest"], r"^[0-9a-f]{64}$")
 
+    def test_human_decision_presentation_is_derived_without_changing_id(self) -> None:
+        change(self.root, control="routine", impacts=["user-interface"])
+        state = load_state(self.root, "C001")
+        source = self.root / state["change"]["artifacts"]["change"]["path"]
+        source.write_text(
+            source.read_text().replace(
+                "Not applicable unless the change affects user-interface surfaces.",
+                "Mode: bypass\nRationale: preserve the committed UI precedent.",
+            ),
+            encoding="utf-8",
+        )
+        commit(self.root, "UI definition")
+        card = status(self.root, "C001")["human_decision"]
+        basis = {
+            key: card[key]
+            for key in (
+                "contract",
+                "change_id",
+                "action",
+                "head_sha",
+                "review_id",
+                "decisions",
+            )
+        }
+        self.assertEqual(stable_digest(basis), card["id"])
+        self.assertEqual("Подтверждение решений", card["presentation"]["title"])
+        self.assertEqual(
+            ["Описание результата", "Дизайн"],
+            [item["label"] for item in card["presentation"]["items"]],
+        )
+        self.assertTrue(card["presentation"]["unchanged_on_no"])
+
     def test_definition_review_precedes_approval(self) -> None:
         change(self.root, control="standard")
         commit(self.root, "definition")
@@ -288,6 +320,69 @@ class CoreResetTests(unittest.TestCase):
         finally:
             restore_environment(previous)
 
+    def test_status_profile_projection_is_bounded_and_deterministic(self) -> None:
+        change(self.root, control="routine")
+        profiles = self.root / ".dls" / "profiles"
+        profiles.mkdir(parents=True)
+        capabilities = [f'"cap-{index}"' for index in range(20)]
+        skills = [f'"skill-{index}"' for index in range(20)]
+        (profiles / "local.toml").write_text(
+            "schema_version = 1\nname = \"local\"\nextends = \"generic\"\n\n"
+            "[routing]\n"
+            f"domain_capabilities = [{', '.join(capabilities)}]\n"
+            f"domain_skills = [{', '.join(skills)}]\n",
+            encoding="utf-8",
+        )
+        config = self.root / ".dls" / "config.toml"
+        config.write_text(
+            config.read_text().replace('default_profile = "generic"', 'default_profile = "local"'),
+            encoding="utf-8",
+        )
+        one = status(self.root, "C001")["platform_profile"]
+        two = status(self.root, "C001")["platform_profile"]
+        self.assertEqual(one, two)
+        self.assertEqual("local", one["name"])
+        self.assertEqual(16, len(one["domain_capabilities"]))
+        self.assertEqual(16, len(one["domain_skills"]))
+        self.assertGreater(one["omitted_count"], 0)
+        self.assertNotIn(str(self.root), json.dumps(one))
+
+    def test_review_profile_provenance_is_in_result_state_and_metrics(self) -> None:
+        _, previous = self._prepare_code(control="routine")
+        try:
+            reviewed = review_run(self.root, change_id="C001", kind="code")
+            result = json.loads((self.root / reviewed["review_result_path"]).read_text())
+            state = load_state(self.root, "C001")
+            expected = {
+                key: status(self.root, "C001")["platform_profile"][key]
+                for key in ("contract", "name", "digest")
+            }
+            self.assertEqual(expected, result["platform_profile"])
+            self.assertEqual(expected, state["review"]["platform_profile"])
+            self.assertEqual(expected, status(self.root, "C001", details="metrics")["metrics"]["platform_profile"])
+
+            del state["review"]["platform_profile"]
+            (self.root / ".dls" / "state" / "C001.json").write_text(
+                json.dumps(state, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            self.assertIsNone(status(self.root, "C001", details="metrics")["metrics"]["platform_profile"])
+        finally:
+            restore_environment(previous)
+
+    def test_bundled_profile_skill_routing_is_platform_specific(self) -> None:
+        plugin = Path(__file__).resolve().parents[1]
+        apple = (plugin / "assets" / "profiles" / "apple.toml").read_text()
+        backend = (plugin / "assets" / "profiles" / "server-backend.toml").read_text()
+        workflow = (plugin / "skills" / "dls-workflow" / "SKILL.md").read_text()
+        self.assertIn("swift-accessibility-skill", apple)
+        self.assertNotIn("ios-accessibility", apple)
+        for apple_only in ("swiftui-design-principles", "swift-accessibility-skill", "App Store"):
+            self.assertNotIn(apple_only, backend)
+        self.assertIn("platform_profile", workflow)
+        self.assertIn("missing advisory skill never blocks delivery", workflow)
+        self.assertIn("never add Apple UI, App Store or", workflow)
+
     def test_routine_and_standard_use_one_code_analysis(self) -> None:
         for control in ("routine", "standard"):
             with self.subTest(control=control):
@@ -323,6 +418,63 @@ class CoreResetTests(unittest.TestCase):
             review_run(self.root, change_id="C001", kind="code")
             calls = [json.loads(line) for line in self._calls(log)[before:]]
             self.assertEqual(["gpt-5.6-terra", "gpt-5.6-sol"], [item["model"] for item in calls])
+        finally:
+            restore_environment(previous)
+
+    def test_backend_critical_review_preserves_profile_and_usage(self) -> None:
+        config = self.root / ".dls" / "config.toml"
+        config.write_text(
+            config.read_text().replace(
+                'default_profile = "generic"',
+                'default_profile = "server-backend"',
+            ),
+            encoding="utf-8",
+        )
+        log, previous = self._prepare_code(
+            control="critical",
+            impacts=["security-privacy"],
+        )
+        try:
+            before = len(self._calls(log))
+            reviewed = review_run(self.root, change_id="C001", kind="code")
+            self.assertEqual(2, len(self._calls(log)) - before)
+            metrics = status(self.root, "C001", details="metrics")["metrics"]
+            self.assertEqual("server-backend", metrics["platform_profile"]["name"])
+            self.assertGreater(metrics["processed_tokens"], 0)
+            result = json.loads((self.root / reviewed["review_result_path"]).read_text())
+            self.assertEqual("server-backend", result["platform_profile"]["name"])
+        finally:
+            restore_environment(previous)
+
+    def test_apple_ui_definition_review_returns_one_combined_card(self) -> None:
+        config = self.root / ".dls" / "config.toml"
+        config.write_text(
+            config.read_text().replace('default_profile = "generic"', 'default_profile = "apple"'),
+            encoding="utf-8",
+        )
+        change(self.root, control="standard", impacts=["user-interface"])
+        state = load_state(self.root, "C001")
+        spec = self.root / state["change"]["artifacts"]["spec"]["path"]
+        spec.write_text(
+            spec.read_text().replace(
+                "Not applicable unless the change affects user-interface surfaces.",
+                "Mode: bypass\nRationale: preserve the committed UI precedent.",
+            ),
+            encoding="utf-8",
+        )
+        commit(self.root, "Apple UI definition")
+        _, previous = self._fake()
+        try:
+            reviewed = review_run(self.root, change_id="C001", kind="definition")
+            self.assertEqual("review-clear", reviewed["verdict"])
+            self.assertEqual(
+                ["definition", "design"],
+                [item["decision"] for item in reviewed["human_decision"]["decisions"]],
+            )
+            self.assertEqual(
+                "apple",
+                status(self.root, "C001", details="metrics")["metrics"]["platform_profile"]["name"],
+            )
         finally:
             restore_environment(previous)
 
@@ -572,6 +724,8 @@ class CoreResetTests(unittest.TestCase):
             reviewed = review_run(self.root, change_id="C001", kind="code")
             card = reviewed["human_decision"]
             self.assertEqual("Принять результат? Да / Нет.", card["prompt"])
+            self.assertEqual("Принятие реализации", card["presentation"]["title"])
+            self.assertIn("release и production", card["presentation"]["effect"])
             self.assertEqual(card, status(self.root, "C001")["human_decision"])
             with self.assertRaisesRegex(IntegrityError, "affirmative"):
                 approve(

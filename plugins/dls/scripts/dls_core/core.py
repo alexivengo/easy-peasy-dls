@@ -56,6 +56,12 @@ DESIGN_DIGEST_CONTRACT = "dls-design-digest/v1"
 DEFINITION_DIGEST_REBASE_CONTRACT = "dls-definition-digest-rebase/v1"
 CANDIDATE_BASE_RECOVERY_CONTRACT = "dls-candidate-base-recovery/v1"
 HUMAN_DECISION_CONTRACT = "dls-human-decision/v1"
+DECISION_LABELS = {
+    "definition": "Описание результата",
+    "architecture": "Архитектура",
+    "design": "Дизайн",
+    "accept": "Принятие реализации",
+}
 ARCH_START = "<!-- dls:architecture:start -->"
 ARCH_END = "<!-- dls:architecture:end -->"
 DESIGN_START = "<!-- dls:design:start -->"
@@ -495,11 +501,34 @@ def human_decision(
         "review_id": review_id,
         "decisions": decisions,
     }
+    if action_id == "accept":
+        presentation = {
+            "title": "Принятие реализации",
+            "summary": "Решение относится к проверенному HEAD.",
+            "effect": "Да фиксирует acceptance; release и production остаются неподтверждёнными.",
+            "unchanged_on_no": True,
+        }
+    else:
+        presentation = {
+            "title": "Подтверждение решений",
+            "summary": "Подтвердите только перечисленные решения для текущего определения.",
+            "effect": "Да записывает отдельные approvals; implementation, review, release и production не подтверждаются автоматически.",
+            "unchanged_on_no": True,
+        }
+    presentation["items"] = [
+        {
+            "decision": item["decision"],
+            "label": DECISION_LABELS[item["decision"]],
+            "short_digest": item["digest"][:12],
+        }
+        for item in decisions
+    ]
     return {
         **basis,
         "id": stable_digest(basis),
         "prompt": prompt,
         "choices": ["Да", "Нет"],
+        "presentation": presentation,
     }
 
 
@@ -715,6 +744,22 @@ def status(root: Path, change_id: str, *, details: str | None = None) -> dict[st
     action = next_action(root, state)
     candidate = current_candidate(root, state)
     review = current_review(root, state)
+    definition_review = state.get("definition_review")
+    metrics_review = review
+    if metrics_review is None and isinstance(definition_review, dict):
+        if definition_review_current(root, state, projection):
+            metrics_review = definition_review
+    profile = resolve_profile(root)
+    capabilities = profile["domain_capabilities"]
+    skills = profile["domain_skills"]
+    platform_profile = {
+        "contract": profile["contract"],
+        "name": profile["name"],
+        "digest": profile["digest"],
+        "domain_capabilities": capabilities[:16],
+        "domain_skills": skills[:16],
+        "omitted_count": max(0, len(capabilities) - 16) + max(0, len(skills) - 16),
+    }
     output: dict[str, Any] = {
         "ok": True,
         "schema_version": STATE_SCHEMA,
@@ -731,6 +776,7 @@ def status(root: Path, change_id: str, *, details: str | None = None) -> dict[st
         "review_id": (review or {}).get("review_id"),
         "review_head": (review or {}).get("head_sha"),
         "review_verdict": (review or {}).get("verdict"),
+        "platform_profile": platform_profile,
         "next_action": action,
         "human_decision": human_decision(root, state, action=action),
     }
@@ -738,7 +784,10 @@ def status(root: Path, change_id: str, *, details: str | None = None) -> dict[st
         output["findings"] = list(state["findings"].values())[:64]
         output["omitted_count"] = max(0, len(state["findings"]) - 64)
     elif details == "metrics":
-        output["metrics"] = (review or {}).get("usage", {})
+        output["metrics"] = {
+            **(metrics_review or {}).get("usage", {}),
+            "platform_profile": (metrics_review or {}).get("platform_profile"),
+        }
     elif details == "history":
         output["approvals"] = state["approvals"]
         output["migration"] = state.get("migration")
