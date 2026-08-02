@@ -6,6 +6,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import uuid
 from pathlib import Path
 
 from dls_core.cli import build_parser, dispatch
@@ -24,6 +25,7 @@ from dls_core.core import (
 from dls_core.errors import IntegrityError
 from dls_core.runner import (
     BUDGETS,
+    RUNNER_CONTRACT,
     _codex_argv,
     _conflicts,
     _model_call,
@@ -74,6 +76,32 @@ class CoreResetTests(unittest.TestCase):
                 output=self.root / "decision.json",
             )
             self.assertIn("--skip-git-repo-check", argv)
+        finally:
+            restore_environment(previous)
+
+    def test_new_model_execution_contract_does_not_reuse_old_failed_run(self) -> None:
+        log, previous = self._prepare_code(control="routine")
+        try:
+            state = load_state(self.root, "C001")
+            pack = json.loads((self.root / state["candidate"]["pack_path"]).read_text())
+            old_digest = stable_digest({
+                "kind": "review",
+                "pack_digest": pack["pack_digest"],
+                "runner_contract": RUNNER_CONTRACT,
+            })
+            old_run_id = str(uuid.uuid5(uuid.NAMESPACE_URL, old_digest))
+            mutate_state(
+                self.root,
+                "C001",
+                lambda value: value.update({"active_run": {
+                    "run_id": old_run_id,
+                    "status": "failed",
+                    "lanes": {"primary:repair": {"status": "failed"}},
+                }}),
+            )
+            result = review_run(self.root, change_id="C001", kind="code")
+            self.assertEqual("review-clear", result["verdict"])
+            self.assertNotEqual(old_run_id, load_state(self.root, "C001")["active_run"]["run_id"])
         finally:
             restore_environment(previous)
 

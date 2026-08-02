@@ -50,6 +50,7 @@ from .repo import (
 )
 
 RUNNER_CONTRACT = "dls-review-runner/v4"
+MODEL_EXECUTION_CONTRACT = "dls-model-exec/v2"
 ROUTING_CONTRACT = "dls-review-routing/v1"
 PACK_CONTRACT = "dls-review-pack/v3"
 RESULT_CONTRACT = "dls-review-ir/v3"
@@ -1620,6 +1621,7 @@ def review_run(
             "kind": "review",
             "pack_digest": pack["pack_digest"],
             "runner_contract": RUNNER_CONTRACT,
+            "model_execution_contract": MODEL_EXECUTION_CONTRACT,
         }
     )
     run_id = str(uuid.uuid5(uuid.NAMESPACE_URL, contract_digest))
