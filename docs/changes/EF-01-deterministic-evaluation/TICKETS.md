@@ -15,7 +15,9 @@ Scope:
 - Add the privacy-minimal Markdown decision log and a synthetic record.
 - Strengthen the demonstrated HC-01 and HC-04 hard-oracle tests, add one
   isolated validator-contract test, and add the dependency-definition-drift
-  regression. Reuse the existing DLS test suite for all of them.
+  regression. Add one clean-archive `codex`-sentinel regression proving the
+  three L0 commands do not invoke a live model. Reuse the existing DLS test
+  suite for all of them.
 
 Acceptance:
 
@@ -27,6 +29,8 @@ Acceptance:
   passes.
 - An acceptance recorded against an old target definition cannot unlock a
   dependent candidate.
+- The three L0 commands pass behind the failing live-`codex` sentinel without
+  invoking it; existing temporary fake-Codex tests remain allowed doubles.
 - No new runner, JSONL, model call, or lifecycle verdict is introduced.
 
 Validation:

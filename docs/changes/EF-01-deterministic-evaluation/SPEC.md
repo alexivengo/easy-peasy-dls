@@ -67,6 +67,13 @@ single suite executor; no model call is part of this change.
   target whose current `accept` approval digest differs from the stored target
   definition digest. Add the focused regression where a target definition
   changes after acceptance, then a dependent candidate remains blocked.
+- Add one focused no-live-model regression. It runs the three M1 commands from
+  a clean `git archive` with a failing `codex` sentinel first on `PATH` and an
+  inherited `DLS_L0_SENTINEL_CHILD=1` flag to prevent recursive self-invocation.
+  The child suite may use its existing temporary fake-Codex fixtures, but the
+  sentinel must have no invocation record. A sentinel invocation fails the
+  test; this proves the validation commands make no live PATH-resolved model
+  call.
 - The synthetic row is not an M1-exit verdict. After EF-01 acceptance, the M2
   definition may record the acceptance evidence and receives a fresh independent
   definition review. Its implementation is gated by the existing DLS
@@ -118,6 +125,12 @@ adds no duplicate regression test unless implementation demonstrates a gap.
   and the new definition-drift regression.
   A copied receipt tuple is audit evidence only. The synthetic row cannot
   authorize M2, release, or production.
+
+  `test_core_reset_v011.CoreResetTests.test_l0_validation_does_not_invoke_live_codex`
+  runs the clean-archive `run_tests.py`, public validator, and compile command
+  behind the `codex` sentinel. The child-set sentinel flag prevents recursive
+  execution; existing temporary fake-Codex fixtures remain test doubles, not
+  live model calls.
 
 <!-- dls:architecture:start -->
 ## Architecture and alternatives
