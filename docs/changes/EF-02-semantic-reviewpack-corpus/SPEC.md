@@ -10,6 +10,10 @@ adds the smallest release-only evidence slice: four synthetic frozen cases,
 manual bounded execution, and Markdown records. It does not automate the
 procedure or grant a release decision.
 
+In this contract, a live M2 arm is the runbook's `manual-m2-arm`: a
+release-authorized human procedure for one declared disposable fixture. It is
+not a new DLS command and it is not a synonym for ordinary DLS review.
+
 ## Scope
 
 ### Frozen-case contract
@@ -86,6 +90,17 @@ final M2 decision; the decision-record transition later replaces it with the
 verified `retained-until:YYYY-MM-DD` date. Permitted manifest differences are
 arm-scoped in the `Arm records` table below; no case-wide difference exists.
 
+The planned positive fixture uses this exact profile. In every `Case fields`
+table, `case_id` is its registry ID; `claim`, `oracle_owner`,
+`time_ceiling_seconds`, `token_ceiling`, `privacy`, and `custody_retention` use
+their normative values above. `fixture_sha`, `tree_digest`, `task_input_digest`,
+`oracle_version`, `oracle_digest`, `custody_digest`, and
+`current_manifest_digest` are `not-locked`. `reference_manifest_digest` is
+`not-applicable` for SR-01/SR-02 and `not-locked` for SR-03/SR-04.
+`repair_access_digest` is `not-applicable` for SR-01/SR-02/SR-03 and
+`not-locked` for SR-04. Thus `not-applicable` is a required structural
+exception, not a lock placeholder.
+
 `docs/evaluation-m2-decisions.md` has `# M2 release records`, `## SR-01`
 through `## SR-04`, then `## M2 decision`, in that order. Each case has a
 `Record fields` table with header `Field | Value` and this exact field order:
@@ -102,6 +117,16 @@ Attempts | Successful calls | Finding class`. Its rows use the arm order in the
 registry: the current arm first, then the reference arm where one exists.
 `docs/evaluation-m2-cases.md` uses that same `Arm records` table with expected
 columns populated and all actual columns set to `not-run`.
+
+In a planned `Record fields` table, `case_id` is its registry ID and
+`run_state` is `planned`; `fixture_sha`, `tree_digest`, `task_input_digest`,
+`oracle_version`, `oracle_digest`, `custody_digest`, and
+`current_manifest_digest` are `not-locked`.
+`reference_manifest_digest` is `not-applicable` for SR-01/SR-02 and
+`not-locked` for SR-03/SR-04. `processed_tokens` and `wall_time_seconds` are
+`not-run`; `custody_retention` is `retained-for:365d-after-decision`; and
+`privacy_retention` is `not-applicable`. Its actual arm columns are all
+`not-run`.
 
 `Expected verdict` and `Actual verdict` are one of `review-clear`,
 `not-clear`, `not-applicable`, or `not-run`. `Expected lanes` and `Lanes` are
@@ -153,7 +178,8 @@ its contracted primary/secondary/repair counts.
 `## Preconditions`, `## Custody and locks`, `## Arm order`, `## Attempt
 accounting`, `## Stop outcomes`, `## Record transition`, and `## Retention`.
 Every section has exactly one `Rule | Value` table. The exact ordered rules are
-`dependency`, `plugin-version`, `fresh-task`, `source-clean`;
+`dependency`, `plugin-version`, `fresh-task`, `source-clean`,
+`manual-m2-arm`;
 `custody-bundle`, `lock-check`, `private-replay`; `SR-01`, `SR-02`, `SR-03`,
 `SR-04`; `attempt-syntax`, `successful-call-syntax`, `sample-budget`,
 `transport-retry`; `hard-gate`, `invalid-case`, `infrastructure-failed`,
@@ -169,6 +195,7 @@ and value rather than executing a command from the document.
 | Preconditions | `plugin-version` | `dls 0.13.6+codex.20260802111333; reinstall or hot reload during an arm invalidates that arm` |
 | Preconditions | `fresh-task` | `a new Codex task starts before the first arm; no restart during an arm` |
 | Preconditions | `source-clean` | `the fixture and DLS source are clean before and after each arm` |
+| Preconditions | `manual-m2-arm` | `a release-authorized human invokes unchanged review-run --kind code in the declared disposable fixture; this M2 procedure does not restrict ordinary definition/code review` |
 | Custody and locks | `custody-bundle` | `one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, and SR-04 access proof` |
 | Custody and locks | `lock-check` | `fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-access locks match before a live arm` |
 | Custody and locks | `private-replay` | `an authorized evaluator receives read-only bundle access and reproduces every recorded lock before an arm` |
@@ -184,7 +211,7 @@ and value rather than executing a command from the document.
 | Stop outcomes | `invalid-case` | `only SR-04.fail-closed is the expected contrast invalid-case; every other invalid-case makes M2 not-clear` |
 | Stop outcomes | `infrastructure-failed` | `missing cumulative meter, transport failure without the permitted retry, or unavailable lock evidence makes M2 not-clear` |
 | Stop outcomes | `budget-exhausted` | `a call that would exceed call, time, or token ceiling is not launched and makes M2 not-clear` |
-| Record transition | `planned` | `all locks not-locked; actual arm values not-run; custody retained-for:365d-after-decision` |
+| Record transition | `planned` | `the planned profile uses not-locked lock placeholders except required not-applicable values; actual arm values and meters not-run; custody retained-for:365d-after-decision` |
 | Record transition | `locked-not-run` | `all locks match the case record; actual arm values not-run; custody retained-for:365d-after-decision` |
 | Record transition | `completed` | `terminal arm values and cumulative meters recorded; missing meter is infrastructure-failed` |
 | Record transition | `aborted` | `a stop writes decision_state=aborted and m2_outcome=not-clear; the executed case prefix is retained and all later case records stay unrun` |
@@ -200,7 +227,7 @@ The focused test and public validator expose one assertion per schema rule:
 | `m2-document-order` | all three heading sequences, case order, and arm order |
 | `m2-field-shape` | every table header, field order, duplicate/unknown field rejection, oracle owner, repair-access lock, arm-scoped manifest difference, call contract, safety count, and decision date |
 | `m2-enums` | digest/SHA syntax, manifest differences, literals, lanes, outcomes, finding classes, metrics, and retention |
-| `m2-state-transition` | planned, locked-not-run, completed, aborted, retention-date, and pre-live no-result values |
+| `m2-state-transition` | planned profile, locked-not-run, completed, aborted, retention-date, and pre-live no-result values |
 | `m2-attempt-budget` | arm contracts/counters, seven/eight completed samples, and bounded partial aborted samples |
 | `m2-metering` | authoritative cumulative meters; unknown meter makes the sample non-clear |
 | `m2-overall-outcome` | current safety/hard-oracle predicate and the two allowed contrast references |
@@ -264,7 +291,7 @@ only these transitions and the field values from the normative schema:
 
 | State | Required values | Forbidden values | Transition |
 |---|---|---|---|
-| `planned` | every lock field is `not-locked`; custody is `retained-for:365d-after-decision`; every actual arm column is `not-run`; decision is `pending-live-sample` | a locked digest, terminal result, or metrics | lock only |
+| `planned` | the exact planned profile above, including its required `not-applicable` exceptions; custody is `retained-for:365d-after-decision`; every actual arm column and meter is `not-run`; decision is `pending-live-sample` | a locked digest, terminal result, or metric | lock only |
 | `locked-not-run` | every required lock/custody value matches its case record; custody is `retained-for:365d-after-decision`; every actual arm column remains `not-run` | terminal outcome, counter, or invented metric | execute only |
 | `completed` | terminal values for every executed arm, with hard oracle, safety count, lanes, attempt counters, successful-call counters, cumulative metrics, and finding class; after a stop arm, later declared arms may remain wholly `not-run` | an unrun arm before a terminal stop arm or an invented metric | none |
 
@@ -333,10 +360,12 @@ below.
 2. create the case's disposable synthetic Git fixture privately from its
    custody bundle, lock its SHA/digests, and validate its current manifest;
    validate a same-day reference manifest only for SR-03/SR-04;
-3. run the current arm and, only for SR-03/SR-04, its allowed same-day
-   reference. Immediately run the declared hard oracle, then record the
-   authoritative cumulative time/token meters for every launched attempt; an
-   unavailable meter records `unknown`, makes the affected arm
+3. invoke `manual-m2-arm` for the current arm and, only for SR-03/SR-04, its
+   allowed same-day reference. It invokes unchanged `review-run --kind code` in
+   that declared disposable fixture; this release-only scope does not restrict
+   ordinary definition/code review. Immediately run the declared hard oracle,
+   then record the authoritative cumulative time/token meters for every launched
+   attempt; an unavailable meter records `unknown`, makes the affected arm
    `infrastructure-failed`, and prevents a clear M2 outcome;
 4. stop on a hard-gate, privacy, budget, manifest, or infrastructure failure;
    record its terminal `aborted`/`not-clear` decision, preserve its executed
@@ -413,7 +442,9 @@ remains M2-incomplete.
   They are discovery references, not live semantic evidence.
 - `python3 plugins/dls/scripts/run_tests.py`,
   `python3 scripts/validate_public_repo.py`, and compileall are deterministic
-  and must stay model-free. `review-run` is release-only live execution.
+  and must stay model-free. Only `manual-m2-arm` is release-only live M2
+  execution; existing `review-run --kind definition|code` lifecycle behavior
+  remains unchanged outside a declared fixture arm.
 - DLS accepts only repository-derived ReviewPacks; no public CLI accepts a
   caller-supplied pack path. The runbook therefore creates a disposable
   fixture that produces its own pack.
@@ -441,11 +472,13 @@ remains M2-incomplete.
   It declares `invalid-case`, `infrastructure-failed`, or `budget-exhausted`
   and stops rather than reclassifying one as clear. It records a terminal
   `aborted`/`not-clear` outcome with partial attempts when needed. It uses exact
-  rule values, arm order, plugin invalidation, call contracts, and a
-  source-blind SR-04 repair proof.
+  rule values, arm order, the explicit `manual-m2-arm` fixture procedure,
+  plugin invalidation, call contracts, and a source-blind SR-04 repair proof.
 - `REQ-004`: No committed validation invokes `codex` or another live transport.
-  A release-only run uses a fresh task and the pinned installed DLS plugin;
-  reinstallation/hot reload during an arm invalidates that arm.
+  A release-only `manual-m2-arm` uses a fresh task and the pinned installed DLS
+  plugin; it preserves ordinary `review-run --kind definition|code` behavior
+  outside the declared fixture. Reinstallation/hot reload during an arm
+  invalidates that arm.
 - `REQ-005`: M2 can exit only if the validator's explicit clear-outcome
   predicate passes: every current arm and declared contrast reference satisfy
   the hidden checks, current-arm dangerous blocker misses and safety violations
@@ -482,6 +515,12 @@ public validator reads their fixed grammar; it does not create fixtures or
 make network/model calls. Existing DLS receipts continue to own candidate,
 review, acceptance, release, and production lifecycle facts.
 
+`manual-m2-arm` is a named runbook procedure, not a public CLI surface. A
+release-authorized human creates the locked disposable fixture and invokes the
+unchanged `review-run --kind code` there. The release-only boundary applies to
+those four fixture arms only; it neither changes nor prohibits ordinary DLS
+definition/code review.
+
 An incomplete field, mismatched lock/custody or repair-access digest, unexpected
 lane/call contract, failed hard oracle, nonzero current safety count, unknown
 meter, privacy violation, invalid manifest, infrastructure failure, or budget
@@ -503,10 +542,10 @@ credential, or private fixture marker. The public validator applies the exact
 P01…P07 marker policy and structural allowlist in `Deterministic public privacy
 grammar` to the three M2 documents.
 
-Live execution is release-only and outside ordinary CI. It runs at most four
-cases and seven nominal analysis/repair attempts in a week; one counted
-transport retry may raise the sample only to eight. It stops before a fifth
-case or ninth attempt. Semantic retries change the sample and require a
+Live M2 fixture-arm execution is release-only and outside ordinary CI. It runs
+at most four cases and seven nominal analysis/repair attempts in a week; one
+counted transport retry may raise the sample only to eight. It stops before a
+fifth case or ninth attempt. Semantic retries change the sample and require a
 separate later release event.
 
 ## UI/UX contract
@@ -524,8 +563,8 @@ not a user-interface surface.
 - `python3 -m compileall -q plugins/dls/scripts plugins/dls/hooks scripts`
 - focused grammar/privacy regressions for M2 documents
 - independent definition review for this exact digest
-- release-only manual SR-01…SR-04 exercise only after definition acceptance,
-  EF-01 accepted-in-base, and all locks are present
+- release-only `manual-m2-arm` SR-01…SR-04 exercise only after definition
+  acceptance, EF-01 accepted-in-base, and all locks are present
 
 ## Risk rationale
 
