@@ -15,9 +15,9 @@ one privacy-minimal Markdown decision log.
   missing test symbol; the existing `run_tests.py` remains the only test runner.
 - `docs/evaluation-decisions.md` supplies one small, privacy-minimal Markdown
   record format and a synthetic M1 record. It does not add JSONL or DLS state.
-- The synthetic M1 record is format evidence only. M1 exit is authorized only
-  by EF-01's canonical accepted DLS receipt; a later M2 definition records its
-  immutable receipt tuple and receives its own independent review.
+- The synthetic M1 record is format evidence only. M1 exit is enforced by the
+  existing DLS `accepted-in-base` dependency; a later M2 definition may record
+  the EF-01 acceptance evidence and receives its own independent review.
 
 ## Non-goals
 
@@ -49,8 +49,8 @@ one privacy-minimal Markdown decision log.
 - `REQ-003`: The decision log is Markdown-only, privacy-minimal, and contains a
   synthetic record without paths, raw transcripts, source, or secrets.
 - `REQ-004`: M1 checks make zero model calls and cannot authorize M2, release,
-  or production. Only an accepted EF-01 receipt plus the separately reviewed
-  M2 definition can unlock M2 implementation.
+  or production. Only DLS's accepted-in-base dependency can unlock M2
+  implementation; a copied receipt is audit evidence, never a gate.
 
 ## Risk rationale
 

@@ -38,10 +38,9 @@ single suite executor; no model call is part of this change.
   safety, cost/human delta, decision, next trigger, and privacy/retention
   status. Include one clearly synthetic M1-format record with no private data.
 - The synthetic row is not an M1-exit verdict. After EF-01 acceptance, the M2
-  definition must record the immutable canonical receipt tuple (`change_id`,
-  accepted source HEAD, definition digest, and receipt digest) and receive a
-  fresh independent definition review. The authoritative M1 gate check is DLS
-  `status EF-01 --details receipt`, not the Markdown record.
+  definition may record the acceptance evidence and receives a fresh independent
+  definition review. Its implementation is gated by the existing DLS
+  `accepted-in-base` dependency, not the Markdown record or copied receipt.
 
 ## Non-goals
 
@@ -74,11 +73,17 @@ adds no duplicate regression test unless implementation demonstrates a gap.
 - `REQ-003`: `evaluation-decisions.md` is a Markdown-only log with all required
   fields and a synthetic, privacy-safe record. It contains no local path, raw
   transcript, source, secret, or private fixture content.
-- `REQ-004`: All EF-01 validation has zero model calls. M2 implementation
-  remains blocked until DLS reports EF-01 accepted in base with its canonical
-  receipt tuple and an independently reviewed M2 definition records that
-  immutable reference. The synthetic row is evidence of log format only; it
-  cannot authorize M2, release, or production.
+- `REQ-004`: All EF-01 validation has zero model calls. Before M2
+  implementation, DLS must store `dependency set EF-02 --on EF-01` with
+  `requires=accepted-in-base` and the EF-01 target definition digest. At
+  `candidate-ready`, the existing dependency check requires that digest to
+  match, a current EF-01 `accept` approval with `git_sha` to exist, and that
+  accepted SHA to be an ancestor of the M2 HEAD; it otherwise returns
+  `wait-dependency` or `rebase-after-dependency`. This is the authoritative
+  gate and is already covered by
+  `test_core_reset_v011.CoreResetTests.test_dependency_requires_accepted_head_in_base`.
+  A copied receipt tuple is audit evidence only. The synthetic row cannot
+  authorize M2, release, or production.
 
 <!-- dls:architecture:start -->
 ## Architecture and alternatives
@@ -105,9 +110,10 @@ hook, DLS state schema, or runtime API changes.
 
 The decision log remains repository documentation. A malformed or incomplete
 record is not a PASS and cannot claim M1 exit, release, or production. The
-synthetic M1 row is never an authorization. The authoritative M1-exit evidence
-is the DLS receipt tuple; the later M2 definition records that immutable tuple
-and is independently reviewed before implementation can begin.
+synthetic M1 row and any copied receipt are never authorization. The
+authoritative M1-exit gate is DLS's existing accepted-in-base dependency check:
+matching target definition digest, current accept SHA, and Git ancestry. The
+later M2 definition is independently reviewed before implementation can begin.
 
 ## Security, privacy, data, and operations
 
