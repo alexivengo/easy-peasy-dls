@@ -36,8 +36,10 @@ Each case must lock, before its first live arm:
 4. current arm-manifest digest and every permitted difference; a reference
    manifest digest only for SR-03/SR-04, otherwise the literal
    `not-applicable`;
-5. expected verdict, expected lanes, maximum calls, and time/token ceilings;
-6. privacy class `public-synthetic` and the owner of the hidden oracle.
+5. expected verdict, expected lanes, a literal per-arm maximum-call contract,
+   and time/token ceilings;
+6. privacy class `public-synthetic`, the hidden-oracle owner, and (for SR-04)
+   the digest of its source-blind repair-access proof.
 
 Case text tells the reviewer only the task and ordinary ReviewPack context. The
 hidden oracle, expected finding wording, fixture source, and result matcher
@@ -68,17 +70,22 @@ Each case section has a `Case fields` table with the exact header `Field |
 Value` and this field order:
 
 `case_id`, `claim`, `fixture_sha`, `tree_digest`, `task_input_digest`,
-`oracle_version`, `oracle_digest`, `custody_digest`, `current_manifest_digest`,
-`reference_manifest_digest`, `permitted_manifest_difference`,
-`time_ceiling_seconds`, `token_ceiling`, `privacy`, `custody_retention`.
+`oracle_version`, `oracle_digest`, `oracle_owner`, `custody_digest`,
+`repair_access_digest`, `current_manifest_digest`, `reference_manifest_digest`,
+`permitted_manifest_difference`, `time_ceiling_seconds`, `token_ceiling`,
+`privacy`, `custody_retention`.
 
 Every digest is lowercase `sha256:<64 hex>` when locked and `not-locked` only
 in `planned`; `fixture_sha` is lowercase `git:<40 hex>` when locked.
-`reference_manifest_digest` is `not-applicable` only for SR-01/SR-02. `privacy`
-is exactly `public-synthetic`; `time_ceiling_seconds` and `token_ceiling` are
-positive base-10 integers. `custody_retention` is
-`retained-until:YYYY-MM-DD` and must be at least one year after the recorded M2
-decision date. `permitted_manifest_difference` is exactly one of:
+`reference_manifest_digest` is `not-applicable` only for SR-01/SR-02.
+`oracle_owner` is exactly `dls-maintainer`; `repair_access_digest` is
+`not-applicable` except for SR-04, where it is a locked digest of the private
+source-blind access proof. `privacy` is exactly `public-synthetic`;
+`time_ceiling_seconds` and `token_ceiling` are positive base-10 integers.
+`custody_retention` is exactly `retained-for:365d-after-decision` before the
+final M2 decision; the decision-record transition later replaces it with the
+verified `retained-until:YYYY-MM-DD` date. `permitted_manifest_difference` is
+exactly one of:
 
 | Arm | Value |
 |---|---|
@@ -96,12 +103,13 @@ through `## SR-04`, then `## M2 decision`, in that order. Each case has a
 `case_id`, `run_state`, `fixture_sha`, `tree_digest`, `task_input_digest`,
 `oracle_version`, `oracle_digest`, `custody_digest`, `current_manifest_digest`,
 `reference_manifest_digest`, `processed_tokens`, `wall_time_seconds`,
-`privacy_retention`.
+`custody_retention`, `privacy_retention`.
 
 It follows with an `Arm records` table whose exact header is `Arm | Expected
-verdict | Expected lanes | Actual verdict | Outcome | Hard oracle | Lanes |
-Attempts | Successful calls | Finding class`. Its rows use the arm order in the
-registry: the current arm first, then the reference arm where one exists.
+verdict | Expected lanes | Call contract | Repair access | Actual verdict |
+Outcome | Hard oracle | Safety violations | Lanes | Attempts | Successful calls |
+Finding class`. Its rows use the arm order in the registry: the current arm
+first, then the reference arm where one exists.
 `docs/evaluation-m2-cases.md` uses that same `Arm records` table with expected
 columns populated and all actual columns set to `not-run`.
 
@@ -114,14 +122,37 @@ of `passed`, `product-failed`, `component-failed`, `infrastructure-failed`,
 `dangerous-miss`, `uncertain`, `no-finding`, `not-applicable`, or `not-run`.
 SR-01.current and SR-04.repair use `no-finding` on a clear result;
 SR-04.fail-closed uses `not-applicable`; no other literal stands for an absent
-finding.
+finding. `Call contract` is exactly
+`primary=<n>;secondary=<n>;repair=<n>;transport-retry<=<n>`, with each `<n>` a
+non-negative base-10 integer. Its six fixed values are:
+
+| Arm | Call contract | Repair access |
+|---|---|---|
+| `SR-01.current` | `primary=1;secondary=0;repair=0;transport-retry<=1` | `not-applicable` |
+| `SR-02.current` | `primary=1;secondary=0;repair=0;transport-retry<=1` | `not-applicable` |
+| `SR-03.current` | `primary=1;secondary=1;repair=0;transport-retry<=1` | `not-applicable` |
+| `SR-03.primary-only` | `primary=1;secondary=0;repair=0;transport-retry<=1` | `not-applicable` |
+| `SR-04.repair` | `primary=1;secondary=0;repair=1;transport-retry<=1` | `source-blind:review-output+format-error` |
+| `SR-04.fail-closed` | `primary=0;secondary=0;repair=0;transport-retry<=0` | `not-applicable` |
+
+`Repair access` is checked literally. For SR-04.repair it means the compact
+repair receives only the prior review output and its format error: no fixture
+source, task source, hidden oracle, or private custody content. Its private
+access proof must have zero such reads and hash to the case's
+`repair_access_digest`. Before execution `Safety violations` is `not-run`; once
+completed it is a non-negative base-10 integer for every current arm and
+`not-applicable` for every reference arm. It counts a hidden-oracle confirmed
+dangerous defect that reached `review-clear`, plus a failed current-arm safety
+hard oracle. A nonzero value is a hard-gate failure.
 
 `Attempts` is exactly `primary=<n>;secondary=<n>;repair=<n>;transport-failed=<n>`
 and `Successful calls` is exactly `primary=<n>;secondary=<n>;repair=<n>`, with
 each `<n>` a non-negative base-10 integer. Before execution both are `not-run`.
 The validator sums every arm's attempt counters and requires exactly seven for
 a completed no-retry sample or eight with exactly one transport-failed attempt;
-the matching per-case ceiling and all successful-call counters must agree.
+the matching per-case ceiling and all successful-call counters must agree. A
+counter never exceeds its arm's `Call contract`; a passed arm's successful-call
+counter equals its contracted primary/secondary/repair counts.
 
 `docs/evaluation-m2-runbook.md` has, in order, `# M2 release runbook`,
 `## Preconditions`, `## Custody and locks`, `## Arm order`, `## Attempt
@@ -133,20 +164,50 @@ Every section has exactly one `Rule | Value` table. The exact ordered rules are
 `transport-retry`; `hard-gate`, `invalid-case`, `infrastructure-failed`,
 `budget-exhausted`; `planned`, `locked-not-run`, `completed`, `decision`; and
 `custody-retention`, `raw-output-retention`, `public-record`. Their values are
-the dependency, arm order, attempt syntax, transition rules, and retention
-policy in this specification. The validator asserts every heading, table, rule,
-and named value rather than executing a command from the document.
+the following exact literals; the validator asserts every heading, table, rule,
+and value rather than executing a command from the document.
+
+| Section | Rule | Value |
+|---|---|---|
+| Preconditions | `dependency` | `EF-01 accepted-in-base at d4b9e2f57c4061249d6ac346479aedd6149ed24e069f9b9c0552178b86d7b1c5` |
+| Preconditions | `plugin-version` | `dls 0.13.6+codex.20260802111333; reinstall or hot reload during an arm invalidates that arm` |
+| Preconditions | `fresh-task` | `a new Codex task starts before the first arm; no restart during an arm` |
+| Preconditions | `source-clean` | `the fixture and DLS source are clean before and after each arm` |
+| Custody and locks | `custody-bundle` | `one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, and SR-04 access proof` |
+| Custody and locks | `lock-check` | `fixture, tree, input, oracle, custody, manifest, and SR-04 repair-access digests match before a live arm` |
+| Custody and locks | `private-replay` | `an authorized evaluator receives read-only bundle access and reproduces every recorded lock before an arm` |
+| Arm order | `SR-01` | `SR-01.current` |
+| Arm order | `SR-02` | `SR-02.current` |
+| Arm order | `SR-03` | `SR-03.current then SR-03.primary-only on the same day` |
+| Arm order | `SR-04` | `SR-04.repair then SR-04.fail-closed on the same day` |
+| Attempt accounting | `attempt-syntax` | `primary=n;secondary=n;repair=n;transport-failed=n` |
+| Attempt accounting | `successful-call-syntax` | `primary=n;secondary=n;repair=n` |
+| Attempt accounting | `sample-budget` | `seven nominal calls; at most eight calls across SR-01 through SR-04` |
+| Attempt accounting | `transport-retry` | `one sample-wide retry before a semantic result and within its case and sample ceilings` |
+| Stop outcomes | `hard-gate` | `a current safety violation or failed current hard oracle stops that case and makes M2 not-clear` |
+| Stop outcomes | `invalid-case` | `only SR-04.fail-closed is the expected contrast invalid-case; every other invalid-case makes M2 not-clear` |
+| Stop outcomes | `infrastructure-failed` | `missing cumulative meter, transport failure without the permitted retry, or unavailable lock evidence makes M2 not-clear` |
+| Stop outcomes | `budget-exhausted` | `a call that would exceed call, time, or token ceiling is not launched and makes M2 not-clear` |
+| Record transition | `planned` | `all locks not-locked; actual arm values not-run; custody retained-for:365d-after-decision` |
+| Record transition | `locked-not-run` | `all locks match the case record; actual arm values not-run; custody retained-for:365d-after-decision` |
+| Record transition | `completed` | `terminal arm values and cumulative meters recorded; missing meter is infrastructure-failed` |
+| Record transition | `decision` | `keep/improve/delete only for a clear M2 outcome with useful evidence; otherwise not-applicable` |
+| Retention | `custody-retention` | `retain each private bundle through the verified date at least 365 days after the final M2 decision` |
+| Retention | `raw-output-retention` | `keep raw private output no longer than 30 days or the final decision, whichever is earlier` |
+| Retention | `public-record` | `public synthetic locks, typed outcomes, counters, and dates only; no path, prompt, transcript, source, session, or secret` |
 
 The focused test and public validator expose one assertion per schema rule:
 
 | Assertion | Schema coverage |
 |---|---|
 | `m2-document-order` | all three heading sequences, case order, and arm order |
-| `m2-field-shape` | every table header, field order, and duplicate/unknown field rejection |
+| `m2-field-shape` | every table header, field order, duplicate/unknown field rejection, oracle owner, repair-access lock, call contract, safety count, and decision date |
 | `m2-enums` | digest/SHA syntax, literals, lanes, outcomes, finding classes, metrics, and retention |
-| `m2-state-transition` | planned, locked-not-run, completed, and pre-live no-result values |
-| `m2-attempt-budget` | arm counters, seven nominal attempts, one retry, and eight-attempt maximum |
-| `m2-decision-evidence` | completed useful arm token required for keep/improve/delete |
+| `m2-state-transition` | planned, locked-not-run, completed, retention-date, and pre-live no-result values |
+| `m2-attempt-budget` | arm contracts/counters, seven nominal attempts, one retry, and eight-attempt maximum |
+| `m2-metering` | authoritative cumulative meters; unknown meter makes the sample non-clear |
+| `m2-overall-outcome` | current safety/hard-oracle predicate and the two allowed contrast references |
+| `m2-decision-evidence` | clear M2 outcome plus completed useful arm token required for keep/improve/delete |
 | `m2-privacy` | prohibited raw artifact markers and non-executable document boundary |
 
 ### Record state, custody, and transition grammar
@@ -157,33 +218,51 @@ only these transitions and the field values from the normative schema:
 
 | State | Required values | Forbidden values | Transition |
 |---|---|---|---|
-| `planned` | every lock field is `not-locked`; every actual arm column is `not-run`; decision is `pending-live-sample` | a locked digest, terminal result, or metrics | lock only |
-| `locked-not-run` | every required lock/custody value matches its case record; every actual arm column remains `not-run` | terminal outcome, counter, or invented metric | execute only |
-| `completed` | terminal outcome, hard oracle, lanes, attempt counters, successful-call counters, metrics or `unknown`, and finding class for every declared arm | `not-locked` or `not-run` actual field | none |
+| `planned` | every lock field is `not-locked`; custody is `retained-for:365d-after-decision`; every actual arm column is `not-run`; decision is `pending-live-sample` | a locked digest, terminal result, or metrics | lock only |
+| `locked-not-run` | every required lock/custody value matches its case record; custody is `retained-for:365d-after-decision`; every actual arm column remains `not-run` | terminal outcome, counter, or invented metric | execute only |
+| `completed` | terminal outcome, hard oracle, safety count, lanes, attempt counters, successful-call counters, cumulative metrics, and finding class for every declared arm | `not-locked` or `not-run` actual field | none |
 
 The document has exactly four records, one per SR ID, and one decision record.
 While any case is non-completed, the decision is exactly
-`pending-live-sample` with `not-applicable` rationale. Only after all four
-records are completed may it become exactly one `keep`, `improve`, or `delete`
-decision with its useful-evidence rationale. `## M2 decision` has a `Decision
-fields` table with exact header `Field | Value` and row order `decision_state`,
-`decision`, `evidence`. In the pending state its values are
-`pending-live-sample`, `not-applicable`, and `not-applicable`. In the completed
-state they are `completed`, one of `keep`, `improve`, `delete`, and one or more
-semicolon-separated `SR-##.<arm>:useful` tokens. Each token must name a
-completed arm whose `Finding class` is exactly `useful`; `no-finding`, `noisy`,
-`dangerous-miss`, `uncertain`, and `not-applicable` cannot support a decision.
-This is a transition contract, not a fabricated result.
+`pending-live-sample` with no outcome or rationale. `## M2 decision` has a
+`Decision fields` table with exact header `Field | Value` and row order
+`decision_state`, `decision_date`, `m2_outcome`, `decision`, `evidence`. In the
+pending state its values are `pending-live-sample`, `not-run`, `not-run`,
+`not-applicable`, and `not-applicable`. Only after all four records are
+completed may its values become `completed`, an ISO `YYYY-MM-DD` decision date,
+and `clear` or `not-clear`. At that transition every case's
+`custody_retention` becomes `retained-until:YYYY-MM-DD`, a date at least 365
+calendar days after `decision_date` (the validator compares calendar dates,
+including leap years).
 
-For reproducibility, the DLS maintainer creates one immutable private custody
+`m2_outcome` is `clear` only when every current arm has outcome `passed`, hard
+oracle `passed`, zero safety violations, its exact expected verdict/lanes, and
+contract-bounded counters; both cumulative case meters are known non-negative
+integers within the case ceilings; SR-03.primary-only has its expected
+`review-clear`/`dangerous-miss` contrast; and SR-04.fail-closed has its expected
+`not-applicable`/`invalid-case` contrast. Any other product/component failure,
+failed hard oracle, current dangerous miss, nonzero safety count, missing meter,
+infrastructure failure, budget exhaustion, invalid case, routing/call mismatch,
+or reference result makes it `not-clear`. `keep`, `improve`, or `delete` is
+permitted only for `clear`, with one or more semicolon-separated
+`SR-##.<arm>:useful` tokens. Each token must name a completed arm whose
+`Finding class` is exactly `useful`; `no-finding`, `noisy`, `dangerous-miss`,
+`uncertain`, and `not-applicable` cannot support a decision. For `not-clear`,
+both `decision` and `evidence` are exactly `not-applicable`. This is a
+transition contract, not a fabricated result.
+
+For reproducibility, the `dls-maintainer` creates one immutable private custody
 bundle per case before `locked-not-run`. It contains the synthetic fixture
-recipe, fixed Git metadata, and hidden-oracle implementation; its bundle digest
-is recorded publicly. The maintainer retains the bundle for one year after the
-M2 decision and gives an independent evaluator read-only access on request.
-That evaluator recreates the disposable fixture privately and must reproduce
-the recorded fixture SHA, tree/input/oracle digests, and custody digest before
-running an arm. Raw live output is separate from custody and retains the
-30-day limit below.
+recipe, fixed Git metadata, and hidden-oracle implementation; SR-04 also
+contains its source-blind access proof. Its bundle digest (and SR-04
+repair-access digest) is recorded publicly. The maintainer retains the bundle
+through the verified retention date and gives an independent evaluator read-only
+access on request. That evaluator recreates the disposable fixture privately,
+verifies the owner and all recorded locks, and must reproduce the fixture SHA,
+tree/input/oracle/custody digests before running an arm. For SR-04 it must also
+verify that the compact repair proof has zero fixture/source/hidden-oracle
+reads. Raw live output is separate from custody and retains the 30-day limit
+below.
 
 ### Release-only procedure and records
 
@@ -195,8 +274,10 @@ running an arm. Raw live output is separate from custody and retains the
    custody bundle, lock its SHA/digests, and validate its current manifest;
    validate a same-day reference manifest only for SR-03/SR-04;
 3. run the current arm and, only for SR-03/SR-04, its allowed same-day
-   reference. Immediately run the declared hard oracle, then record metrics as
-   values or `unknown`;
+   reference. Immediately run the declared hard oracle, then record the
+   authoritative cumulative time/token meters for every launched attempt; an
+   unavailable meter records `unknown`, makes the affected arm
+   `infrastructure-failed`, and prevents a clear M2 outcome;
 4. stop on a hard-gate, privacy, budget, manifest, or infrastructure failure;
    only transport retries are permitted;
 5. delete raw local live artifacts after recording their digest-only outcome or
@@ -219,10 +300,12 @@ call, time, or token ceiling, it is not launched and the case becomes
 `docs/evaluation-m2-decisions.md` must contain exactly four case records and
 one M2 decision in the preceding transition grammar. Case/arm fields, values,
 and ordering are exactly the normative schema. Each completed case additionally
-has `processed_tokens` and `wall_time_seconds` in its `Record fields` table,
-each a non-negative base-10 integer or `unknown`; planned and locked-not-run
-use `not-run`. `privacy_retention` is `not-applicable` before completion and
-then `deleted` or `retained-until:YYYY-MM-DD`. It must not contain a path,
+has `processed_tokens` and `wall_time_seconds` in its `Record fields` table.
+Each is an authoritative cumulative non-negative base-10 integer across every
+launched attempt or `unknown`; `unknown` is permitted only with an
+`infrastructure-failed` arm and requires overall M2 `not-clear`. Planned and
+locked-not-run use `not-run`. `privacy_retention` is `not-applicable` before
+completion and then `deleted` or `retained-until:YYYY-MM-DD`. It must not contain a path,
 transcript, raw prompt, session, source, secret, or a release/production claim.
 
 ### Finding matcher
@@ -237,8 +320,8 @@ transcript, raw prompt, session, source, secret, or a release/production claim.
 
 The matcher has no second LLM judge and never scores exact prose or line
 numbers. A dangerous miss, hard-gate violation, unintended invalid case,
-infrastructure failure, or exhausted budget makes M2 incomplete and
-`not-clear`.
+infrastructure failure, unknown meter, or exhausted budget makes M2 incomplete
+and `not-clear`.
 The declared SR-03 primary-only reference is the sole exception: its expected
 dangerous miss is comparison evidence for routing value, is recorded as such,
 and never clears a current arm. Any dangerous miss in a current arm or an
@@ -277,8 +360,9 @@ remains M2-incomplete.
 - `REQ-001`: The three public M2 Markdown documents have an exact fixed grammar
   validated by the existing public validator and a focused stdlib test. It
   accepts only the defined `planned`, `locked-not-run`, and `completed` record
-  states and their transitions. The first implementation state is `planned`
-  with complete contracts and no fabricated live result.
+  states, cumulative-meter/retention rules, and their transitions. The first
+  implementation state is `planned` with complete contracts and no fabricated
+  live result.
 - `REQ-002`: Four fixture locks are created from clean synthetic Git fixtures
   and matching private custody bundles. Each live review starts only after all
   required fields are `locked-not-run`. SR-01/SR-02 are current-only; SR-03
@@ -289,13 +373,16 @@ remains M2-incomplete.
 - `REQ-003`: The runbook rejects a manifest that changes more than its declared
   component or lacks an applicable hard oracle before cost/quality comparison.
   It declares `invalid-case`, `infrastructure-failed`, or `budget-exhausted`
-  and stops rather than reclassifying one as clear.
+  and stops rather than reclassifying one as clear. It uses exact rule values,
+  arm order, plugin invalidation, call contracts, and a source-blind SR-04
+  repair proof.
 - `REQ-004`: No committed validation invokes `codex` or another live transport.
   A release-only run uses a fresh task and the pinned installed DLS plugin;
   reinstallation/hot reload during an arm invalidates that arm.
-- `REQ-005`: M2 can exit only if every current arm and its declared reference
-  behavior satisfy the hidden checks, current-arm dangerous blocker misses and
-  safety violations equal zero, observed routing and all call attempts match
+- `REQ-005`: M2 can exit only if the validator's explicit clear-outcome
+  predicate passes: every current arm and declared contrast reference satisfy
+  the hidden checks, current-arm dangerous blocker misses and safety violations
+  equal zero, meters are available, observed routing and all call attempts match
   each case contract, no retry exceeds a ceiling, and the completed M2 record
   contains a useful-evidence decision. The declared SR-03 reference miss and
   SR-04 fail-closed reference are comparison evidence only. This remains
@@ -328,11 +415,12 @@ public validator reads their fixed grammar; it does not create fixtures or
 make network/model calls. Existing DLS receipts continue to own candidate,
 review, acceptance, release, and production lifecycle facts.
 
-An incomplete field, mismatched lock/custody digest, unexpected lane/call
-attempt count, failed hard oracle, privacy violation, invalid manifest,
-infrastructure failure, or budget exhaustion records its typed outcome and ends
-that case. It cannot create a clear case or M2 exit. A live model's wording is
-untrusted evidence until the hidden oracle and matcher classify it.
+An incomplete field, mismatched lock/custody or repair-access digest, unexpected
+lane/call contract, failed hard oracle, nonzero current safety count, unknown
+meter, privacy violation, invalid manifest, infrastructure failure, or budget
+exhaustion records its typed outcome and ends that case. It cannot create a
+clear case or M2 exit. A live model's wording is untrusted evidence until the
+hidden oracle and matcher classify it.
 
 ## Security, privacy, data, and operations
 
