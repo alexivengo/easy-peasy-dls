@@ -1,0 +1,83 @@
+# Semantic ReviewPack corpus — Epic
+
+ID: `EF-02`
+
+## Product outcome
+
+M2 supplies four release-only, frozen semantic ReviewPack cases. Each case has
+an independent hidden oracle, immutable fixture and input locks, bounded live
+calls, and a privacy-minimal Markdown decision record. It adds no runner,
+JSONL ledger, service, dashboard, or DLS runtime input.
+
+## Scope and deliverables
+
+- `docs/evaluation-m2-cases.md` defines SR-01…SR-04, their arms, hidden-oracle
+  owners, exact fixture/input/oracle locks, expected routing, and per-case
+  budgets.
+- `docs/evaluation-m2-runbook.md` defines the release-only manual procedure:
+  fresh task/plugin boundary, same-day paired arm order, manifest checks,
+  hard-gate stop, transport-only retries, and infrastructure-failed handling.
+- `docs/evaluation-m2-decisions.md` contains only the four resulting
+  privacy-minimal case records and one actionable M2 decision. It is distinct
+  from the closed M1 format seed.
+- Existing stdlib tests and the public validator reject missing, reordered, or
+  malformed case/runbook/decision data before a release-only live run. They do
+  not invoke a model.
+- The four disposable synthetic Git fixtures are created and locked only by
+  the runbook. Their repository paths, raw source, prompts, transcripts, and
+  session data never enter committed documents or DLS state.
+
+## Non-goals
+
+- A generic evaluator, runner, case loader, JSONL ledger, database, dashboard,
+  service, new public CLI, or Harbor dependency.
+- Live calls from commit/PR validation, a CI trigger, iOS observations,
+  component-wide ablations, or a previous-release comparison beyond the
+  declared SR-03/SR-04 reference arms.
+- LLM-as-a-judge, exact finding-prose matching, raw transcripts, private paths,
+  secrets, or proprietary product fixtures.
+- Any release or production authorization.
+
+## Success measures
+
+- SR-01…SR-04 are reproducible from their locked disposable fixtures and all
+  required lock fields are recorded before each live arm.
+- SR-02 cannot receive `review-clear`; SR-03 proves its actual routing/call
+  bounds; SR-04 permits at most one source-blind repair; no case has a hard
+  blocker miss or safety violation.
+- The release sample uses at most four cases and six to eight live analysis or
+  repair calls. Any incomplete, invalid, infrastructure-failed, or
+  budget-exhausted case is `not-clear`, never a PASS.
+- One documented keep, improve, or delete decision follows the recorded M2
+  evidence without asserting release or production readiness.
+
+## Dependencies
+
+- `EF-01 accepted-in-base` with the accepted EF-01 definition digest and its
+  acceptance SHA as an ancestor of the EF-02 candidate. DLS dependency state,
+  not copied receipts or Markdown, is the implementation gate.
+
+## Epic acceptance
+
+- `REQ-001`: The three M2 Markdown artifacts have fixed, validated grammar for
+  all four cases and contain no private data or executable DLS input.
+- `REQ-002`: Every SR case records immutable fixture/input/oracle locks,
+  expected verdict, arm manifest, hard-oracle result, routing/call bounds, and
+  the allowed outcome taxonomy before its live arm is evaluated.
+- `REQ-003`: The release-only runbook enforces the accepted M1 dependency,
+  fresh-task/plugin boundary, at most four cases and six to eight calls,
+  same-day paired comparison, zero live calls in normal validation, and a
+  fail-closed incomplete outcome.
+- `REQ-004`: Four live M2 cases execute against the locked fixtures: clean
+  control, seeded blocker, critical secondary routing, and malformed-output
+  repair. Their hidden oracles are evaluated outside the reviewer prompt.
+- `REQ-005`: The matcher classifies useful, noisy, dangerous-miss, or uncertain
+  findings without a second LLM judge; only useful findings can support the
+  recorded M2 decision.
+
+## Risk rationale
+
+Control level: standard. Live model evaluation can falsely clear a real defect,
+leak private evidence, or consume unbounded budget. Immutable locks, hidden
+oracles, strict privacy, bounded release-only execution, independent review,
+and a separate human acceptance gate make these risks explicit.
