@@ -12,8 +12,9 @@ JSONL ledger, service, dashboard, or DLS runtime input.
 ## Scope and deliverables
 
 - `docs/evaluation-m2-cases.md` defines SR-01…SR-04, their arms, hidden-oracle
-  owner, exact fixture/input/oracle locks, expected routing, per-arm maximum
-  call contracts, and the locked source-blind repair proof for SR-04.
+  owner, exact fixture/input/oracle locks, expected routing, arm-scoped manifest
+  differences, per-arm maximum call contracts, and the locked source-blind
+  repair proof for SR-04.
 - `docs/evaluation-m2-runbook.md` defines the release-only manual procedure:
   fresh task/plugin boundary, same-day paired arm order, manifest checks,
   hard-gate stop, transport-only retries, and infrastructure-failed handling.
@@ -26,8 +27,8 @@ JSONL ledger, service, dashboard, or DLS runtime input.
   non-conformant or aborted sample has no keep/improve/delete decision. It is
   distinct from the closed M1 format seed.
 - Existing stdlib tests and the public validator reject missing, reordered, or
-  malformed case/runbook/decision data before a release-only live run. They do
-  not invoke a model.
+  malformed case/runbook/decision data and the specified raw-artifact markers
+  before a release-only live run. They do not invoke a model.
 - The four disposable synthetic Git fixtures are created and locked only by
   the runbook. An immutable private custody bundle per case holds the fixture
   recipe and hidden oracle for authorised independent replay; its recorded
@@ -76,14 +77,15 @@ JSONL ledger, service, dashboard, or DLS runtime input.
 
 ## Epic acceptance
 
-- `REQ-001`: The three M2 Markdown artifacts have fixed, validated grammar for
-  all four cases and contain no private data or executable DLS input.
+- `REQ-001`: The three M2 Markdown artifacts have fixed, validated grammar,
+  deterministic privacy markers, and focused positive/negative privacy fixtures
+  for all four cases; they contain no private data or executable DLS input.
 - `REQ-002`: Every SR case records immutable fixture/input/oracle locks,
-  hidden-oracle owner, expected verdict, arm manifest, hard-oracle result,
-  routing, per-arm maximum-call contract, and the allowed outcome taxonomy
-  before its live arm is evaluated. SR-04 additionally records a locked
-  source-blind repair-access proof. SR-01 and SR-02 are current-only; SR-03 and
-  SR-04 alone have reference arms.
+  hidden-oracle owner, expected verdict, arm manifest, arm-scoped permitted
+  manifest difference, hard-oracle result, routing, per-arm maximum-call
+  contract, and the allowed outcome taxonomy before its live arm is evaluated.
+  SR-04 additionally records a locked source-blind repair-access proof. SR-01
+  and SR-02 are current-only; SR-03 and SR-04 alone have reference arms.
 - `REQ-003`: The release-only runbook enforces the accepted M1 dependency,
   fresh-task/plugin boundary, current/reference pairing only where a reference
   exists, at most four cases and eight counted attempts, zero live calls in

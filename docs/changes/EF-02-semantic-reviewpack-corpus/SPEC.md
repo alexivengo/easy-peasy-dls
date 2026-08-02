@@ -33,9 +33,9 @@ Each case must lock, before its first live arm:
 1. case ID and primary component claim;
 2. synthetic fixture commit SHA and source-tree digest;
 3. task-input digest and oracle version/digest;
-4. current arm-manifest digest and every permitted difference; a reference
-   manifest digest only for SR-03/SR-04, otherwise the literal
-   `not-applicable`;
+4. current arm-manifest digest, reference manifest digest only for SR-03/SR-04
+   (otherwise `not-applicable`), and one permitted difference for every
+   declared arm;
 5. expected verdict, expected lanes, a literal per-arm maximum-call contract,
    and time/token ceilings;
 6. privacy class `public-synthetic`, the hidden-oracle owner, and (for SR-04)
@@ -72,8 +72,7 @@ Value` and this field order:
 `case_id`, `claim`, `fixture_sha`, `tree_digest`, `task_input_digest`,
 `oracle_version`, `oracle_digest`, `oracle_owner`, `custody_digest`,
 `repair_access_digest`, `current_manifest_digest`, `reference_manifest_digest`,
-`permitted_manifest_difference`, `time_ceiling_seconds`, `token_ceiling`,
-`privacy`, `custody_retention`.
+`time_ceiling_seconds`, `token_ceiling`, `privacy`, `custody_retention`.
 
 Every digest is lowercase `sha256:<64 hex>` when locked and `not-locked` only
 in `planned`; `fixture_sha` is lowercase `git:<40 hex>` when locked.
@@ -84,17 +83,8 @@ source-blind access proof. `privacy` is exactly `public-synthetic`;
 `time_ceiling_seconds` and `token_ceiling` are positive base-10 integers.
 `custody_retention` is exactly `retained-for:365d-after-decision` before the
 final M2 decision; the decision-record transition later replaces it with the
-verified `retained-until:YYYY-MM-DD` date. `permitted_manifest_difference` is
-exactly one of:
-
-| Arm | Value |
-|---|---|
-| `SR-01.current` | `none` |
-| `SR-02.current` | `none` |
-| `SR-03.current` | `none` |
-| `SR-03.primary-only` | `secondary-lane=disabled` |
-| `SR-04.repair` | `repair-mode=compact` |
-| `SR-04.fail-closed` | `repair-mode=fail-closed` |
+verified `retained-until:YYYY-MM-DD` date. Permitted manifest differences are
+arm-scoped in the `Arm records` table below; no case-wide difference exists.
 
 `docs/evaluation-m2-decisions.md` has `# M2 release records`, `## SR-01`
 through `## SR-04`, then `## M2 decision`, in that order. Each case has a
@@ -106,10 +96,10 @@ through `## SR-04`, then `## M2 decision`, in that order. Each case has a
 `custody_retention`, `privacy_retention`.
 
 It follows with an `Arm records` table whose exact header is `Arm | Expected
-verdict | Expected lanes | Call contract | Repair access | Actual verdict |
-Outcome | Hard oracle | Safety violations | Lanes | Attempts | Successful calls |
-Finding class`. Its rows use the arm order in the registry: the current arm
-first, then the reference arm where one exists.
+verdict | Expected lanes | Call contract | Permitted manifest difference | Repair
+access | Actual verdict | Outcome | Hard oracle | Safety violations | Lanes |
+Attempts | Successful calls | Finding class`. Its rows use the arm order in the
+registry: the current arm first, then the reference arm where one exists.
 `docs/evaluation-m2-cases.md` uses that same `Arm records` table with expected
 columns populated and all actual columns set to `not-run`.
 
@@ -126,16 +116,18 @@ finding. `Call contract` is exactly
 `primary=<n>;secondary=<n>;repair=<n>;transport-retry<=<n>`, with each `<n>` a
 non-negative base-10 integer. Its six fixed values are:
 
-| Arm | Call contract | Repair access |
-|---|---|---|
-| `SR-01.current` | `primary=1;secondary=0;repair=0;transport-retry<=1` | `not-applicable` |
-| `SR-02.current` | `primary=1;secondary=0;repair=0;transport-retry<=1` | `not-applicable` |
-| `SR-03.current` | `primary=1;secondary=1;repair=0;transport-retry<=1` | `not-applicable` |
-| `SR-03.primary-only` | `primary=1;secondary=0;repair=0;transport-retry<=1` | `not-applicable` |
-| `SR-04.repair` | `primary=1;secondary=0;repair=1;transport-retry<=1` | `source-blind:review-output+format-error` |
-| `SR-04.fail-closed` | `primary=0;secondary=0;repair=0;transport-retry<=0` | `not-applicable` |
+| Arm | Call contract | Permitted manifest difference | Repair access |
+|---|---|---|---|
+| `SR-01.current` | `primary=1;secondary=0;repair=0;transport-retry<=1` | `none` | `not-applicable` |
+| `SR-02.current` | `primary=1;secondary=0;repair=0;transport-retry<=1` | `none` | `not-applicable` |
+| `SR-03.current` | `primary=1;secondary=1;repair=0;transport-retry<=1` | `none` | `not-applicable` |
+| `SR-03.primary-only` | `primary=1;secondary=0;repair=0;transport-retry<=1` | `secondary-lane=disabled` | `not-applicable` |
+| `SR-04.repair` | `primary=1;secondary=0;repair=1;transport-retry<=1` | `repair-mode=compact` | `source-blind:review-output+format-error` |
+| `SR-04.fail-closed` | `primary=0;secondary=0;repair=0;transport-retry<=0` | `repair-mode=fail-closed` | `not-applicable` |
 
-`Repair access` is checked literally. For SR-04.repair it means the compact
+`Permitted manifest difference` is checked literally against the declared arm's
+current or reference manifest; every other difference is invalid. `Repair
+access` is checked literally. For SR-04.repair it means the compact
 repair receives only the prior review output and its format error: no fixture
 source, task source, hidden oracle, or private custody content. Its private
 access proof must have zero such reads and hash to the case's
@@ -178,7 +170,7 @@ and value rather than executing a command from the document.
 | Preconditions | `fresh-task` | `a new Codex task starts before the first arm; no restart during an arm` |
 | Preconditions | `source-clean` | `the fixture and DLS source are clean before and after each arm` |
 | Custody and locks | `custody-bundle` | `one immutable private bundle per case with fixture recipe, fixed Git metadata, hidden oracle, and SR-04 access proof` |
-| Custody and locks | `lock-check` | `fixture, tree, input, oracle, custody, manifest, and SR-04 repair-access digests match before a live arm` |
+| Custody and locks | `lock-check` | `fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-access locks match before a live arm` |
 | Custody and locks | `private-replay` | `an authorized evaluator receives read-only bundle access and reproduces every recorded lock before an arm` |
 | Arm order | `SR-01` | `SR-01.current` |
 | Arm order | `SR-02` | `SR-02.current` |
@@ -206,14 +198,63 @@ The focused test and public validator expose one assertion per schema rule:
 | Assertion | Schema coverage |
 |---|---|
 | `m2-document-order` | all three heading sequences, case order, and arm order |
-| `m2-field-shape` | every table header, field order, duplicate/unknown field rejection, oracle owner, repair-access lock, call contract, safety count, and decision date |
-| `m2-enums` | digest/SHA syntax, literals, lanes, outcomes, finding classes, metrics, and retention |
+| `m2-field-shape` | every table header, field order, duplicate/unknown field rejection, oracle owner, repair-access lock, arm-scoped manifest difference, call contract, safety count, and decision date |
+| `m2-enums` | digest/SHA syntax, manifest differences, literals, lanes, outcomes, finding classes, metrics, and retention |
 | `m2-state-transition` | planned, locked-not-run, completed, aborted, retention-date, and pre-live no-result values |
 | `m2-attempt-budget` | arm contracts/counters, seven/eight completed samples, and bounded partial aborted samples |
 | `m2-metering` | authoritative cumulative meters; unknown meter makes the sample non-clear |
 | `m2-overall-outcome` | current safety/hard-oracle predicate and the two allowed contrast references |
 | `m2-decision-evidence` | clear M2 outcome plus completed useful arm token required for keep/improve/delete |
-| `m2-privacy` | prohibited raw artifact markers and non-executable document boundary |
+| `m2-privacy` | deterministic structural allowlist, prohibited raw-artifact patterns, and positive/negative fixtures |
+
+### Deterministic public privacy grammar
+
+`m2-privacy` validates only `docs/evaluation-m2-cases.md`,
+`docs/evaluation-m2-runbook.md`, and `docs/evaluation-m2-decisions.md`. It
+first enforces the heading/table grammar above: the cases document contains only
+its registry and per-case `Case fields`/`Arm records` tables; the runbook
+contains only its one `Rule | Value` table per required section; the decisions
+document contains only per-case `Record fields`/`Arm records` tables and its
+`Decision fields` table. Apart from those exact headings, table rows, table
+separators, and blank lines, a nonblank line is forbidden. Code fences, HTML,
+Markdown links/autolinks, blockquotes, and lists are forbidden in all three
+documents.
+
+All table values must satisfy the normative literal, enum, digest, date, or
+counter grammar. The only free identifier is `claim`, which is exactly
+`[a-z][a-z0-9-]{0,63}`; `oracle_version` is `not-locked` in `planned` or
+`v<base-10-integer>` once locked. The required literal table labels and values,
+including `private-replay`, `source-blind:review-output+format-error`, and
+`raw-output-retention`, are explicit allowed exceptions: they are metadata, not
+raw artifacts, and no whole field or table is exempt from the checks below.
+
+After structure validation, the validator rejects these exact pattern classes
+anywhere in the three document texts:
+
+- `P01 path`: any of `file://`, the character sequence `U+002F`, `Users`,
+  `U+002F`, `/home/`, `/var/`, `/tmp/`, `C:\\Users\\`, `C:\\home\\`,
+  `C:\\var\\`, or `C:\\tmp\\`.
+- `P02 fence`: a line whose first three characters are ASCII grave accents
+  (`U+0060`).
+- `P03 artifact heading`: any line matching one of
+  `(?im)^#{1,6}\s*prompt\b`, `(?im)^#{1,6}\s*transcript\b`,
+  `(?im)^#{1,6}\s*source\b`, or `(?im)^#{1,6}\s*session\b`.
+- `P04 session identifier`: `(?i)\bsession[_-]?id\s*[:=]`,
+  `(?i)\bthread[_-]?id\s*[:=]`, or
+  `(?i)\bconversation[_-]?id\s*[:=]`.
+- `P05 secret`: `sk-[A-Za-z0-9_-]{20,}`, `ghp_[A-Za-z0-9]{20,}`, the
+  concatenation `github` + `U+005F` + `pat` + `U+005F` +
+  `[A-Za-z0-9_]{20,}`, or `-----BEGIN [A-Z ]*PRIVATE KEY-----`.
+- `P06 private fixture`: any of `private-fixture`, `fixture-source`,
+  `hidden-oracle-source`, `custody-bundle-path`, `raw-prompt`, or
+  `raw-transcript`.
+- `P07 source diff`: a line starting with `diff --git `.
+
+The focused stdlib test calls the privacy check before enum validation. Its
+positive fixture is the exact planned three-document set, including the allowed
+literals above. Its seven negative fixtures each add exactly one P01…P07 marker
+to an otherwise valid copy and assert the named `m2-privacy` failure. A generic
+malformed-document test does not substitute for these privacy fixtures.
 
 ### Record state, custody, and transition grammar
 
@@ -380,18 +421,21 @@ remains M2-incomplete.
 ## Requirements and acceptance
 
 - `REQ-001`: The three public M2 Markdown documents have an exact fixed grammar
-  validated by the existing public validator and a focused stdlib test. It
-  accepts only the defined `planned`, `locked-not-run`, and `completed` record
-  states, terminal aborted path, cumulative-meter/retention rules, and their
-  transitions. The first implementation state is `planned` with complete
-  contracts and no fabricated live result.
+  validated by the existing public validator and a focused stdlib test. The
+  test accepts the planned documents, rejects one P01…P07 privacy marker per
+  focused negative fixture, and accepts only the defined `planned`,
+  `locked-not-run`, and `completed` record states, terminal aborted path,
+  cumulative-meter/retention rules, and their transitions. The first
+  implementation state is `planned` with complete contracts and no fabricated
+  live result.
 - `REQ-002`: Four fixture locks are created from clean synthetic Git fixtures
   and matching private custody bundles. Each live review starts only after all
   required fields are `locked-not-run`. SR-01/SR-02 are current-only; SR-03
   uses a current critical two-lane arm plus a one-lane component-off reference;
   SR-04 uses one primary plus at most one source-blind repair and a
-  zero-live-call fail-closed reference. The nominal sample has seven attempts;
-  one counted transport retry may raise it only to eight.
+  zero-live-call fail-closed reference. Every arm records its exact permitted
+  manifest difference. The nominal sample has seven attempts; one counted
+  transport retry may raise it only to eight.
 - `REQ-003`: The runbook rejects a manifest that changes more than its declared
   component or lacks an applicable hard oracle before cost/quality comparison.
   It declares `invalid-case`, `infrastructure-failed`, or `budget-exhausted`
@@ -455,7 +499,9 @@ oracle for one year after the M2 decision; they are never DLS artifacts or
 committed source. Local raw output is optional private evidence and is deleted
 after the decision or no later than 30 days. No document may contain a
 filesystem path, raw prompt/transcript, repository source, session token,
-credential, or private fixture marker.
+credential, or private fixture marker. The public validator applies the exact
+P01…P07 marker policy and structural allowlist in `Deterministic public privacy
+grammar` to the three M2 documents.
 
 Live execution is release-only and outside ordinary CI. It runs at most four
 cases and seven nominal analysis/repair attempts in a week; one counted

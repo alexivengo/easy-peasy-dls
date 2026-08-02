@@ -15,7 +15,8 @@ Requirements:
 Scope:
 
 - Create the three fixed-format M2 Markdown artifacts and validate their public
-  privacy/grammar boundary with the existing stdlib tooling.
+  privacy/grammar boundary with the existing stdlib tooling, including the
+  focused P01…P07 positive/negative privacy fixtures.
 - Lock and run exactly SR-01, SR-02, SR-03, and SR-04 according to the
   release-only runbook after the accepted-in-base dependency succeeds.
 - Classify the observed findings through the specified hidden-oracle matcher
@@ -24,7 +25,8 @@ Scope:
 Acceptance:
 
 - The committed documents have no fabricated live results, raw private data,
-  or executable runner/ledger behavior.
+  or executable runner/ledger behavior; the focused privacy fixtures reject
+  each P01…P07 raw-artifact marker deterministically.
 - All four release-only cases have immutable locks, stay within their routing
   and call bounds, and meet their hidden-oracle expectations.
 - Any incomplete or unsafe case creates the explicit terminal
