@@ -775,6 +775,8 @@ def _m2_validate_actual(case_id: str, arm: tuple[str, str, str, str, str, str], 
         _m2_fail("m2-attempt-budget", f"{case_id} arm ceiling")
     if any(successful_map[name] > attempts_map[name] for name in successful_map):
         _m2_fail("m2-attempt-budget", f"{case_id} successful calls")
+    if outcome == "passed" and any(successful_map[name] != contract[name] for name in successful_map):
+        _m2_fail("m2-attempt-budget", f"{case_id} passed successful calls")
     if finding not in {"useful", "noisy", "dangerous-miss", "uncertain", "no-finding", "not-applicable"}:
         _m2_fail("m2-enums", f"{case_id} finding class")
     if outcome == "passed" and (verdict != arm[1] or lanes != arm[2] or oracle != "passed"):
@@ -924,14 +926,8 @@ def _m2_is_terminal_arm(row: list[str]) -> bool:
 
 
 def _m2_validate_terminal_sample(records: dict[str, tuple[dict[str, str], dict[str, list[str]]]], decision_state: str) -> None:
-    attempts, transport = _m2_attempt_totals(records)
-    if attempts > 8 or transport > 1:
-        _m2_fail("m2-attempt-budget", "sample ceiling")
-    if decision_state == "completed" and (attempts not in {7, 8} or (attempts == 7 and transport != 0) or (attempts == 8 and transport != 1)):
-        _m2_fail("m2-attempt-budget", "completed sample total")
-    if decision_state != "aborted":
-        return
     stopped = False
+    stop_case_id = ""
     for case_id in M2_CASE_IDS:
         fields, arms = records[case_id]
         if fields["run_state"] != "completed":
@@ -941,12 +937,23 @@ def _m2_validate_terminal_sample(records: dict[str, tuple[dict[str, str], dict[s
             if row[6:] == ["not-run"] * 9:
                 if not stopped:
                     _m2_fail("m2-state-transition", "unrun arm before terminal stop")
+                if case_id != stop_case_id:
+                    _m2_fail("m2-state-transition", "completed record after terminal stop")
                 continue
             if stopped:
                 _m2_fail("m2-state-transition", "arm after terminal stop")
-            stopped = _m2_is_terminal_arm(row)
-    if not stopped:
+            if _m2_is_terminal_arm(row):
+                stopped = True
+                stop_case_id = case_id
+    if stopped and decision_state != "aborted":
+        _m2_fail("m2-state-transition", "terminal stop requires aborted decision")
+    if not stopped and decision_state == "aborted":
         _m2_fail("m2-state-transition", "aborted sample has no terminal stop")
+    attempts, transport = _m2_attempt_totals(records)
+    if attempts > 8 or transport > 1:
+        _m2_fail("m2-attempt-budget", "sample ceiling")
+    if decision_state == "completed" and (attempts not in {7, 8} or (attempts == 7 and transport != 0) or (attempts == 8 and transport != 1)):
+        _m2_fail("m2-attempt-budget", "completed sample total")
 
 
 def _m2_validate_terminal_retention(records: dict[str, tuple[dict[str, str], dict[str, list[str]]]], decision_date: str) -> None:

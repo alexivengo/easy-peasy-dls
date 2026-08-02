@@ -172,6 +172,61 @@ class M2EvaluationDocumentTests(unittest.TestCase):
         row[-1] = "sha256:" + "a" * 64
         self.validator._m2_validate_actual("SR-01", arm, row, "completed")
 
+    def test_passed_arm_requires_contracted_successful_calls(self) -> None:
+        arm = self.validator.M2_ARMS["SR-01"][0]
+        row = list(arm) + [
+            "review-clear",
+            "passed",
+            "passed",
+            "0",
+            "primary",
+            "primary=1;secondary=0;repair=0;transport-failed=0",
+            "primary=0;secondary=0;repair=0",
+            "no-finding",
+            "sha256:" + "a" * 64,
+        ]
+        with self.assertRaisesRegex(ValueError, "m2-attempt-budget"):
+            self.validator._m2_validate_actual("SR-01", arm, row, "completed")
+
+    def test_terminal_stop_requires_aborted_decision_and_completed_prefix(self) -> None:
+        def records(later_completed: bool = False) -> dict[str, tuple[dict[str, str], dict[str, list[str]]]]:
+            result = {
+                case_id: (
+                    {"run_state": "planned"},
+                    {arm[0]: list(arm) + ["not-run"] * 9 for arm in self.validator.M2_ARMS[case_id]},
+                )
+                for case_id in self.validator.M2_CASE_IDS
+            }
+            first_arm = self.validator.M2_ARMS["SR-01"][0]
+            result["SR-01"] = (
+                {"run_state": "completed"},
+                {
+                    first_arm[0]: list(first_arm)
+                    + [
+                        "not-clear",
+                        "product-failed",
+                        "failed",
+                        "0",
+                        "primary",
+                        "not-run",
+                        "not-run",
+                        "no-finding",
+                        "sha256:" + "a" * 64,
+                    ]
+                },
+            )
+            if later_completed:
+                result["SR-02"] = (
+                    {"run_state": "completed"},
+                    result["SR-02"][1],
+                )
+            return result
+
+        with self.assertRaisesRegex(ValueError, "terminal stop requires aborted decision"):
+            self.validator._m2_validate_terminal_sample(records(), "completed")
+        with self.assertRaisesRegex(ValueError, "completed record after terminal stop"):
+            self.validator._m2_validate_terminal_sample(records(later_completed=True), "aborted")
+
     def test_canonical_receipt_format_has_stable_bytes_and_order(self) -> None:
         fields = tuple((name, f"value-{index}") for index, name in enumerate(self.validator.M2_CANONICAL_RECORD_FIELDS["arm-receipt-v1"], start=1))
         self.assertEqual(
