@@ -38,9 +38,31 @@ non-active candidate catalogue; it must not alter the archived catalogue.
 - `REQ-003`: The Roadmap states one promotion rule for each `P1`, `P2`, and
   `P3` group, and caps concurrent `P1` experiments at three.
 - `REQ-004`: The section explicitly preserves human decisions, exact-HEAD
-  evidence, review boundaries, and the current `Not doing` policy.
+  evidence, review boundaries, and the current `Not doing` policy. The new
+  section must say that candidates are opt-in, do not create mandatory gates,
+  and do not grant automatic approval, task creation, or global configuration
+  mutation.
 - `REQ-005`: The section makes no claim that a candidate is implemented,
-  accepted, released, or production-verified.
+  accepted, released, or production-verified. It must state that the backlog
+  is not an active implementation commitment and that review-clear, acceptance,
+  release, and production remain separate lifecycle states.
+
+### Required Roadmap promotion text
+
+- `P1`: validate with a real pilot; no more than three P1 experiments may be
+  active at once.
+- `P2`: promote only after three to five real pilots establish the named user
+  problem.
+- `P3`: hold until a repeated signal or a real scale need appears.
+
+### Required Roadmap boundary text
+
+- Every candidate is opt-in; none is a mandatory gate.
+- The backlog changes neither runtime behavior nor the frozen KANO snapshot.
+- It does not create a task, grant an approval, alter global configuration, or
+  run delivery autonomously.
+- No candidate is claimed implemented, review-clear, accepted, released, or
+  production-verified merely by being listed.
 
 ## Candidate catalogue
 
@@ -161,6 +183,10 @@ Rationale: why implementation without a design source is acceptable
 ## Validation intent
 
 - Verify exactly 50 unique `A11–A60` entries, each with `Было` and `Будет`.
+- Verify the three required promotion rules, including the P1 maximum of three
+  concurrent experiments.
+- Verify every required Roadmap boundary statement and the absence of an
+  implementation, acceptance, release, or production claim for a candidate.
 - Run `python3 scripts/validate_public_repo.py`.
 
 ## Risk rationale
