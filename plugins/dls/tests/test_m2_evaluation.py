@@ -172,6 +172,24 @@ class M2EvaluationDocumentTests(unittest.TestCase):
         row[-1] = "sha256:" + "a" * 64
         self.validator._m2_validate_actual("SR-01", arm, row, "completed")
 
+    def test_canonical_receipt_format_has_stable_bytes_and_order(self) -> None:
+        fields = tuple((name, f"value-{index}") for index, name in enumerate(self.validator.M2_CANONICAL_RECORD_FIELDS["arm-receipt-v1"], start=1))
+        self.assertEqual(
+            self.validator.m2_canonical_digest("arm-receipt-v1", fields),
+            "sha256:319abf7578091390c5d2ad3438543760eaa8f9dc31819b4b5edb5bb52274a086",
+        )
+        with self.assertRaisesRegex(ValueError, "m2-receipt"):
+            self.validator.m2_canonical_digest("arm-receipt-v1", tuple(reversed(fields)))
+        source_fields = tuple((name, f"value-{index}") for index, name in enumerate(self.validator.M2_CANONICAL_RECORD_FIELDS["source-blind-v1"], start=1))
+        self.assertEqual(
+            self.validator.m2_canonical_digest("source-blind-v1", source_fields),
+            "sha256:162475fdcd3228ebcbe095719d5acf8a9b7aa55571534a2d56f3b507422cbdff",
+        )
+        with self.assertRaisesRegex(ValueError, "m2-receipt"):
+            self.validator.m2_canonical_digest("source-blind-v1", tuple(reversed(source_fields)))
+        with self.assertRaisesRegex(ValueError, "m2-receipt"):
+            self.validator.m2_canonical_digest("source-blind-v1", tuple((name, "bad\nvalue") for name in self.validator.M2_CANONICAL_RECORD_FIELDS["source-blind-v1"]))
+
 
 if __name__ == "__main__":
     unittest.main()

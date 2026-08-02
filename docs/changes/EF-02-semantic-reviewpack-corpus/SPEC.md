@@ -208,6 +208,44 @@ access recomputes each receipt and rejects any lock, evidence, or actual-field
 mismatch. A missing, mismatched, or unverified receipt makes that arm and M2
 not-clear.
 
+#### Canonical private-record bytes
+
+`arm-receipt-v1` and `source-blind-v1` are fixed byte contracts, not labels for
+an implementation-defined serialisation. A record is ASCII `field=value` lines
+in the exact order below, each terminated by one LF byte (`0x0A`), including the
+last line. The first line is always `record_type=<type>`. There is no BOM,
+escaping, trimming, case folding, Unicode normalisation, or final newline
+conversion: a value must be non-empty printable ASCII (`0x20` through `0x7E`)
+with no CR or LF, otherwise replay rejects it. `=` is literal inside a value;
+the fixed field name and first `=` delimit each line. The public digest is
+`sha256:` followed by lowercase hexadecimal SHA-256 of those exact ASCII bytes.
+
+`arm-receipt-v1` writes `record_type`, then `case_id`, `arm_id`, `fixture_sha`,
+`tree_digest`, `task_input_digest`, `oracle_version`, `oracle_digest`,
+`custody_digest`, `repair_boundary_digest`, `current_manifest_digest`,
+`reference_manifest_digest`, `plugin_version`, `agent_version`, `model`,
+`effort`, `run_date`, `dls_result_digest`, `hard_oracle_evidence_digest`,
+`matcher_evidence_digest`, `actual_verdict`, `outcome`, `hard_oracle`,
+`safety_violations`, `lanes`, `attempts`, `successful_calls`, `finding_class`,
+and `repair_execution_proof_digest`. `case_id` and `arm_id` are the declared
+case/arm; every lock and profile value is the exact matching public record
+value; `dls_result_digest`, hard-oracle evidence, and matcher evidence are
+lowercase `sha256:<64 hex>` except `dls_result_digest=not-applicable` for
+`SR-04.fail-closed`; actual values use the exact Arm records grammar; and
+`repair_execution_proof_digest` is lowercase `sha256:<64 hex>` only for
+`SR-04.repair`, otherwise `not-applicable`.
+
+`source-blind-v1` writes `record_type`, then `arm_id`,
+`repair_boundary_digest`, `repair_input_digest`, `repair_output_digest`,
+`transcript_digest`, `workspace`, `environment`, `sandbox`, and `denied_reads`.
+`arm_id` is exactly `SR-04.repair`; the four digest values are lowercase
+`sha256:<64 hex>`; and the last four values are exactly `empty-temporary`,
+`allowlist-empty`, `read-only`, and `0`. The private replay recomputes these
+bytes before publishing either digest. The public-validator fixture calls the
+same byte constructor with synthetic printable tokens, asserting its known
+SHA-256, field-order rejection, and control-character rejection without adding
+a private record to the repository.
+
 `Attempts` is exactly `primary=<n>;secondary=<n>;repair=<n>;transport-failed=<n>`
 and `Successful calls` is exactly `primary=<n>;secondary=<n>;repair=<n>`, with
 each `<n>` a non-negative base-10 integer. Before execution both are `not-run`.
@@ -251,7 +289,7 @@ and value rather than executing a command from the document.
 | Custody and locks | `source-blind-boundary` | `SR-04 repair accepts only prior review output and format error in a fresh empty temporary workspace with allowlist-empty environment and read-only sandbox; fixture, task source, hidden oracle, custody, network, and tool access are denied` |
 | Custody and locks | `lock-check` | `fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-boundary locks match before a live arm` |
 | Custody and locks | `repair-proof` | `a completed SR-04.repair records a source-blind-v1 proof digest bound to that arm; the proof carries only digests, empty-temporary workspace, allowlist-empty environment, read-only sandbox, and zero denied reads` |
-| Custody and locks | `private-replay` | `an authorized evaluator receives read-only bundle and DLS receipt access, reproduces every lock, recomputes every arm receipt and the SR-04 proof digest, and rejects any mismatch before a clear M2 outcome` |
+| Custody and locks | `private-replay` | `an authorized evaluator and public validator fixtures use the canonical arm-receipt-v1/source-blind-v1 byte format to reproduce every lock, recompute every arm receipt and the SR-04 proof digest, and reject any mismatch before a clear M2 outcome` |
 | Arm order | `SR-01` | `SR-01.current` |
 | Arm order | `SR-02` | `SR-02.current` |
 | Arm order | `SR-03` | `SR-03.current then SR-03.primary-only on the same day` |
@@ -280,7 +318,7 @@ The focused test and public validator expose one assertion per schema rule:
 | `m2-document-order` | all three heading sequences, case order, and arm order |
 | `m2-field-shape` | every table header, field order, duplicate/unknown field rejection, execution profile, oracle owner, repair-boundary lock, arm-scoped manifest difference, call contract, safety count, and decision date |
 | `m2-enums` | digest/SHA syntax, execution profile, manifest differences, literals, lanes, outcomes, finding classes, metrics, and retention |
-| `m2-receipt` | every launched or deterministic terminal arm has a digest-only execution receipt; unlaunched arms stay `not-run` |
+| `m2-receipt` | every launched or deterministic terminal arm has a digest-only execution receipt; the public fixture fixes both canonical byte contracts, and unlaunched arms stay `not-run` |
 | `m2-state-transition` | planned profile, locked-not-run, completed, aborted, retention-date, and pre-live no-result values |
 | `m2-attempt-budget` | arm contracts/counters, seven/eight completed samples, and bounded partial aborted samples |
 | `m2-metering` | authoritative cumulative meters; unknown meter makes the sample non-clear |

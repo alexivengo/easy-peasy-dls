@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import hashlib
 import json
 import re
 import subprocess
@@ -507,7 +508,7 @@ M2_RUNBOOK = (
         ("source-blind-boundary", "SR-04 repair accepts only prior review output and format error in a fresh empty temporary workspace with allowlist-empty environment and read-only sandbox; fixture, task source, hidden oracle, custody, network, and tool access are denied"),
         ("lock-check", "fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-boundary locks match before a live arm"),
         ("repair-proof", "a completed SR-04.repair records a source-blind-v1 proof digest bound to that arm; the proof carries only digests, empty-temporary workspace, allowlist-empty environment, read-only sandbox, and zero denied reads"),
-        ("private-replay", "an authorized evaluator receives read-only bundle and DLS receipt access, reproduces every lock, recomputes every arm receipt and the SR-04 proof digest, and rejects any mismatch before a clear M2 outcome"),
+        ("private-replay", "an authorized evaluator and public validator fixtures use the canonical arm-receipt-v1/source-blind-v1 byte format to reproduce every lock, recompute every arm receipt and the SR-04 proof digest, and reject any mismatch before a clear M2 outcome"),
     )),
     ("Arm order", (
         ("SR-01", "SR-01.current"),
@@ -546,6 +547,49 @@ M2_CLAIM = re.compile(r"[a-z][a-z0-9-]{0,63}$")
 M2_INTEGER = re.compile(r"0|[1-9][0-9]*$")
 M2_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 M2_EXECUTION_IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}$")
+M2_CANONICAL_RECORD_FIELDS = {
+    "arm-receipt-v1": (
+        "case_id",
+        "arm_id",
+        "fixture_sha",
+        "tree_digest",
+        "task_input_digest",
+        "oracle_version",
+        "oracle_digest",
+        "custody_digest",
+        "repair_boundary_digest",
+        "current_manifest_digest",
+        "reference_manifest_digest",
+        "plugin_version",
+        "agent_version",
+        "model",
+        "effort",
+        "run_date",
+        "dls_result_digest",
+        "hard_oracle_evidence_digest",
+        "matcher_evidence_digest",
+        "actual_verdict",
+        "outcome",
+        "hard_oracle",
+        "safety_violations",
+        "lanes",
+        "attempts",
+        "successful_calls",
+        "finding_class",
+        "repair_execution_proof_digest",
+    ),
+    "source-blind-v1": (
+        "arm_id",
+        "repair_boundary_digest",
+        "repair_input_digest",
+        "repair_output_digest",
+        "transcript_digest",
+        "workspace",
+        "environment",
+        "sandbox",
+        "denied_reads",
+    ),
+}
 M2_PRIVACY_PATTERNS = (
     ("P01 path", ("file://", "/" + "Users/", "/home/", "/var/", "/tmp/", "C:\\Users\\", "C:\\home\\", "C:\\var\\", "C:\\tmp\\")),
     ("P04 session identifier", (re.compile(r"(?i)\bsession[_-]?id\s*[:=]"), re.compile(r"(?i)\bthread[_-]?id\s*[:=]"), re.compile(r"(?i)\bconversation[_-]?id\s*[:=]"))),
@@ -556,6 +600,16 @@ M2_PRIVACY_PATTERNS = (
 
 def _m2_fail(assertion: str, message: str) -> None:
     fail(f"{assertion}: {message}")
+
+
+def m2_canonical_digest(record_type: str, fields: tuple[tuple[str, str], ...]) -> str:
+    expected = M2_CANONICAL_RECORD_FIELDS.get(record_type)
+    if expected is None or tuple(name for name, _value in fields) != expected:
+        _m2_fail("m2-receipt", "canonical record field order")
+    if any(not value or not value.isascii() or any(not (" " <= character <= "~") for character in value) for _name, value in fields):
+        _m2_fail("m2-receipt", "canonical record value")
+    payload = "".join((f"record_type={record_type}\n", *(f"{name}={value}\n" for name, value in fields)))
+    return "sha256:" + hashlib.sha256(payload.encode("ascii")).hexdigest()
 
 
 def _m2_cells(line: str, assertion: str) -> list[str]:

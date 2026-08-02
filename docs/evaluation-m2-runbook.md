@@ -21,7 +21,7 @@
 | source-blind-boundary | SR-04 repair accepts only prior review output and format error in a fresh empty temporary workspace with allowlist-empty environment and read-only sandbox; fixture, task source, hidden oracle, custody, network, and tool access are denied |
 | lock-check | fixture, tree, input, oracle, custody, current/reference manifest, per-arm difference, and SR-04 repair-boundary locks match before a live arm |
 | repair-proof | a completed SR-04.repair records a source-blind-v1 proof digest bound to that arm; the proof carries only digests, empty-temporary workspace, allowlist-empty environment, read-only sandbox, and zero denied reads |
-| private-replay | an authorized evaluator receives read-only bundle and DLS receipt access, reproduces every lock, recomputes every arm receipt and the SR-04 proof digest, and rejects any mismatch before a clear M2 outcome |
+| private-replay | an authorized evaluator and public validator fixtures use the canonical arm-receipt-v1/source-blind-v1 byte format to reproduce every lock, recompute every arm receipt and the SR-04 proof digest, and reject any mismatch before a clear M2 outcome |
 
 ## Arm order
 
