@@ -29,6 +29,8 @@ from dls_core.runner import (
     RUNNER_CONTRACT,
     _codex_argv,
     _conflicts,
+    _definition_evidence,
+    _definition_pack,
     _model_call,
     _prompt,
     _requirements,
@@ -560,6 +562,33 @@ class CoreResetTests(unittest.TestCase):
             )
         finally:
             restore_environment(previous)
+
+    def test_definition_review_includes_explicit_authored_evidence(self) -> None:
+        change(self.root, control="routine")
+        state = load_state(self.root, "C001")
+        tickets = self.root / state["change"]["artifacts"]["tickets"]["path"]
+        evidence = tickets.parent / "evidence" / "C001-T01-proof.md"
+        evidence.parent.mkdir()
+        evidence.write_text("# Exact revision proof\n\nHEAD-bound validation passed.\n", encoding="utf-8")
+        tickets.write_text(
+            tickets.read_text(encoding="utf-8")
+            + "\n**Evidence:** `evidence/C001-T01-proof.md`; `swift test`.\n",
+            encoding="utf-8",
+        )
+        commit(self.root, "definition evidence")
+        projection = _definition_evidence(self.root, load_state(self.root, "C001"))
+        self.assertEqual(
+            ["docs/changes/C001-c001/evidence/C001-T01-proof.md"],
+            [item["path"] for item in projection],
+        )
+        self.assertEqual("dls-authored-evidence/v1", projection[0]["contract"])
+
+        pack, _ = _definition_pack(
+            self.root,
+            load_state(self.root, "C001"),
+            write=False,
+        )
+        self.assertEqual(projection, pack["evidence"])
 
     def test_critical_actionable_primary_short_circuits_secondary(self) -> None:
         log, previous = self._prepare_code(control="critical", impacts=["public-api"])

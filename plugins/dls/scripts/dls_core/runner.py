@@ -384,6 +384,61 @@ def _artifact_projection(root: Path, state: dict[str, Any]) -> list[dict[str, st
     return output
 
 
+def _definition_evidence(root: Path, state: dict[str, Any]) -> list[dict[str, str]]:
+    references: set[str] = set()
+    for item in state["change"]["artifacts"].values():
+        if item.get("role") != "definition":
+            continue
+        artifact = safe_resolve(root, item["path"], must_exist=True)
+        try:
+            lines = artifact.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            continue
+        blocks: list[str] = []
+        collecting = False
+        for line in lines:
+            if line.startswith("**Evidence:**"):
+                collecting = True
+                blocks.append(line.split("**Evidence:**", 1)[1])
+            elif collecting and not line.strip():
+                collecting = False
+            elif collecting and re.match(r"^\*\*[^*]+:\*\*", line):
+                collecting = False
+            elif collecting:
+                blocks.append(line)
+        for token in re.findall(r"`([^`]+)`", "\n".join(blocks)):
+            relative = Path(token)
+            if relative.is_absolute() or ".." in relative.parts or relative.suffix.lower() not in {
+                ".json",
+                ".log",
+                ".md",
+                ".txt",
+                ".yaml",
+                ".yml",
+            }:
+                continue
+            for candidate in (root / relative, artifact.parent / relative):
+                if not candidate.is_file():
+                    continue
+                try:
+                    relative_candidate = candidate.resolve().relative_to(root.resolve()).as_posix()
+                except ValueError as exc:
+                    raise IntegrityError("Referenced definition evidence escapes repository root") from exc
+                resolved = safe_resolve(root, relative_candidate, must_exist=True)
+                references.add(resolved.relative_to(root.resolve()).as_posix())
+                break
+    if len(references) > 32:
+        raise IntegrityError("Definition references more than 32 evidence artifacts")
+    return [
+        {
+            "contract": "dls-authored-evidence/v1",
+            "path": path,
+            "digest": sha256_file(safe_resolve(root, path, must_exist=True)),
+        }
+        for path in sorted(references)
+    ]
+
+
 def _pack_core(
     root: Path,
     state: dict[str, Any],
@@ -1477,7 +1532,7 @@ def _definition_pack(
         state,
         kind="definition",
         base_sha=head,
-        evidence=[],
+        evidence=_definition_evidence(root, state),
         source_digest=source,
     )
     core["prior_findings"] = []

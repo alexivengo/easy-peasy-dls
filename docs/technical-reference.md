@@ -337,3 +337,10 @@ Models, review routing and budgets are intentionally unchanged.
 The Apple pilot found that a shared traceability artifact was previously scanned
 as unscoped text. Requirement projection now honors its state-owned
 `producer_ticket_scope`; IDs owned by other changes cannot enter the ReviewPack.
+
+The backend definition pilot also exposed an empty-evidence gap: completed
+tickets cited committed evidence, but definition ReviewPack creation hard-coded
+an empty evidence list. DLS now projects only existing repository-relative files
+explicitly named in authored `**Evidence:**` fields, with path and SHA-256 bound
+to the exact review pack. Commands and prose in the same field are not executed
+or treated as evidence, and more than 32 referenced files is an integrity error.
