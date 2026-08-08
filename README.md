@@ -6,6 +6,10 @@
 
 Simple AI delivery. Proof included.
 
+> [!IMPORTANT]
+> Разработка приостановлена с 2026-08-08. Текущее состояние, несведённые ветки
+> и порядок возобновления описаны в [project handoff](HANDOFF.md).
+
 > [!WARNING]
 > **Public preview.** Easy Peasy DLS is alpha software. Contracts may change and
 > failures are possible. Keep Git backups and inspect human decision prompts.
